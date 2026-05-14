@@ -1,6 +1,16 @@
 from __future__ import annotations
+import gc
 import time
 from typing import Callable
+
+
+def _return_memory_to_os() -> None:
+    """Ask glibc to return freed heap pages to the OS (Linux only)."""
+    try:
+        import ctypes
+        ctypes.cdll.LoadLibrary("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
 
 from yane.core.genome import Genome
 from yane.core.node import Node, NodeType
@@ -17,7 +27,7 @@ class NeuroEvolution:
         self._current_genome: Genome | None = None
         self._efficiency_penalty: EfficiencyPenalty | None = None
         self._resource_guard = ResourceGuard()
-        self._resource_check_interval: int = 10
+        self._resource_check_interval: int = 1
         self._population_size: int = 100
 
     @property
@@ -45,9 +55,13 @@ class NeuroEvolution:
     ) -> None:
         """Set up the input/output topology and initialise the population.
 
+        The initial genome is fully connected (every input → every output).
         max_nodes / max_connections cap network growth per genome.
         Without caps, networks can grow without bound and consume all memory.
         """
+        from yane.core.connection import Connection
+        import random
+
         initial = Genome()
         initial.max_nodes = max_nodes
         initial.max_connections = max_connections
@@ -59,8 +73,15 @@ class NeuroEvolution:
             initial.input_nodes.append(node)
         for _ in range(n_outputs):
             node = Node(NodeType.OUTPUT)
+            node.persist_value = True  # retain activated output for reading
             initial.nodes.append(node)
             initial.output_nodes.append(node)
+
+        for inp in initial.input_nodes:
+            for out in initial.output_nodes:
+                conn = Connection(out)
+                conn.weight = random.uniform(-1.0, 1.0)
+                inp.connections.append(conn)
 
         self._population = Population(max_size=self._population_size, initial_genome=initial)
 
@@ -79,14 +100,19 @@ class NeuroEvolution:
         self,
         min_free_gb: float = 2.0,
         max_used_percent: float = 85.0,
+        max_process_gb: float | None = None,
     ) -> None:
-        """Configure when training pauses to protect system memory.
+        """Configure memory limits for training.
 
-        Training resumes automatically once memory is available again.
+        min_free_gb / max_used_percent: pause training when system memory is low.
+        max_process_gb: hard cap on this process's RAM. When exceeded, the
+                        population is halved (keeping the best genomes) and the
+                        GC is forced until usage drops below the limit.
         """
         self._resource_guard = ResourceGuard(
             min_free_gb=min_free_gb,
             max_used_percent=max_used_percent,
+            max_process_gb=max_process_gb,
         )
 
     def set_efficiency_penalty(self, max_ms: float, penalty_per_ms: float) -> None:
@@ -126,7 +152,9 @@ class NeuroEvolution:
                 break
 
             if iterations % self._resource_check_interval == 0:
-                self._resource_guard.wait_if_needed()
+                self._enforce_memory_limit()
+                while not self._resource_guard.system_ok():
+                    time.sleep(0.5)
 
         return iterations
 
@@ -137,7 +165,7 @@ class NeuroEvolution:
     def population_memory_info(self) -> dict:
         """Returns node/connection counts across all genomes — useful for diagnosing memory growth."""
         self._ensure_configured()
-        all_genomes = self._population._evaluated + self._population._unevaluated
+        all_genomes = self._population._evaluated + list(self._population._unevaluated)
         if not all_genomes:
             return {"total_genomes": 0}
         infos = [g.memory_info() for g in all_genomes]
@@ -194,6 +222,28 @@ class NeuroEvolution:
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
+
+    def _enforce_memory_limit(self) -> None:
+        if not self._resource_guard.process_over_limit():
+            return
+        from yane.util.logger import get_logger
+        log = get_logger()
+        before = len(self._population._evaluated)
+        while self._resource_guard.process_over_limit() and len(self._population._evaluated) > 1:
+            target = max(1, len(self._population._evaluated) // 2)
+            self._population.shrink_to(target)
+            gc.collect()
+            _return_memory_to_os()
+        after = len(self._population._evaluated)
+        log.warning(
+            "Memory limit enforced: population shrunk from %d to %d evaluated genomes",
+            before, after,
+        )
+
+    def trim_memory(self) -> None:
+        """Force Python to return freed heap pages to the OS. Call periodically."""
+        gc.collect()
+        _return_memory_to_os()
 
     def _ensure_configured(self) -> None:
         if not self.is_configured:

@@ -9,7 +9,9 @@
       "Read(//var/home/sresch/pCloudDrive/Projekte/Programmieren/**)",
       "Bash(python -m pytest yane/tests/ -q)",
       "Bash(python -c \"from yane.core.genome import Genome; print\\('OK'\\)\")",
-      "Bash(python3 -m py_compile __init__.py neuro_evolution.py core/*.py evolution/*.py util/*.py api/*.py api/routes/*.py)"
+      "Bash(python3 -m py_compile __init__.py neuro_evolution.py core/*.py evolution/*.py util/*.py api/*.py api/routes/*.py)",
+      "Bash(python -m yane.examples.XOR)",
+      "Bash(python -c \"from PySide6.QtWidgets import QApplication; print\\('PySide6 OK'\\)\")"
     ]
   }
 }

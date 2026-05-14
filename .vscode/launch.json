@@ -2,10 +2,27 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "YANE GUI",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "YANE Tests",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["${workspaceFolder}/tests", "-v"],
+            "env": { "PYTHONPATH": "${workspaceFolder}/.." },
+            "console": "integratedTerminal"
+        },
+        {
             "name": "Python-Debugger: Aktuelle Datei",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
+            "env": { "PYTHONPATH": "${workspaceFolder}/.." },
             "console": "integratedTerminal"
         }
     ],

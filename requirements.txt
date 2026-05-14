@@ -1,5 +1,6 @@
 # requires Python >= 3.10 (match/case syntax)
 numpy
+PySide6
 gymnasium
 fastapi
 uvicorn[standard]

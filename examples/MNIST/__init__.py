@@ -19,6 +19,7 @@ def main():
 
     yane = NeuroEvolution()
     yane.configure(n_inputs=784, n_outputs=10, max_nodes=200, max_connections=1000)
+    yane.set_resource_limits(max_process_gb=2.0)
     yane.set_min_fitness(n_samples)
     yane.set_max_iterations(100)
 

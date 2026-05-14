@@ -95,10 +95,13 @@ yane.set_efficiency_penalty(max_ms=10.0, penalty_per_ms=0.5)
 
 ### Resource limits
 
-Training pauses automatically when system memory runs low and resumes when it recovers:
-
 ```python
+# Pause when system memory is low, resume when it recovers:
 yane.set_resource_limits(min_free_gb=2.0, max_used_percent=85.0)
+
+# Hard cap on yane's own RAM. When exceeded, the population is halved
+# (keeping the best genomes) and the GC is forced until under budget:
+yane.set_resource_limits(max_process_gb=1.0)
 ```
 
 ### Diagnosing memory growth

@@ -13,6 +13,7 @@ with open(os.path.join(_here, "dataset_2_2.json")) as f:
 def main():
     yane = NeuroEvolution()
     yane.configure(n_inputs=2, n_outputs=2, max_nodes=20, max_connections=60)
+    yane.set_resource_limits(max_process_gb=2.0)
     yane.set_min_fitness(-0.1)
 
     def evaluate(genome):

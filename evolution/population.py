@@ -55,9 +55,21 @@ class Population:
         candidates = random.sample(self._evaluated, min(k, len(self._evaluated)))
         return max(candidates, key=lambda g: g.fitness)
 
+    def shrink_to(self, target_size: int) -> None:
+        """Keep only the best `target_size` evaluated genomes. Called when over memory budget."""
+        target_size = max(1, target_size)
+        if len(self._evaluated) <= target_size:
+            return
+        self._evaluated.sort(key=lambda g: g.fitness, reverse=True)
+        discarded = self._evaluated[target_size:]
+        self._evaluated = self._evaluated[:target_size]
+        for g in discarded:
+            g._clear()
+
     def _prune(self) -> None:
         # Remove worst evaluated genomes until total size is within max_size.
         # _unevaluated is bounded naturally (one genome per spawn cycle).
         while self._evaluated and len(self._evaluated) + len(self._unevaluated) > self.max_size:
             worst = min(self._evaluated, key=lambda g: g.fitness)
             self._evaluated.remove(worst)
+            worst._clear()

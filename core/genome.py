@@ -57,7 +57,11 @@ class Genome:
     # -------------------------------------------------------------------------
 
     def forward(self, data: list[float]) -> list[float]:
-        self.reset()
+        # Hard reset — clears all nodes regardless of persist_value for a clean pass.
+        # (reset() only clears non-persistent nodes, which is correct for tick mode.)
+        self._triggered.clear()
+        for node in self.nodes:
+            node.value = 0.0
         self.set_inputs(data)
 
         pending = set(self._triggered)
@@ -141,6 +145,21 @@ class Genome:
     # -------------------------------------------------------------------------
     # Diagnostics
     # -------------------------------------------------------------------------
+
+    def _clear(self) -> None:
+        """Break all internal reference cycles so Python can immediately GC this genome.
+
+        Node A → Connection → Node B → Connection → Node A creates a cycle that
+        Python's reference counter cannot resolve alone; it waits for the cyclic GC.
+        In fast training loops genomes are discarded faster than the GC runs, causing
+        RAM to grow. Explicitly clearing connections breaks every cycle here.
+        """
+        for node in self.nodes:
+            node.connections.clear()
+        self.nodes.clear()
+        self.input_nodes.clear()
+        self.output_nodes.clear()
+        self._triggered.clear()
 
     def all_connections(self) -> list[tuple[Node, Connection]]:
         """All (source, connection) pairs in the network."""

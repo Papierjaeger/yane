@@ -2,8 +2,6 @@
 import json
 import os
 
-import numpy as np
-
 from yane import NeuroEvolution
 
 _here = os.path.dirname(__file__)
@@ -15,6 +13,7 @@ with open(os.path.join(_here, "dataset_XOR.json")) as f:
 def main():
     yane = NeuroEvolution()
     yane.configure(n_inputs=2, n_outputs=1, max_nodes=20, max_connections=50)
+    yane.set_resource_limits(max_process_gb=2.0)
     yane.set_min_fitness(-0.1)
 
     def evaluate(genome):
