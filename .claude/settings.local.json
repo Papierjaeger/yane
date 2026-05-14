@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import fastapi, uvicorn, pydantic, gymnasium; print\\('all ok'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import psutil; m=psutil.virtual_memory\\(\\); print\\(f'Total: {m.total/1e9:.1f} GB, Available: {m.available/1e9:.1f} GB'\\)\")",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pytest tests/ -q)",
+      "Read(//var/home/sresch/pCloudDrive/Projekte/Programmieren/**)",
+      "Bash(python -m pytest yane/tests/ -q)",
+      "Bash(python -c \"from yane.core.genome import Genome; print\\('OK'\\)\")"
+    ]
+  }
+}
