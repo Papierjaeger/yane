@@ -15,6 +15,15 @@ _MEMORY_CHECK_EVERY = 500    # check resource limits every N iterations
 _GC_EVERY           = 5000   # force gc.collect() + malloc_trim every N iterations
 
 
+def _close_env(eval_fn) -> None:
+    env = getattr(eval_fn, "_env", None)
+    if env is not None:
+        try:
+            env.close()
+        except Exception:
+            pass
+
+
 class TrainingWorker(QThread):
     """Runs the manual training loop in a background thread."""
 
@@ -82,12 +91,7 @@ class TrainingWorker(QThread):
         except RuntimeError:
             pass
 
-        env = getattr(self._evaluate, "_env", None)
-        if env is not None:
-            try:
-                env.close()
-            except Exception:
-                pass
+        _close_env(self._evaluate)
 
     def pause(self) -> None:
         self._paused = True
@@ -97,6 +101,54 @@ class TrainingWorker(QThread):
 
     def stop(self) -> None:
         self._paused = False
+        self._running = False
+
+
+class EpisodeRunner(QThread):
+    """Loops gym episodes with render until stop() is called."""
+
+    frame_ready   = Signal(object)  # numpy array frame
+    score_updated = Signal(float)   # cumulative reward after each step
+
+    def __init__(self, genome, example, parent=None) -> None:
+        super().__init__(parent)
+        self._genome  = genome
+        self._example = example
+        self._running = True
+
+    def run(self) -> None:
+        last_frame = 0.0
+        step_delay = 0.0
+
+        def render_cb(frame):
+            nonlocal last_frame
+            if not self._running:
+                return
+            now = time.perf_counter()
+            if now - last_frame < 1 / 30:
+                return
+            last_frame = now
+            self.frame_ready.emit(frame)
+
+        def step_cb(total):
+            if self._running:
+                self.score_updated.emit(total)
+            return step_delay
+
+        eval_fn = self._example.make_eval(render_cb, step_cb, demo=True)
+        env = getattr(eval_fn, "_env", None)
+        if env is not None:
+            step_delay = env.metadata.get("render_fps", 30) ** -1
+
+        try:
+            while self._running:
+                eval_fn(self._genome)
+        except Exception:
+            pass
+        finally:
+            _close_env(eval_fn)
+
+    def stop(self) -> None:
         self._running = False
 
 

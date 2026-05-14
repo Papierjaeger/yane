@@ -8,11 +8,11 @@ from PySide6.QtWidgets import (
     QGroupBox, QFormLayout, QProgressBar, QStatusBar, QSizePolicy,
     QFrame, QScrollArea, QMessageBox,
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
 
 from yane.gui.canvas import NetworkCanvas, FitnessChart
-from yane.gui.worker import TrainingWorker, ServerThread
+from yane.gui.worker import TrainingWorker, EpisodeRunner, ServerThread
 from yane.gui.examples import load_examples
 
 # ---------------------------------------------------------------------------
@@ -247,7 +247,9 @@ class TrainingTab(QWidget):
         super().__init__(parent)
         self._examples = load_examples()
         self._worker: TrainingWorker | None = None
+        self._episode_runner: EpisodeRunner | None = None
         self._yane = None
+        self._best_genome = None
         self._had_error = False
         self._last_ram_color = ""
         self._run_id = 0
@@ -310,10 +312,15 @@ class TrainingTab(QWidget):
         self.btn_render.setCheckable(True)
         self.btn_render.setVisible(False)
         self.btn_render.toggled.connect(self._on_render_toggled)
+        self.btn_run_best = QPushButton("▶  Run Best")
+        self.btn_run_best.setVisible(False)
+        self.btn_run_best.setEnabled(False)
+        self.btn_run_best.clicked.connect(self._run_best_episode)
         ctrl_row.addWidget(self.btn_start)
         ctrl_row.addWidget(self.btn_pause)
         ctrl_row.addWidget(self.btn_stop)
         ctrl_row.addWidget(self.btn_render)
+        ctrl_row.addWidget(self.btn_run_best)
         ctrl_row.addWidget(self.status_lbl)
         ctrl_row.addStretch()
         layout.addWidget(ctrl)
@@ -351,6 +358,9 @@ class TrainingTab(QWidget):
         render_layout = QVBoxLayout(self._render_group)
         self._render_widget = GymRenderWidget()
         render_layout.addWidget(self._render_widget)
+        self._score_lbl = _label("Score: —", "statValue")
+        self._score_lbl.setVisible(False)
+        render_layout.addWidget(self._score_lbl)
         self._render_group.setVisible(False)
         layout.addWidget(self._render_group)
 
@@ -388,8 +398,12 @@ class TrainingTab(QWidget):
         self.dspin_target.setValue(ex.target_fitness)
         self.desc_label.setText(ex.description)
         self.btn_render.setVisible(ex.supports_render)
+        self.btn_run_best.setVisible(ex.supports_render)
         if not ex.supports_render:
             self.btn_render.setChecked(False)
+            self._render_group.setVisible(False)
+        self._best_genome = None
+        self.btn_run_best.setEnabled(False)
         self.example_changed.emit(ex)
 
     def _on_render_toggled(self, checked: bool) -> None:
@@ -419,13 +433,14 @@ class TrainingTab(QWidget):
                 self._yane.set_min_fitness(target)
             render_cb = None
             if ex.supports_render and self.btn_render.isChecked():
-                _last_render = [0.0]
+                last_render = 0.0
                 _emit = self.render_frame.emit
                 def render_cb(frame):
+                    nonlocal last_render
                     now = _time.perf_counter()
-                    if now - _last_render[0] < 1 / 30:
+                    if now - last_render < 1 / 30:
                         return
-                    _last_render[0] = now
+                    last_render = now
                     _emit(frame)
             evaluate_fn = ex.make_eval(render_cb)
         except Exception as e:
@@ -448,10 +463,15 @@ class TrainingTab(QWidget):
         worker.iteration_done.connect(self._on_iteration)
         worker.error_occurred.connect(self._on_error)
         worker.finished.connect(lambda: self._on_finished(run_id))
-        worker.start()
+        if self._episode_runner and self._episode_runner.isRunning():
+            self._episode_runner.stop()
+            self._episode_runner = None
+        worker.start(QThread.Priority.LowPriority)
         self._worker = worker
         self.training_started.emit()
+        self.btn_run_best.setEnabled(False)
         self._render_widget.clear_frame()
+        self._score_lbl.setVisible(False)
 
         self.chart.clear()
         self.btn_start.setEnabled(False)
@@ -488,6 +508,44 @@ class TrainingTab(QWidget):
         self.chart.add_point(fitness)
         self.genome_updated.emit(best_genome, mem)
         self._update_ram_bar()
+        self.btn_run_best.setEnabled(self.btn_run_best.isVisible())
+
+    def _run_best_episode(self) -> None:
+        if self._episode_runner and self._episode_runner.isRunning():
+            self._episode_runner.stop()
+            return
+
+        ex = self._current_example()
+        if ex is None or not ex.supports_render:
+            return
+
+        if self._yane is not None:
+            try:
+                genome = self._yane.get_best().copy()
+            except RuntimeError:
+                return
+        elif self._best_genome is not None:
+            genome = self._best_genome.copy()
+        else:
+            return
+
+        self._render_group.setVisible(True)
+        self._render_widget.clear_frame()
+        self._score_lbl.setText("Score: running…")
+        self._score_lbl.setVisible(True)
+        self.btn_run_best.setText("■  Stop Run")
+
+        runner = EpisodeRunner(genome, ex)
+        runner.finished.connect(runner.deleteLater)
+        runner.frame_ready.connect(self._render_widget.update_frame)
+        runner.score_updated.connect(lambda s: self._score_lbl.setText(f"Score: {s:.2f}"))
+        runner.finished.connect(self._on_episode_finished)
+        runner.start()
+        self._episode_runner = runner
+
+    def _on_episode_finished(self) -> None:
+        self.btn_run_best.setText("▶  Run Best")
+        self._episode_runner = None
 
     def _reset_training_buttons(self) -> None:
         self.btn_start.setEnabled(True)
@@ -515,6 +573,10 @@ class TrainingTab(QWidget):
             try:
                 best = self._yane.get_best().copy()
                 mem = self._yane.population_memory_info()
+                if self._best_genome is not None:
+                    self._best_genome._clear()
+                self._best_genome = best.copy()
+                self.btn_run_best.setEnabled(True)
                 self.genome_updated.emit(best, mem)
             except Exception:
                 pass

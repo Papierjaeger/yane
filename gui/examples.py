@@ -1,5 +1,6 @@
 """Built-in example configurations for the GUI."""
 from __future__ import annotations
+import time
 from typing import Callable
 
 from yane.core.genome import Genome
@@ -29,24 +30,34 @@ def _xor_eval(genome: Genome) -> float:
 # ---------------------------------------------------------------------------
 
 def _make_discrete_action_eval(env_id: str, early_stop: float | None = None):
-    """Returns make(render_callback) → eval_fn for discrete-action gym envs."""
-    def make(render_callback=None):
+    """Returns make(render_callback, step_callback, demo) → eval_fn."""
+    def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make(env_id, render_mode="rgb_array" if render_callback else None)
+        env = gym.make(env_id,
+                       render_mode="rgb_array" if render_callback else None,
+                       max_episode_steps=100_000)
 
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
             done = False
             total = 0.0
-            while not done:
+            while not done and total < 100_000:
                 out = genome.forward(list(state))
                 action = int(np.argmax(out))
                 state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 total += reward
-                if early_stop is not None and total < early_stop:
+                if not demo and early_stop is not None and total < early_stop:
                     break
+                if step_callback is not None:
+                    delay = step_callback(total)
+                    if delay:
+                        time.sleep(delay)
+                elif render_callback is None:
+                    # Yield the GIL so the Qt main thread can process events.
+                    # Without this, tight gym loops starve the UI thread.
+                    time.sleep(0)
                 if render_callback is not None:
                     frame = env.render()
                     if frame is not None:
@@ -59,8 +70,8 @@ def _make_discrete_action_eval(env_id: str, early_stop: float | None = None):
 
 
 def _make_mountaincar_eval():
-    """Returns make(render_callback) → eval_fn for MountainCarContinuous."""
-    def make(render_callback=None):
+    """Returns make(render_callback, step_callback, demo) → eval_fn."""
+    def make(render_callback=None, step_callback=None, demo=False):
         import gymnasium as gym
         env = gym.make("MountainCarContinuous-v0",
                        render_mode="rgb_array" if render_callback else None)
@@ -68,12 +79,20 @@ def _make_mountaincar_eval():
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
             total = 0.0
-            for _ in range(800):
+            # In demo mode run until env terminates; in training cap at 800 steps.
+            max_steps = 10_000 if demo else 800
+            for _ in range(max_steps):
                 action = genome.forward(list(state))
                 state, reward, terminated, truncated, _ = env.step(action)
                 total += reward + state[1]
                 if terminated or truncated:
                     break
+                if step_callback is not None:
+                    delay = step_callback(total)
+                    if delay:
+                        time.sleep(delay)
+                elif render_callback is None:
+                    time.sleep(0)
                 if render_callback is not None:
                     frame = env.render()
                     if frame is not None:
@@ -98,7 +117,7 @@ class ExampleConfig:
         n_outputs: int,
         max_nodes: int,
         max_connections: int,
-        make_eval: Callable,   # signature: (render_callback | None) -> eval_fn
+        make_eval: Callable,   # (render_callback=None, step_callback=None, demo=False) -> eval_fn
         target_fitness: float,
         supports_render: bool = False,
         test_cases: list[tuple[list[float], list[float]]] | None = None,
@@ -122,7 +141,7 @@ def load_examples() -> list[ExampleConfig]:
             description="Learn the XOR function (2 inputs, 1 output).",
             n_inputs=2, n_outputs=1,
             max_nodes=20, max_connections=50,
-            make_eval=lambda cb=None: _xor_eval,
+            make_eval=lambda cb=None, step_cb=None, demo=False: _xor_eval,
             target_fitness=-0.1,
             supports_render=False,
             test_cases=[
@@ -143,7 +162,7 @@ def load_examples() -> list[ExampleConfig]:
                 n_inputs=4, n_outputs=2,
                 max_nodes=30, max_connections=100,
                 make_eval=_make_discrete_action_eval("CartPole-v1"),
-                target_fitness=500,
+                target_fitness=1000,
                 supports_render=True,
             ),
             ExampleConfig(
