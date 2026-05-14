@@ -41,6 +41,42 @@ class TestAddNode(unittest.TestCase):
         self.assertEqual(len(g.nodes), 3)
 
 
+class TestRemoveNodeSelfLoop(unittest.TestCase):
+    """remove_node must not infinite-loop when the node has a self-connection."""
+
+    def test_remove_node_with_self_loop_terminates(self):
+        from yane.core.genome import Genome
+        from yane.core.connection import Connection
+        from yane.core.node import Node, NodeType
+
+        g = Genome()
+        inp = Node(NodeType.INPUT);  g.nodes.append(inp);  g.input_nodes.append(inp)
+        hid = Node(NodeType.HIDDEN); g.nodes.append(hid)
+        out = Node(NodeType.OUTPUT); g.nodes.append(out);  g.output_nodes.append(out)
+
+        # inp → hid, hid → out, hid → hid (self-loop)
+        c1 = Connection(hid); c1.weight = 1.0; inp.connections.append(c1)
+        c2 = Connection(out); c2.weight = 1.0; hid.connections.append(c2)
+        c3 = Connection(hid); c3.weight = 0.5; hid.connections.append(c3)  # self-loop
+
+        g.bypass_connection_prob = 1.0  # always create bypass → worst case
+
+        # Must return quickly — previously caused an infinite loop
+        import signal
+
+        def _timeout(sig, frame):
+            raise TimeoutError("remove_node did not terminate")
+
+        signal.signal(signal.SIGALRM, _timeout)
+        signal.alarm(3)
+        try:
+            smart_mutation.remove_node(g)
+        finally:
+            signal.alarm(0)
+
+        self.assertNotIn(hid, g.nodes, "hidden node must be removed")
+
+
 class TestRemoveNode(unittest.TestCase):
 
     def test_remove_node_decreases_node_count(self):

@@ -55,8 +55,13 @@ def remove_node(genome) -> None:
     incoming = [(node, conn) for node, conn in genome.all_connections()
                 if conn.target is node_to_remove]
 
+    # Snapshot connections before iterating — if source_node IS node_to_remove
+    # (self-loop), appending to source_node.connections would grow the list we're
+    # iterating, causing an infinite loop that consumes all memory.
+    outgoing_snapshot = list(node_to_remove.connections)
+
     for source_node, in_conn in incoming:
-        for out_conn in node_to_remove.connections:
+        for out_conn in outgoing_snapshot:
             if random.random() < genome.bypass_connection_prob:
                 bypass = Connection(out_conn.target)
                 bypass.weight = in_conn.weight * out_conn.weight
