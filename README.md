@@ -7,13 +7,12 @@ A Python framework for **neuroevolution** — training neural networks through e
 YANE maintains a **population of genomes** (neural networks) and evolves them over time:
 
 1. A genome is selected from the population and evaluated with a user-defined fitness function
-2. Fitter genomes reproduce via tournament selection, producing offspring through mutation
+2. Fitter genomes produce offspring through mutation (tournament selection used when the unevaluated pool is exhausted)
 3. The population evolves until a target fitness is reached
 
 Mutations can modify:
-- Network structure (add/remove nodes and connections)
+- Network structure (add/remove nodes)
 - Node parameters (bias, activation function, input index)
-- Connection weights
 - **Mutation rates themselves** — rates self-adapt over time (meta-evolution)
 
 Supported activation functions: `Linear`, `Sigmoid`, `Tanh`, `ReLU`, `Binary`
@@ -28,6 +27,8 @@ Dependencies: `numpy`, `gym`, `line_profiler`
 
 ## Usage
 
+Run from the `src/` directory (or add it to `PYTHONPATH`):
+
 ```python
 from neural_network.yane import Yane
 
@@ -35,8 +36,10 @@ yane = Yane()
 yane.set_min_fitness(100)
 
 def fitness():
-    # Evaluate yane.selected_candidate and return a fitness score
-    return yane.selected_candidate.tick([0.5, 1.0])[0] * 100
+    output = yane.selected_candidate.tick([0.5, 1.0])
+    score = output[0] * 100
+    yane.selected_candidate.fitness = score  # required for get_best_solution()
+    return score
 
 yane.run(fitness)
 
