@@ -197,8 +197,6 @@ class TrainingTab(QWidget):
         self._yane = None
         self._had_error = False
         self._last_ram_color = ""
-        self._last_logged_rss_mb: float = 0.0
-        self._ram_log_threshold_mb: float = 1.0   # log whenever RSS changes by ≥ 1 MB
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -391,38 +389,11 @@ class TrainingTab(QWidget):
             self.status_lbl.setText("Stopped")
 
     def _on_iteration(self, iteration: int, fitness: float, best_genome, mem: dict) -> None:
-        import time as _t
-        from yane.util.logger import get_logger
-        _log = get_logger()
-        _t0 = _t.perf_counter()
-
         self.lbl_iter.setText(f"Iteration: {iteration}")
         self.lbl_fitness.setText(f"Current: {fitness:.4f}   Best: {best_genome.fitness:.4f}")
-
-        _t1 = _t.perf_counter()
         self.chart.add_point(fitness)
-        _t2 = _t.perf_counter()
-
         self.genome_updated.emit(best_genome, mem)
-        _t3 = _t.perf_counter()
-
         self._update_ram_bar()
-        _t4 = _t.perf_counter()
-
-        total_ms = (_t4 - _t0) * 1000
-        if total_ms > 50:
-            _log.warning(
-                "SLOW _on_iteration at iter=%d: total=%.1fms  "
-                "labels=%.1fms  chart=%.1fms  genome_emit=%.1fms  ram=%.1fms  "
-                "nodes=%d  conns=%d",
-                iteration, total_ms,
-                (_t1 - _t0) * 1000,
-                (_t2 - _t1) * 1000,
-                (_t3 - _t2) * 1000,
-                (_t4 - _t3) * 1000,
-                len(best_genome.nodes),
-                best_genome.connection_count,
-            )
 
     def _on_error(self, msg: str) -> None:
         self._had_error = True
@@ -451,9 +422,7 @@ class TrainingTab(QWidget):
 
     def _update_ram_bar(self) -> None:
         from yane.util.resource_guard import ResourceGuard
-        from yane.util.logger import get_logger
         used_gb = ResourceGuard.current_process_gb()
-        used_mb = used_gb * 1024
         limit = self.dspin_mem.value()
         pct = min(100, int(used_gb / limit * 100))
         self.ram_bar.setValue(pct)
@@ -464,23 +433,6 @@ class TrainingTab(QWidget):
             self.ram_bar.setStyleSheet(
                 f"QProgressBar::chunk {{ background-color: {color}; border-radius: 3px; }}"
             )
-
-        # Log when RAM changes by ≥ threshold — same place that drives the RAM bar
-        delta_mb = used_mb - self._last_logged_rss_mb
-        if abs(delta_mb) >= self._ram_log_threshold_mb:
-            iter_n = self._worker.iteration if self._worker else 0
-            log = get_logger()
-            if delta_mb > 5:
-                log.warning(
-                    "RAM bar spike: rss=%.1f MB  delta=%+.1f MB  iter=%d  pct=%d%%",
-                    used_mb, delta_mb, iter_n, pct,
-                )
-            else:
-                log.info(
-                    "RAM bar update: rss=%.1f MB  delta=%+.1f MB  iter=%d",
-                    used_mb, delta_mb, iter_n,
-                )
-            self._last_logged_rss_mb = used_mb
 
 
 # ---------------------------------------------------------------------------
@@ -594,25 +546,13 @@ class InspectTab(QWidget):
         )
 
     def update_genome(self, genome, mem: dict) -> None:
-        import time as _t
-        from yane.util.logger import get_logger
-        _log = get_logger()
-
         if self._genome is not None and self._genome is not genome:
             self._genome._clear()
         self._genome = genome
         self._no_genome_lbl.setVisible(False)
         self.btn_run.setEnabled(bool(self._input_widgets))
-
         for row in self._test_rows:
-            _t0 = _t.perf_counter()
             row.update(genome)
-            elapsed = (_t.perf_counter() - _t0) * 1000
-            if elapsed > 20:
-                _log.warning(
-                    "SLOW InspectTab row.update(): %.1fms  inputs=%s  nodes=%d  conns=%d",
-                    elapsed, row._inputs, len(genome.nodes), genome.connection_count,
-                )
 
     # ------------------------------------------------------------------
 
@@ -814,10 +754,8 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        from yane.util.logger import log_path, get_logger
-        get_logger().info("YANE GUI started")
         bar = QStatusBar()
-        bar.showMessage(f"YANE ready — logs: {log_path()}")
+        bar.showMessage("YANE ready — select an example and press Start.")
         self.setStatusBar(bar)
 
     def closeEvent(self, event) -> None:

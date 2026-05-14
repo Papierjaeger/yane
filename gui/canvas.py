@@ -109,8 +109,6 @@ class NetworkCanvas(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)  # reset handled by caller
 
     def paintEvent(self, event) -> None:
-        import time as _t
-        _t0 = _t.perf_counter()
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -183,15 +181,6 @@ class NetworkCanvas(QWidget):
                 )
         finally:
             painter.end()
-            elapsed = (_t.perf_counter() - _t0) * 1000
-            if elapsed > 30:
-                from yane.util.logger import get_logger
-                n = len(self._genome.nodes) if self._genome else 0
-                c = self._genome.connection_count if self._genome else 0
-                get_logger().warning(
-                    "SLOW NetworkCanvas.paintEvent: %.1fms  nodes=%d  conns=%d",
-                    elapsed, n, c,
-                )
 
     def sizeHint(self) -> QSize:
         return QSize(280, 260)
