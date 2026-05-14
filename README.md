@@ -32,26 +32,24 @@ Dependencies: `numpy`, `gymnasium`, `fastapi`, `uvicorn`, `pydantic`, `psutil`
 
 ## Usage
 
-Add the **parent directory** of `yane/` to `PYTHONPATH`, then import normally:
+Add the **parent directory** of `yane/` to `PYTHONPATH`:
 
 ```bash
-# from the parent of yane/
 export PYTHONPATH=/path/to/parent
+# or run an example directly:
+cd /path/to/parent && python -m yane.examples.XOR
 ```
 
-Or run examples directly:
-
-```bash
-cd /path/to/parent
-python -m yane.examples.XOR
-```
+### Training
 
 ```python
 from yane import NeuroEvolution
 
 yane = NeuroEvolution()
 yane.configure(n_inputs=2, n_outputs=1, max_nodes=50, max_connections=200)
-yane.set_min_fitness(-0.1)   # optional — omit to train indefinitely
+yane.set_min_fitness(-0.1)   # stop when fitness >= this value
+yane.set_max_iterations(10000)  # or stop after N evaluations (whichever comes first)
+# omit both to train indefinitely
 
 def evaluate(genome):
     fitness = 0.0
@@ -60,42 +58,62 @@ def evaluate(genome):
         fitness -= abs(outputs[0] - target)
     return fitness
 
-yane.train(evaluate)
+n = yane.train(evaluate)   # returns number of iterations performed
 best = yane.get_best()
 ```
 
-### Tick mode (step-by-step)
+### Manual loop
+
+For evaluation that spans multiple steps (e.g. a simulation):
+
+```python
+genome = yane.next_genome()
+score = run_simulation(genome)   # your evaluation here
+yane.submit_fitness(score)
+```
+
+### Tick mode (step-by-step propagation)
+
+Each `tick()` fires all currently stimulated nodes once. Outputs may be empty until enough ticks have propagated through the network.
 
 ```python
 genome = yane.next_genome()
 genome.set_inputs([0.5, 1.0])
-genome.tick()               # one propagation step
+genome.tick()                    # input nodes fire → hidden nodes receive signal
+genome.tick()                    # hidden nodes fire → output nodes receive signal
 outputs = genome.get_outputs()
 yane.submit_fitness(my_score)
 ```
 
+### Efficiency penalty
+
+Penalises genomes that take too long to evaluate, promoting smaller and faster networks:
+
+```python
+yane.set_efficiency_penalty(max_ms=10.0, penalty_per_ms=0.5)
+```
+
 ### Resource limits
 
-Training pauses automatically when system memory is low and resumes when it recovers:
+Training pauses automatically when system memory runs low and resumes when it recovers:
 
 ```python
 yane.set_resource_limits(min_free_gb=2.0, max_used_percent=85.0)
 ```
 
-### Efficiency penalty
+### Diagnosing memory growth
 
 ```python
-yane.set_efficiency_penalty(max_ms=10.0, penalty_per_ms=0.1)
+print(yane.population_memory_info())
+# {'total_genomes': 100, 'avg_nodes_per_genome': 12.3, 'largest_genome_nodes': 47, ...}
 ```
 
 ### API server
 
 ```bash
-cd src
+cd /path/to/parent
 uvicorn yane.api.server:app --reload
 ```
-
-Endpoints:
 
 | Method | Path | Description |
 |--------|------|-------------|
