@@ -28,9 +28,28 @@ Cycles are explicitly allowed — self-connections, bidirectional connections, l
 pip install -r requirements.txt
 ```
 
-Dependencies: `numpy`, `gymnasium`, `fastapi`, `uvicorn`, `pydantic`, `psutil`
+Dependencies: `numpy`, `PySide6`, `gymnasium`, `fastapi`, `uvicorn`, `pydantic`, `psutil`
 
-## Usage
+## GUI
+
+Launch the graphical interface:
+
+```bash
+cd /path/to/parent
+python -m yane.gui
+# or directly:
+python run.py
+```
+
+The GUI provides:
+- **Training tab** — configure and run training with live fitness chart and network visualisation
+- **Inspect tab** — see how the best genome performs on known test cases after training
+- **▶ Run Best** button (gym examples) — watch the best genome play an episode in real-time
+- **API Server tab** — start the built-in HTTP server
+
+Built-in examples: XOR, CartPole, Acrobot, MountainCar (Continuous).
+
+## Usage (API / scripting)
 
 Add the **parent directory** of `yane/` to `PYTHONPATH`:
 
@@ -137,6 +156,7 @@ uvicorn yane.api.server:app --reload
 yane/                       ← the Python package (importable as `yane`)
   __init__.py
   neuro_evolution.py        # Main entry point
+  run.py                    # Launch the GUI
   core/
     genome.py               # Network (tick + forward mode, mutation, copy)
     node.py                 # Neuron with activation, bias, persist_value
@@ -149,6 +169,11 @@ yane/                       ← the Python package (importable as `yane`)
   util/
     activation.py           # Activation functions
     resource_guard.py       # System memory monitoring
+  gui/
+    window.py               # Main application window (PySide6)
+    worker.py               # Background training and episode runner threads
+    canvas.py               # Network visualisation and fitness chart widgets
+    examples.py             # Built-in example configurations (XOR, gym envs)
   api/
     server.py               # FastAPI app
     models.py               # Pydantic schemas
