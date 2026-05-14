@@ -150,6 +150,73 @@ uvicorn yane.api.server:app --reload
 | `POST` | `/network/forward` | Full forward pass |
 | `POST` | `/network/reset` | Reset state |
 
+#### Example: training loop via HTTP (XOR)
+
+```python
+import requests
+
+BASE = "http://127.0.0.1:8000"
+
+XOR_DATA = [([0, 0], 0), ([0, 1], 1), ([1, 0], 1), ([1, 1], 0)]
+
+# 1. Configure once
+requests.post(f"{BASE}/configure", params={"n_inputs": 2, "n_outputs": 1})
+
+for _ in range(10_000):
+    # 2. Select the next genome to evaluate
+    requests.post(f"{BASE}/population/next")
+
+    # 3. Evaluate: forward pass for each input, accumulate fitness
+    fitness = 0.0
+    for inputs, target in XOR_DATA:
+        out = requests.post(f"{BASE}/network/forward", json={"data": inputs}).json()["outputs"][0]
+        fitness -= abs(out - target)
+
+    # 4. Submit fitness
+    requests.post(f"{BASE}/population/fitness", json={"fitness": fitness})
+
+# Check results
+print(requests.get(f"{BASE}/population/status").json())
+# {"size": 100, "evaluated": 99, "unevaluated": 1, "best_fitness": -0.07}
+print(requests.get(f"{BASE}/population/best").json())
+# {"fitness": -0.07, "n_nodes": 5, "n_connections": 6, "n_inputs": 2, "n_outputs": 1}
+```
+
+#### Example: tick mode (step-by-step, e.g. CartPole with recurrent network)
+
+```python
+import gymnasium as gym
+import requests
+
+BASE = "http://127.0.0.1:8000"
+
+requests.post(f"{BASE}/configure", params={"n_inputs": 4, "n_outputs": 2})
+requests.post(f"{BASE}/population/next")
+
+env = gym.make("CartPole-v1")
+obs, _ = env.reset()
+total_reward = 0.0
+
+for _ in range(500):
+    # Feed current observation
+    requests.post(f"{BASE}/network/inputs", json={"data": obs.tolist()})
+    # Propagate one step
+    requests.post(f"{BASE}/network/tick")
+    # Read action
+    outputs = requests.get(f"{BASE}/network/outputs").json()["outputs"]
+    action = int(outputs[0] > 0.5)
+
+    obs, reward, terminated, truncated, _ = env.step(action)
+    total_reward += reward
+    if terminated or truncated:
+        break
+
+requests.post(f"{BASE}/population/fitness", json={"fitness": total_reward})
+env.close()
+```
+
+The interactive API docs (Swagger UI) are available at `http://127.0.0.1:8000/docs` while the server is running.
+
 ## Project structure
 
 ```
