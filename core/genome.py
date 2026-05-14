@@ -131,6 +131,7 @@ class Genome:
                 if conn.target in node_map:
                     new_node.connections.append(conn.copy(node_map))
 
+        genome.fitness = self.fitness
         genome.max_nodes = self.max_nodes
         genome.max_connections = self.max_connections
         genome.mutation_add_node = self.mutation_add_node.copy()

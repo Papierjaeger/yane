@@ -189,6 +189,7 @@ class LeftPanel(QWidget):
 class TrainingTab(QWidget):
     genome_updated = Signal(object, dict)   # → LeftPanel + InspectTab
     example_changed = Signal(object)        # → InspectTab.set_example
+    training_started = Signal()             # → InspectTab.reset_genome
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -197,6 +198,7 @@ class TrainingTab(QWidget):
         self._yane = None
         self._had_error = False
         self._last_ram_color = ""
+        self._run_id = 0
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -335,6 +337,9 @@ class TrainingTab(QWidget):
             )
             self._yane.set_population_size(self.spin_pop.value())
             self._yane.set_resource_limits(max_process_gb=self.dspin_mem.value())
+            target = self.dspin_target.value()
+            if target > -1e9:
+                self._yane.set_min_fitness(target)
             evaluate_fn = ex.make_eval()
         except Exception as e:
             QMessageBox.critical(self, "Setup Error", str(e))
@@ -349,13 +354,16 @@ class TrainingTab(QWidget):
 
         # No parent — let Qt manage lifetime via deleteLater to avoid segfault
         # when Python GC and Qt internal refcount race each other.
+        self._run_id += 1
+        run_id = self._run_id
         worker = TrainingWorker(self._yane, evaluate_fn)
         worker.finished.connect(worker.deleteLater)
         worker.iteration_done.connect(self._on_iteration)
         worker.error_occurred.connect(self._on_error)
-        worker.finished.connect(self._on_finished)
+        worker.finished.connect(lambda: self._on_finished(run_id))
         worker.start()
         self._worker = worker
+        self.training_started.emit()
 
         self.chart.clear()
         self.btn_start.setEnabled(False)
@@ -402,7 +410,9 @@ class TrainingTab(QWidget):
         self.status_lbl.setText("Error")
         QMessageBox.critical(self, "Training Error", msg)
 
-    def _on_finished(self) -> None:
+    def _on_finished(self, run_id: int) -> None:
+        if run_id != self._run_id:
+            return  # stale signal from a previous training run
         self.btn_start.setEnabled(True)
         self.btn_pause.setEnabled(False)
         self.btn_pause.setText("⏸  Pause")
@@ -545,11 +555,23 @@ class InspectTab(QWidget):
             example.n_outputs if example else 0,
         )
 
+    def reset_genome(self) -> None:
+        if self._genome is not None:
+            self._genome._clear()
+        self._genome = None
+        self._no_genome_lbl.setVisible(True)
+        self.btn_run.setEnabled(False)
+        for row in self._test_rows:
+            row.update(None)
+
     def update_genome(self, genome, mem: dict) -> None:
+        self._no_genome_lbl.setVisible(False)
+        if self._genome is not None and genome.fitness < self._genome.fitness:
+            genome._clear()
+            return
         if self._genome is not None and self._genome is not genome:
             self._genome._clear()
         self._genome = genome
-        self._no_genome_lbl.setVisible(False)
         self.btn_run.setEnabled(bool(self._input_widgets))
         for row in self._test_rows:
             row.update(genome)
@@ -740,6 +762,7 @@ class MainWindow(QMainWindow):
         self._training_tab.genome_updated.connect(self._left.update_genome)
         self._training_tab.genome_updated.connect(self._inspect_tab.update_genome)
         self._training_tab.example_changed.connect(self._inspect_tab.set_example)
+        self._training_tab.training_started.connect(self._inspect_tab.reset_genome)
         root.addWidget(tabs, stretch=1)
 
         # Initialise InspectTab with the already-selected example (signal was emitted

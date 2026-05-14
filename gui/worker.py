@@ -47,6 +47,8 @@ class TrainingWorker(QThread):
                 fitness = self._evaluate(genome)
                 self._yane.submit_fitness(fitness)
                 self._iteration += 1
+                if self._yane.min_fitness is not None and fitness >= self._yane.min_fitness:
+                    self._running = False
 
                 if self._iteration % _MEMORY_CHECK_EVERY == 0:
                     self._yane._enforce_memory_limit()
@@ -72,6 +74,13 @@ class TrainingWorker(QThread):
             except Exception as exc:
                 self.error_occurred.emit(str(exc))
                 break
+
+        try:
+            best = self._yane.get_best().copy()
+            mem = self._yane.population_memory_info()
+            self.iteration_done.emit(self._iteration, best.fitness, best, mem)
+        except RuntimeError:
+            pass
 
     def pause(self) -> None:
         self._paused = True
