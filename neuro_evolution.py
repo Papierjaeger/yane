@@ -28,6 +28,10 @@ class NeuroEvolution:
     def is_configured(self) -> bool:
         return self._population is not None
 
+    @property
+    def population(self) -> Population | None:
+        return self._population
+
     # -------------------------------------------------------------------------
     # Configuration
     # -------------------------------------------------------------------------

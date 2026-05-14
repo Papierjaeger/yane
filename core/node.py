@@ -45,8 +45,7 @@ class Node:
         self.max_triggers = self.mutation_max_triggers.mutate_int(self.max_triggers, 1, 10)
 
         if self.type == NodeType.INPUT:
-            new_index = round(self.mutation_input_index.mutate_value(float(self.input_index)))
-            self.input_index = max(0, new_index)
+            self.input_index = self.mutation_input_index.mutate_int(self.input_index, 0, 255)
 
         for conn in self.connections:
             conn.mutate()

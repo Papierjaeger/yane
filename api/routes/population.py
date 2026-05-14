@@ -25,7 +25,7 @@ def status() -> PopulationStatus:
     s = get_state()
     if not s.is_configured:
         raise HTTPException(400, "NeuroEvolution not configured yet. Call POST /configure.")
-    pop = s._population
+    pop = s.population
     try:
         best_fitness = pop.get_best().fitness
     except RuntimeError:
@@ -44,7 +44,7 @@ def best() -> GenomeInfo:
     if not s.is_configured:
         raise HTTPException(400, "NeuroEvolution not configured yet. Call POST /configure.")
     try:
-        genome = s._population.get_best()
+        genome = s.population.get_best()
     except RuntimeError as e:
         raise HTTPException(404, str(e))
     return _genome_info(genome)
