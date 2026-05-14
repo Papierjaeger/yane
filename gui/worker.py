@@ -8,15 +8,11 @@ from typing import Callable
 from PySide6.QtCore import QThread, Signal
 
 from yane.core.genome import Genome
+from yane.neuro_evolution import _return_memory_to_os
 
 _EMIT_INTERVAL_S    = 0.2    # emit UI update at most every 200 ms
 _MEMORY_CHECK_EVERY = 500    # check resource limits every N iterations
 _GC_EVERY           = 5000   # force gc.collect() + malloc_trim every N iterations
-
-
-def _trim_memory() -> None:
-    from yane.neuro_evolution import _return_memory_to_os
-    _return_memory_to_os()
 
 
 class TrainingWorker(QThread):
@@ -61,7 +57,7 @@ class TrainingWorker(QThread):
                 if self._iteration % _GC_EVERY == 0 and self._running:
                     gc.collect()
                     if self._running:
-                        _trim_memory()
+                        _return_memory_to_os()
 
                 now = time.perf_counter()
                 if now - last_emit >= _EMIT_INTERVAL_S:

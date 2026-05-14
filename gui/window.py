@@ -558,10 +558,6 @@ class InspectTab(QWidget):
 
     def _rebuild_test_rows(self) -> None:
         """Called only when the example changes (rare). Rebuilds the table once."""
-        # Remove old rows
-        for row_obj in self._test_rows:
-            # The row QWidget was added to _test_inner; remove and delete it
-            pass  # rows will be cleared by removing from layout below
         self._test_rows.clear()
 
         # Clear the layout (header + rows)

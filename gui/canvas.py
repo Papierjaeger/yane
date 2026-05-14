@@ -106,7 +106,6 @@ class NetworkCanvas(QWidget):
         painter.setBrush(color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(path)
-        painter.setPen(Qt.PenStyle.NoPen)  # reset handled by caller
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
