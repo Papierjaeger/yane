@@ -1,5 +1,6 @@
 """Main application window."""
 from __future__ import annotations
+import time as _time
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTabWidget,
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import (
     QFrame, QScrollArea, QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPalette, QFont
+from PySide6.QtGui import QFont, QImage, QPixmap
 
 from yane.gui.canvas import NetworkCanvas, FitnessChart
 from yane.gui.worker import TrainingWorker, ServerThread
@@ -183,6 +184,56 @@ class LeftPanel(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Gym render widget
+# ---------------------------------------------------------------------------
+
+class GymRenderWidget(QLabel):
+    """Displays gymnasium render frames (rgb_array numpy arrays)."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(180)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._pixmap: QPixmap | None = None
+        self._show_placeholder()
+
+    def update_frame(self, frame) -> None:
+        import numpy as np
+        arr = np.asarray(frame, dtype=np.uint8)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            return
+        h, w, _ = arr.shape
+        img = QImage(arr.data, w, h, w * 3, QImage.Format.Format_RGB888)
+        self._pixmap = QPixmap.fromImage(img.copy())
+        self._rescale()
+
+    def clear_frame(self) -> None:
+        self._pixmap = None
+        self._show_placeholder()
+
+    def _show_placeholder(self) -> None:
+        self.clear()
+        self.setText("Enable render and start training to see the environment.")
+        self.setStyleSheet("color: #6c7086; font-style: italic; font-size: 11px;")
+
+    def _rescale(self) -> None:
+        if self._pixmap is None:
+            return
+        scaled = self._pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
+        self.setStyleSheet("")
+
+    def resizeEvent(self, event) -> None:
+        self._rescale()
+        super().resizeEvent(event)
+
+
+# ---------------------------------------------------------------------------
 # Training tab
 # ---------------------------------------------------------------------------
 
@@ -190,6 +241,7 @@ class TrainingTab(QWidget):
     genome_updated = Signal(object, dict)   # → LeftPanel + InspectTab
     example_changed = Signal(object)        # → InspectTab.set_example
     training_started = Signal()             # → InspectTab.reset_genome
+    render_frame = Signal(object)           # numpy array, emitted from worker thread
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -254,9 +306,14 @@ class TrainingTab(QWidget):
         self.btn_start.clicked.connect(self.start_training)
         self.btn_pause.clicked.connect(self._toggle_pause)
         self.btn_stop.clicked.connect(self.stop_training)
+        self.btn_render = QPushButton("Render: Off")
+        self.btn_render.setCheckable(True)
+        self.btn_render.setVisible(False)
+        self.btn_render.toggled.connect(self._on_render_toggled)
         ctrl_row.addWidget(self.btn_start)
         ctrl_row.addWidget(self.btn_pause)
         ctrl_row.addWidget(self.btn_stop)
+        ctrl_row.addWidget(self.btn_render)
         ctrl_row.addWidget(self.status_lbl)
         ctrl_row.addStretch()
         layout.addWidget(ctrl)
@@ -288,7 +345,18 @@ class TrainingTab(QWidget):
         prog_layout.addWidget(self.chart)
 
         layout.addWidget(prog)
+
+        # --- Gym render panel (hidden for non-render examples) ---
+        self._render_group = QGroupBox("Environment")
+        render_layout = QVBoxLayout(self._render_group)
+        self._render_widget = GymRenderWidget()
+        render_layout.addWidget(self._render_widget)
+        self._render_group.setVisible(False)
+        layout.addWidget(self._render_group)
+
         layout.addStretch()
+
+        self.render_frame.connect(self._render_widget.update_frame)
 
         scroll.setWidget(inner)
         outer = QVBoxLayout(self)
@@ -319,7 +387,16 @@ class TrainingTab(QWidget):
         self.spin_conns.setValue(ex.max_connections)
         self.dspin_target.setValue(ex.target_fitness)
         self.desc_label.setText(ex.description)
+        self.btn_render.setVisible(ex.supports_render)
+        if not ex.supports_render:
+            self.btn_render.setChecked(False)
         self.example_changed.emit(ex)
+
+    def _on_render_toggled(self, checked: bool) -> None:
+        self.btn_render.setText("Render: On" if checked else "Render: Off")
+        self._render_group.setVisible(checked)
+        if not checked:
+            self._render_widget.clear_frame()
 
     def start_training(self) -> None:
         ex = self._current_example()
@@ -340,7 +417,17 @@ class TrainingTab(QWidget):
             target = self.dspin_target.value()
             if target > -1e9:
                 self._yane.set_min_fitness(target)
-            evaluate_fn = ex.make_eval()
+            render_cb = None
+            if ex.supports_render and self.btn_render.isChecked():
+                _last_render = [0.0]
+                _emit = self.render_frame.emit
+                def render_cb(frame):
+                    now = _time.perf_counter()
+                    if now - _last_render[0] < 1 / 30:
+                        return
+                    _last_render[0] = now
+                    _emit(frame)
+            evaluate_fn = ex.make_eval(render_cb)
         except Exception as e:
             QMessageBox.critical(self, "Setup Error", str(e))
             return
@@ -364,6 +451,7 @@ class TrainingTab(QWidget):
         worker.start()
         self._worker = worker
         self.training_started.emit()
+        self._render_widget.clear_frame()
 
         self.chart.clear()
         self.btn_start.setEnabled(False)
@@ -391,9 +479,7 @@ class TrainingTab(QWidget):
             self.btn_stop.setEnabled(False)
             self.status_lbl.setText("Stopping…")
         else:
-            self.btn_start.setEnabled(True)
-            self.btn_pause.setEnabled(False)
-            self.btn_stop.setEnabled(False)
+            self._reset_training_buttons()
             self.status_lbl.setText("Stopped")
 
     def _on_iteration(self, iteration: int, fitness: float, best_genome, mem: dict) -> None:
@@ -403,26 +489,35 @@ class TrainingTab(QWidget):
         self.genome_updated.emit(best_genome, mem)
         self._update_ram_bar()
 
+    def _reset_training_buttons(self) -> None:
+        self.btn_start.setEnabled(True)
+        self.btn_pause.setEnabled(False)
+        self.btn_pause.setText("⏸  Pause")
+        self.btn_stop.setEnabled(False)
+
     def _on_error(self, msg: str) -> None:
         self._had_error = True
-        self.btn_start.setEnabled(True)
-        self.btn_stop.setEnabled(False)
+        self._reset_training_buttons()
         self.status_lbl.setText("Error")
         QMessageBox.critical(self, "Training Error", msg)
 
     def _on_finished(self, run_id: int) -> None:
         if run_id != self._run_id:
             return  # stale signal from a previous training run
-        self.btn_start.setEnabled(True)
-        self.btn_pause.setEnabled(False)
-        self.btn_pause.setText("⏸  Pause")
-        self.btn_stop.setEnabled(False)
+        self._reset_training_buttons()
         if not self._had_error:
             if self.status_lbl.text() == "Stopping…":
                 self.status_lbl.setText("Stopped")
             else:
                 self.status_lbl.setText("Finished ✓")
         self._had_error = False
+        if self._yane is not None:
+            try:
+                best = self._yane.get_best().copy()
+                mem = self._yane.population_memory_info()
+                self.genome_updated.emit(best, mem)
+            except Exception:
+                pass
         self._worker = None
         self._yane = None
 
@@ -490,9 +585,9 @@ class _TestCaseRow:
             self._tick.setStyleSheet("color: #f38ba8; font-size: 16px; font-weight: bold;")
             return
 
+        correct = all(abs(o - e) < 0.2 for o, e in zip(outputs, self._expected))
         out_str = "[" + ", ".join(f"{v:.3f}" for v in outputs) + "]"
         self._out_lbl.setText(out_str)
-        correct = all(abs(o - e) < 0.2 for o, e in zip(outputs, self._expected))
         tick, color = ("✓", "#a6e3a1") if correct else ("✗", "#f38ba8")
         self._tick.setText(tick)
         self._tick.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
@@ -566,9 +661,6 @@ class InspectTab(QWidget):
 
     def update_genome(self, genome, mem: dict) -> None:
         self._no_genome_lbl.setVisible(False)
-        if self._genome is not None and genome.fitness < self._genome.fitness:
-            genome._clear()
-            return
         if self._genome is not None and self._genome is not genome:
             self._genome._clear()
         self._genome = genome

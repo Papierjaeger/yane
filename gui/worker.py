@@ -82,6 +82,13 @@ class TrainingWorker(QThread):
         except RuntimeError:
             pass
 
+        env = getattr(self._evaluate, "_env", None)
+        if env is not None:
+            try:
+                env.close()
+            except Exception:
+                pass
+
     def pause(self) -> None:
         self._paused = True
 

@@ -57,14 +57,17 @@ class Genome:
     # -------------------------------------------------------------------------
 
     def forward(self, data: list[float]) -> list[float]:
-        # Hard reset — clears all nodes regardless of persist_value for a clean pass.
-        # (reset() only clears non-persistent nodes, which is correct for tick mode.)
+        # Hard reset ignores persist_value so each call is independent (unlike tick/reset).
         self._triggered.clear()
         for node in self.nodes:
             node.value = 0.0
         self.set_inputs(data)
 
-        pending = set(self._triggered)
+        # Sort by self.nodes order so propagation is deterministic and identical between
+        # a genome and its copies. Raw set iteration uses id()-based order, which differs
+        # across objects and causes inconsistent outputs for the same input.
+        node_idx = {n: i for i, n in enumerate(self.nodes)}
+        pending: list[Node] = sorted(self._triggered, key=lambda n: node_idx[n])
         trigger_counts: defaultdict[Node, int] = defaultdict(int)
 
         while pending:
@@ -74,7 +77,7 @@ class Genome:
                     continue
                 trigger_counts[node] += 1
                 node.fire(next_pending)
-            pending = next_pending
+            pending = sorted(next_pending, key=lambda n: node_idx[n])
 
         return self.get_outputs()
 
