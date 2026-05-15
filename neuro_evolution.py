@@ -29,6 +29,7 @@ class NeuroEvolution:
         self._resource_guard = ResourceGuard()
         self._resource_check_interval: int = 1
         self._population_size: int = 100
+        self._n_workers: int = 1
 
     @property
     def current_genome(self) -> Genome | None:
@@ -237,6 +238,10 @@ class NeuroEvolution:
             "novelty_weight":       self._population.novelty_weight,
         }
 
+    def set_n_workers(self, n: int) -> None:
+        """Number of parallel workers for evaluation (default 1 = sequential)."""
+        self._n_workers = max(1, n)
+
     # -------------------------------------------------------------------------
     # Manual loop (for complex multi-step evaluation)
     # -------------------------------------------------------------------------
@@ -252,6 +257,16 @@ class NeuroEvolution:
             raise RuntimeError("Call next_genome() before submit_fitness().")
         self._population.submit(self._current_genome, fitness)
         self._current_genome = None
+
+    def next_genome_batch(self, n: int) -> list[Genome]:
+        """Select n genomes for parallel evaluation."""
+        self._ensure_configured()
+        return [self._population.select_for_evaluation() for _ in range(n)]
+
+    def submit_fitness_batch(self, results: list[tuple[Genome, float]]) -> None:
+        """Submit fitness values for a batch of genomes."""
+        for genome, fitness in results:
+            self._population.submit(genome, fitness)
 
     # -------------------------------------------------------------------------
     # Tick mode (operates on current_genome)

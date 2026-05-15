@@ -551,6 +551,13 @@ class TrainingTab(QWidget):
                         return
                     last_render = now
                     _emit(frame)
+
+            # Parallel evaluation: disabled when rendering (one env drives the
+            # render callback) or when a render callback is active.
+            import os
+            n_workers = 1 if render_cb is not None else max(1, os.cpu_count() or 1)
+            self._yane.set_n_workers(n_workers)
+            make_eval_fn = ex.make_eval if render_cb is None else None
             evaluate_fn = ex.make_eval(render_cb)
         except Exception as e:
             QMessageBox.critical(self, "Setup Error", str(e))
@@ -567,7 +574,7 @@ class TrainingTab(QWidget):
         # when Python GC and Qt internal refcount race each other.
         self._run_id += 1
         run_id = self._run_id
-        worker = TrainingWorker(self._yane, evaluate_fn)
+        worker = TrainingWorker(self._yane, evaluate_fn, make_eval_fn=make_eval_fn)
         worker.finished.connect(worker.deleteLater)
         worker.iteration_done.connect(self._on_iteration)
         worker.error_occurred.connect(self._on_error)

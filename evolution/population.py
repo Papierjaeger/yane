@@ -72,6 +72,10 @@ class Population:
         ] if n_in > 0 else []
         # id(genome) → behavior descriptor (concatenated outputs on probe_inputs)
         self._behaviors: dict[int, list[float]] = {}
+        # Novelty archive: persists the most novel descriptors seen across all
+        # generations so novelty doesn't collapse as the population converges.
+        self._novelty_archive: list[np.ndarray] = []
+        self._novelty_archive_max: int = 200
 
     # ------------------------------------------------------------------
     # Public API
@@ -157,11 +161,11 @@ class Population:
     # ------------------------------------------------------------------
 
     def _compute_novelty(self) -> dict[int, float]:
-        """Mean behavioral distance to all others, vectorised with NumPy.
+        """Mean behavioral distance to population + archive, vectorised with NumPy.
 
         Returns {id(genome): normalized_novelty} in [0, 1].
-        Pure-Python O(N²) loops were the dominant runtime cost (≈90%);
-        NumPy broadcasting reduces this to a single matrix operation.
+        The archive preserves the most novel descriptors seen across all
+        generations so novelty doesn't collapse as the population converges.
         """
         pairs = [
             (id(g), self._behaviors[id(g)])
@@ -172,15 +176,26 @@ class Population:
             return {id(g): 0.0 for g in self._evaluated}
 
         gids = [gid for gid, _ in pairs]
-        mat = np.stack([bv for _, bv in pairs])          # (N, D) float32
+        pop_mat = np.stack([bv for _, bv in pairs])      # (N, D) float32
 
-        # Pairwise Euclidean distances in one vectorised step
-        diff = mat[:, None, :] - mat[None, :, :]         # (N, N, D)
-        dists = np.sqrt((diff * diff).sum(axis=2))        # (N, N)
+        # Include archive in the reference set so novelty is measured against
+        # all interesting behaviours seen, not just the current population.
+        if self._novelty_archive:
+            archive_mat = np.stack(self._novelty_archive)  # (A, D)
+            ref_mat = np.concatenate([pop_mat, archive_mat], axis=0)
+        else:
+            ref_mat = pop_mat
 
+        # Mean distance from each population member to all reference points.
+        diff = pop_mat[:, None, :] - ref_mat[None, :, :]  # (N, R, D)
+        dists = np.sqrt((diff * diff).sum(axis=2))         # (N, R)
+        # Exclude self-distance (always 0 for archive members it won't be there,
+        # but for population members the self-row should be masked).
         N = len(pairs)
-        np.fill_diagonal(dists, 0.0)
-        mean_dists = dists.sum(axis=1) / (N - 1)         # (N,)
+        np.fill_diagonal(dists[:, :N], np.inf)
+        finite = np.where(np.isinf(dists), 0.0, dists)
+        counts = np.where(np.isinf(dists), 0, 1).sum(axis=1)
+        mean_dists = finite.sum(axis=1) / np.maximum(counts, 1)
 
         max_d = float(mean_dists.max())
         normalized = (mean_dists / max_d if max_d > 0 else mean_dists).tolist()
@@ -188,6 +203,16 @@ class Population:
         result = dict(zip(gids, normalized))
         for g in self._evaluated:
             result.setdefault(id(g), 0.0)
+
+        # Add genomes that are novel enough to the archive.
+        threshold = 0.3
+        for (gid, bv), nov in zip(pairs, normalized):
+            if nov >= threshold:
+                self._novelty_archive.append(bv)
+        # Keep archive bounded: discard oldest entries when full.
+        if len(self._novelty_archive) > self._novelty_archive_max:
+            self._novelty_archive = self._novelty_archive[-self._novelty_archive_max:]
+
         return result
 
     # ------------------------------------------------------------------
@@ -228,10 +253,14 @@ class Population:
             sp.representative = sp.best()
 
     def _compute_shared_fitness(self) -> None:
+        # Parsimony pressure: tiny penalty per node/connection so evolution
+        # prefers compact networks that achieve the same fitness.
+        _PARSIMONY = 0.001
         for sp in self._species:
             n = len(sp.members)
             for genome in sp.members:
-                genome.shared_fitness = genome.fitness / n
+                complexity = len(genome.nodes) + genome.connection_count
+                genome.shared_fitness = (genome.fitness / n) - _PARSIMONY * complexity
 
     # ------------------------------------------------------------------
     # Offspring spawning
@@ -289,18 +318,17 @@ class Population:
         for sp in self._species:
             elites.add(id(sp.best()))
 
-        # Fitness-proportional selection weighted by offspring_factor and novelty bonus.
-        min_fit = min(g.shared_fitness for g in self._evaluated)
-        weights = [
-            max(0.0, g.shared_fitness - min_fit + 1e-6)
-            * g.offspring_factor
-            * (1.0 + nw * novelty.get(id(g), 0.0))
-            for g in self._evaluated
-        ]
-        if sum(weights) == 0:
-            weights = [1.0] * len(self._evaluated)
-
-        parent = random.choices(self._evaluated, weights=weights, k=1)[0]
+        # Tournament selection (k=3): pick k random candidates, keep the best
+        # by shared_fitness × offspring_factor × novelty bonus.
+        # More robust than roulette-wheel: one high-fitness outlier can't
+        # dominate the selection pool.
+        k = min(3, len(self._evaluated))
+        candidates = random.sample(self._evaluated, k)
+        parent = max(
+            candidates,
+            key=lambda g: (g.shared_fitness * g.offspring_factor
+                           * (1.0 + nw * novelty.get(id(g), 0.0))),
+        )
 
         if id(parent) in elites:
             child = parent.copy()

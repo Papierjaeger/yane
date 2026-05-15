@@ -1,5 +1,6 @@
 """Smart structural mutations that preserve or smoothly transition network behavior."""
 from __future__ import annotations
+import math
 import random
 
 from yane.core.node import Node, NodeType
@@ -91,8 +92,11 @@ def add_connection(genome) -> None:
         if conn.target is target:
             return
 
+    fan_in = sum(1 for n in genome.nodes for c in n.connections if c.target is target)
+    fan_in = max(fan_in, 1)
+    std = math.sqrt(2.0 / (fan_in + 1))  # Xavier/He init
     conn = Connection(target)
-    conn.weight = random.uniform(-0.5, 0.5)
+    conn.weight = random.gauss(0.0, std)
     source.connections.append(conn)
 
 
