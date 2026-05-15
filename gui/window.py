@@ -308,7 +308,7 @@ class GymRenderWidget(QLabel):
 
     def update_frame(self, frame) -> None:
         import numpy as np
-        arr = np.asarray(frame, dtype=np.uint8)
+        arr = np.ascontiguousarray(frame, dtype=np.uint8)
         if arr.ndim != 3 or arr.shape[2] != 3:
             return
         h, w, _ = arr.shape
