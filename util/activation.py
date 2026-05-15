@@ -38,8 +38,10 @@ class ActivationFunction:
             case ActivationType.ELU:
                 return value if value >= 0.0 else math.exp(max(-_CLIP, value)) - 1.0
             case ActivationType.SWISH:
+                # Clip both the exponent arg and the output value to prevent
+                # unclipped magnitude when |value| > _CLIP.
                 v = max(-_CLIP, min(_CLIP, value))
-                return value / (1.0 + math.exp(-v))
+                return v / (1.0 + math.exp(-v))
             case ActivationType.SOFTPLUS:
                 v = max(-_CLIP, min(_CLIP, value))
                 return math.log(1.0 + math.exp(v))

@@ -33,7 +33,7 @@ def _step_hooks(total: float, env, step_callback, render_callback) -> None:
     """Handle per-step callbacks and GIL yielding after each env step."""
     if step_callback is not None:
         delay = step_callback(total)
-        if delay:
+        if delay > 0:
             time.sleep(delay)
     elif render_callback is None:
         # Yield the GIL so the Qt main thread can process events.
@@ -100,9 +100,9 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
                 # velocity shaping: encourages momentum so training doesn't
                 # converge to "do nothing" (action=0 → reward=0 → local optimum)
                 total += reward + state[1]
+                _step_hooks(total, env, step_callback, render_callback)
                 if terminated or truncated:
                     break
-                _step_hooks(total, env, step_callback, render_callback)
             return total
 
         evaluate._env = env
