@@ -29,6 +29,22 @@ def _xor_eval(genome: Genome) -> float:
 # Gym examples — optional
 # ---------------------------------------------------------------------------
 
+def _step_hooks(total: float, env, step_callback, render_callback) -> None:
+    """Handle per-step callbacks and GIL yielding after each env step."""
+    if step_callback is not None:
+        delay = step_callback(total)
+        if delay:
+            time.sleep(delay)
+    elif render_callback is None:
+        # Yield the GIL so the Qt main thread can process events.
+        # Without this, tight gym loops starve the UI thread.
+        time.sleep(0)
+    if render_callback is not None:
+        frame = env.render()
+        if frame is not None:
+            render_callback(frame)
+
+
 def _make_discrete_action_eval(
     env_id: str,
     early_stop: float | None = None,
@@ -36,8 +52,8 @@ def _make_discrete_action_eval(
 ):
     """Returns make(render_callback, step_callback, demo) → eval_fn.
 
-    max_steps caps episode length — kept intentionally low for envs like Acrobot
-    so demo mode doesn't run for an unreasonably long time with bad genomes.
+    max_steps caps episode length. Keep it low for envs like Acrobot so that
+    bad genomes don't run for an unreasonably long time in demo mode.
     """
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
@@ -50,9 +66,7 @@ def _make_discrete_action_eval(
             state, _ = env.reset()
             done = False
             total = 0.0
-            step = 0
-            while not done and step < max_steps:
-                step += 1
+            while not done:
                 out = genome.forward(list(state))
                 action = int(np.argmax(out))
                 state, reward, terminated, truncated, _ = env.step(action)
@@ -60,18 +74,7 @@ def _make_discrete_action_eval(
                 total += reward
                 if not demo and early_stop is not None and total < early_stop:
                     break
-                if step_callback is not None:
-                    delay = step_callback(total)
-                    if delay:
-                        time.sleep(delay)
-                elif render_callback is None:
-                    # Yield the GIL so the Qt main thread can process events.
-                    # Without this, tight gym loops starve the UI thread.
-                    time.sleep(0)
-                if render_callback is not None:
-                    frame = env.render()
-                    if frame is not None:
-                        render_callback(frame)
+                _step_hooks(total, env, step_callback, render_callback)
             return total
 
         evaluate._env = env
@@ -90,23 +93,16 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
             total = 0.0
-            max_steps = 100_000 if demo else max_train_steps
-            for _ in range(max_steps):
+            episode_cap = 100_000 if demo else max_train_steps
+            for _ in range(episode_cap):
                 action = genome.forward(list(state))
                 state, reward, terminated, truncated, _ = env.step(action)
+                # velocity shaping: encourages momentum so training doesn't
+                # converge to "do nothing" (action=0 → reward=0 → local optimum)
                 total += reward + state[1]
                 if terminated or truncated:
                     break
-                if step_callback is not None:
-                    delay = step_callback(total)
-                    if delay:
-                        time.sleep(delay)
-                elif render_callback is None:
-                    time.sleep(0)
-                if render_callback is not None:
-                    frame = env.render()
-                    if frame is not None:
-                        render_callback(frame)
+                _step_hooks(total, env, step_callback, render_callback)
             return total
 
         evaluate._env = env
@@ -180,10 +176,8 @@ def load_examples() -> list[ExampleConfig]:
                 description="Swing up a two-link robot arm (6 inputs, 3 outputs).",
                 n_inputs=6, n_outputs=3,
                 max_nodes=30, max_connections=100,
-                # max_steps=1000: generous enough for good genomes, short enough
-                # that bad genomes don't run forever in demo mode.
                 make_eval=_make_discrete_action_eval("Acrobot-v1", early_stop=-200, max_steps=1000),
-                target_fitness=-64,
+                target_fitness=-100,
                 supports_render=True,
             ),
             ExampleConfig(
