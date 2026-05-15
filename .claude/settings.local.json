@@ -50,7 +50,8 @@
       "Bash(python /tmp/test_bipedal.py)",
       "Bash(python /tmp/test_carracing.py)",
       "Bash(python -m pytest yane/tests/test_genome.py -v)",
-      "Bash(python /tmp/test_acrobot.py)"
+      "Bash(python /tmp/test_acrobot.py)",
+      "Bash(git checkout *)"
     ],
     "additionalDirectories": [
       "/tmp"
