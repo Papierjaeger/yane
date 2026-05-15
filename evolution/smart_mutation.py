@@ -39,6 +39,7 @@ def add_node(genome) -> None:
         new_node = Node(NodeType.HIDDEN)
 
     genome.nodes.append(new_node)
+    genome._invalidate_topology()
 
 
 def remove_node(genome) -> None:
@@ -72,6 +73,7 @@ def remove_node(genome) -> None:
         node.connections = [c for c in node.connections if c.target is not node_to_remove]
 
     genome.nodes.remove(node_to_remove)
+    genome._invalidate_topology()
 
 
 def add_connection(genome) -> None:
@@ -98,6 +100,7 @@ def add_connection(genome) -> None:
     conn = Connection(target)
     conn.weight = random.gauss(0.0, std)
     source.connections.append(conn)
+    genome._invalidate_topology()
 
 
 def remove_connection(genome) -> None:
@@ -107,3 +110,4 @@ def remove_connection(genome) -> None:
     if connections:
         node, idx = random.choice(connections)
         node.connections.pop(idx)
+        genome._invalidate_topology()

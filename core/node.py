@@ -45,8 +45,13 @@ class Node:
         for conn in self.connections:
             conn.target.value += conn.weight * activated
             next_triggered.add(conn.target)
-        # Persistent nodes store their activated output so it can be read back.
-        # Non-persistent nodes reset so they start fresh next tick.
+        self.value = activated if self.persist_value else 0.0
+
+    def fire_simple(self) -> None:
+        """Fast path for acyclic (topologically sorted) networks — no set tracking."""
+        activated = self._activate_fn(self.value + self.bias)
+        for conn in self.connections:
+            conn.target.value += conn.weight * activated
         self.value = activated if self.persist_value else 0.0
 
     def mutate(self, sigma: float = 1.0) -> None:

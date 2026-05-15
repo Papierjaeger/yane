@@ -76,6 +76,9 @@ class Population:
         # generations so novelty doesn't collapse as the population converges.
         self._novelty_archive: list[np.ndarray] = []
         self._novelty_archive_max: int = 200
+        # Novelty cache: recomputed at most once per max_size spawns.
+        self._novelty_cache: dict[int, float] = {}
+        self._novelty_dirty: bool = True
 
     # ------------------------------------------------------------------
     # Public API
@@ -100,6 +103,7 @@ class Population:
             # Store as float32 array — avoids list→ndarray conversion in _compute_novelty.
             rows = [genome.forward(inp) for inp in self._probe_inputs]
             self._behaviors[id(genome)] = np.array(rows, dtype=np.float32).ravel()
+        self._novelty_dirty = True
 
         if fitness > self._best_fitness_seen:
             self._best_fitness_seen = fitness
@@ -342,7 +346,10 @@ class Population:
         self._assign_species()
         self._compute_shared_fitness()
 
-        novelty = self._compute_novelty()
+        if self._novelty_dirty:
+            self._novelty_cache = self._compute_novelty()
+            self._novelty_dirty = False
+        novelty = self._novelty_cache
         nw = self.novelty_weight
 
         # Tournament selection (k=3): pick k random candidates, keep the best.

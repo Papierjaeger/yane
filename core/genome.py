@@ -39,6 +39,9 @@ class Genome:
         self.input_nodes: list[Node] = []
         self.output_nodes: list[Node] = []
         self._triggered: set[Node] = set()
+        self._connection_count: int = 0   # cached; updated by _invalidate_topology()
+        self._exec_order: list | None = None  # topological order; None = not yet computed
+        self._has_cycles: bool = False        # True = skip topo sort, use BFS
 
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
@@ -81,8 +84,9 @@ class Genome:
     # -------------------------------------------------------------------------
 
     def set_inputs(self, data: list[float]) -> None:
+        n = len(data)
         for node in self.input_nodes:
-            if 0 <= node.input_index < len(data):
+            if node.input_index < n:
                 node.value = data[node.input_index]
                 self._triggered.add(node)
 
@@ -107,20 +111,68 @@ class Genome:
     # Forward mode (full pass with cycle protection)
     # -------------------------------------------------------------------------
 
+    def _build_exec_order(self) -> list[Node] | None:
+        """Topological sort (Kahn's algorithm) for acyclic networks.
+
+        Returns the non-input nodes in execution order, or None if cycles exist.
+        Cached as _exec_order; invalidated by _invalidate_topology().
+        """
+        inputs = set(self.input_nodes)
+        in_degree: dict[Node, int] = {n: 0 for n in self.nodes if n not in inputs}
+        for node in self.nodes:
+            for conn in node.connections:
+                if conn.target not in inputs and conn.target in in_degree:
+                    in_degree[conn.target] += 1
+
+        queue = [n for n in self.nodes if n not in inputs and in_degree[n] == 0]
+        order: list[Node] = []
+        while queue:
+            node = queue.pop(0)
+            order.append(node)
+            for conn in node.connections:
+                t = conn.target
+                if t in in_degree:
+                    in_degree[t] -= 1
+                    if in_degree[t] == 0:
+                        queue.append(t)
+
+        if len(order) != len(in_degree):
+            return None  # cycle detected → fall back to BFS
+        return order
+
     def forward(self, data: list[float]) -> list[float]:
-        # Hard reset ignores persist_value so each call is independent (unlike tick/reset).
+        # Use cached topological order for acyclic networks (no BFS overhead).
+        if self._exec_order is None and not self._has_cycles:
+            result = self._build_exec_order()
+            if result is not None:
+                self._exec_order = result
+            else:
+                self._has_cycles = True
+
+        if self._exec_order is not None:
+            # Fast path: iterate in static topological order — no sets or dicts.
+            for node in self.nodes:
+                node.value = 0.0
+            n = len(data)
+            for node in self.input_nodes:
+                if node.input_index < n:
+                    node.value = data[node.input_index]
+            for node in self._exec_order:
+                node.fire_simple()
+            return self.get_outputs()
+
+        # Slow path: BFS with cycle protection (recurrent networks).
         self._triggered.clear()
         for node in self.nodes:
             node.value = 0.0
         self.set_inputs(data)
 
-        # Filter self.nodes to maintain list order (deterministic, no lambda/dict overhead).
-        # set() membership check is O(1); iterating self.nodes is O(n) with n typically < 30.
         trigger_counts: dict[Node, int] = {}
         pending: list[Node] = [n for n in self.nodes if n in self._triggered]
+        next_pending: set[Node] = set()
 
         while pending:
-            next_pending: set[Node] = set()
+            next_pending.clear()
             for node in pending:
                 cnt = trigger_counts.get(node, 0)
                 if cnt >= node.max_triggers:
@@ -257,6 +309,7 @@ class Genome:
         for attr in _MUTATION_GENES:
             setattr(child, attr, _pick(getattr(self, attr), getattr(other, attr)).copy())
 
+        child._invalidate_topology()
         return child
 
     # -------------------------------------------------------------------------
@@ -289,6 +342,11 @@ class Genome:
         for attr in _MUTATION_GENES:
             setattr(genome, attr, getattr(self, attr).copy())
 
+        genome._connection_count = self._connection_count
+        # Topology cache is valid only if node objects are the same — copy gets
+        # new Node objects, so the exec order must be recomputed on first use.
+        genome._exec_order = None
+        genome._has_cycles = self._has_cycles
         return genome
 
     # -------------------------------------------------------------------------
@@ -314,12 +372,14 @@ class Genome:
         """All (source, connection) pairs in the network."""
         return [(node, conn) for node in self.nodes for conn in node.connections]
 
+    def _invalidate_topology(self) -> None:
+        self._connection_count = sum(len(n.connections) for n in self.nodes)
+        self._exec_order = None
+        self._has_cycles = False
+
     @property
     def connection_count(self) -> int:
-        # Called O(N²) during speciation — computed fresh each time since
-        # mutations can add/remove connections at any point.
-        # Fast enough for typical network sizes (< 200 nodes).
-        return sum(len(n.connections) for n in self.nodes)
+        return self._connection_count
 
     def memory_info(self) -> dict:
         """Returns a breakdown of node/connection counts for memory profiling."""
