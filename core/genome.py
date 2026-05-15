@@ -43,6 +43,7 @@ class Genome:
         self._exec_order: list | None = None  # topological order; None = not yet computed
         self._has_cycles: bool = False        # True = skip topo sort, use BFS
         self._reset_nodes: list | None = None # nodes that need explicit reset before forward
+        self._compiled_forward = None         # cached closure; avoids attribute lookup in hot loop
 
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
@@ -112,6 +113,29 @@ class Genome:
     # Forward mode (full pass with cycle protection)
     # -------------------------------------------------------------------------
 
+    def _compile_forward(self):
+        """Build a closure that captures node lists so forward() makes zero attribute lookups."""
+        reset_nodes = [
+            n for n in self.nodes
+            if n.persist_value and n not in self.input_nodes
+        ]
+        self._reset_nodes = reset_nodes
+        input_nodes = self.input_nodes
+        exec_order = self._exec_order
+        output_nodes = self.output_nodes
+        def _forward(data: list[float]) -> list[float]:
+            for node in reset_nodes:
+                node.value = 0.0
+            n = len(data)
+            for node in input_nodes:
+                node.value = data[node.input_index] if node.input_index < n else 0.0
+                node.fire_simple()
+            for node in exec_order:
+                node.fire_simple()
+            return [node.value for node in output_nodes]
+
+        return _forward
+
     def _build_exec_order(self) -> list[Node] | None:
         """Topological sort (Kahn's algorithm) for acyclic networks.
 
@@ -166,24 +190,9 @@ class Genome:
                 self._has_cycles = True
 
         if self._exec_order is not None:
-            # Fast path: no BFS sets/dicts, no trigger counting.
-            # Persistent non-input nodes keep their value after fire_simple()
-            # and must be reset. All other nodes are zeroed by fire_simple()
-            # itself, or overwritten by the input-setter loop.
-            if self._reset_nodes is None:
-                self._reset_nodes = [
-                    n for n in self.nodes
-                    if n.persist_value and n not in self.input_nodes
-                ]
-            for node in self._reset_nodes:
-                node.value = 0.0
-            n = len(data)
-            for node in self.input_nodes:
-                node.value = data[node.input_index] if node.input_index < n else 0.0
-                node.fire_simple()   # propagate input values to connected nodes
-            for node in self._exec_order:
-                node.fire_simple()
-            return self.get_outputs()
+            if self._compiled_forward is None:
+                self._compiled_forward = self._compile_forward()
+            return self._compiled_forward(data)
 
         # Slow path: BFS with cycle protection (recurrent networks).
         self._triggered.clear()
@@ -370,6 +379,7 @@ class Genome:
         # Topology caches reference old Node objects — must recompute for the copy.
         genome._exec_order = None
         genome._reset_nodes = None
+        genome._compiled_forward = None
         genome._has_cycles = self._has_cycles
         return genome
 
@@ -401,6 +411,7 @@ class Genome:
         self._exec_order = None
         self._has_cycles = False
         self._reset_nodes = None
+        self._compiled_forward = None
 
     @property
     def connection_count(self) -> int:
