@@ -11,7 +11,16 @@
       "Bash(python -c \"from yane.core.genome import Genome; print\\('OK'\\)\")",
       "Bash(python3 -m py_compile __init__.py neuro_evolution.py core/*.py evolution/*.py util/*.py api/*.py api/routes/*.py)",
       "Bash(python -m yane.examples.XOR)",
-      "Bash(python -c \"from PySide6.QtWidgets import QApplication; print\\('PySide6 OK'\\)\")"
+      "Bash(python -c \"from PySide6.QtWidgets import QApplication; print\\('PySide6 OK'\\)\")",
+      "Bash(python -m cProfile -s cumulative -c ' *)",
+      "Bash(python -m cProfile -s cumulative /tmp/profile_mc.py)",
+      "Bash(cat > *)",
+      "Bash(python -m cProfile -s tottime /tmp/profile_mc.py)",
+      "Bash(python -m pytest yane/tests/ -x -q)",
+      "Bash(git commit -m ' *)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }
