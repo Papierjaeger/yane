@@ -125,80 +125,158 @@ def _divider() -> QFrame:
 class LeftPanel(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(280)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 4, 8)
-        layout.setSpacing(8)
+        self.setFixedWidth(285)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 4, 8)
+        outer.setSpacing(6)
 
         title = QLabel("Network")
         font = QFont(); font.setPointSize(11); font.setBold(True)
         title.setFont(font)
-        layout.addWidget(title)
+        outer.addWidget(title)
 
         self.canvas = NetworkCanvas()
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        layout.addWidget(self.canvas, stretch=1)
+        self.canvas.setMinimumHeight(160)
+        outer.addWidget(self.canvas, stretch=1)
 
-        layout.addWidget(_divider())
+        outer.addWidget(_divider())
 
-        stats = QGroupBox("Population")
-        stats_layout = QFormLayout(stats)
-        stats_layout.setSpacing(4)
-        self.lbl_nodes       = _label("—", "statValue")
-        self.lbl_connections = _label("—", "statValue")
+        # Everything below the canvas is scrollable so it never gets cut off.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(6)
+
+        # ── Best Genome ────────────────────────────────────────────────────
+        best = QGroupBox("Best Genome")
+        best_layout = QFormLayout(best)
+        best_layout.setSpacing(4)
+        self.lbl_nodes        = _label("—", "statValue")
+        self.lbl_connections  = _label("—", "statValue")
+        self.lbl_best_fit     = _label("—", "statValue")
+        self.lbl_shared_fit   = _label("—", "statValue")
+        best_layout.addRow("Nodes:",          self.lbl_nodes)
+        best_layout.addRow("Connections:",    self.lbl_connections)
+        best_layout.addRow("Fitness:",        self.lbl_best_fit)
+        best_layout.addRow("Shared fitness:", self.lbl_shared_fit)
+        layout.addWidget(best)
+
+        # ── Population ────────────────────────────────────────────────────
+        pop = QGroupBox("Population")
+        pop_layout = QFormLayout(pop)
+        pop_layout.setSpacing(4)
         self.lbl_population  = _label("—", "statValue")
-        self.lbl_best_fit    = _label("—", "statValue")
-        stats_layout.addRow("Nodes (best):",    self.lbl_nodes)
-        stats_layout.addRow("Connections:",     self.lbl_connections)
-        stats_layout.addRow("Population:",      self.lbl_population)
-        stats_layout.addRow("Best fitness:",    self.lbl_best_fit)
-        layout.addWidget(stats)
+        self.lbl_species     = _label("—", "statValue")
+        self.lbl_avg_nodes   = _label("—", "statValue")
+        self.lbl_avg_conns   = _label("—", "statValue")
+        self.lbl_stagnation    = _label("—", "statValue")
+        self.lbl_novelty_weight = _label("—", "statValue")
+        pop_layout.addRow("Genomes:",        self.lbl_population)
+        pop_layout.addRow("Species:",        self.lbl_species)
+        pop_layout.addRow("Avg nodes:",      self.lbl_avg_nodes)
+        pop_layout.addRow("Avg conns:",      self.lbl_avg_conns)
+        pop_layout.addRow("Stagnation:",     self.lbl_stagnation)
+        pop_layout.addRow("Novelty weight:", self.lbl_novelty_weight)
+        layout.addWidget(pop)
 
-        # Mutation rates
-        mut = QGroupBox("Mutation rates (best genome)")
-        mut_layout = QFormLayout(mut)
-        mut_layout.setSpacing(3)
-
+        # ── Structure mutations (best genome) ─────────────────────────────
+        struct = QGroupBox("Structure mutations")
+        struct_layout = QFormLayout(struct)
+        struct_layout.setSpacing(3)
         self.lbl_rate_add_node  = _label("—", "mutRate")
         self.lbl_rate_rem_node  = _label("—", "mutRate")
         self.lbl_rate_add_conn  = _label("—", "mutRate")
         self.lbl_rate_rem_conn  = _label("—", "mutRate")
-        # bypass_connection_prob: when a node is removed, each A→N→B path gets
-        # a direct A→B shortcut connection with this probability.
+        # bypass_connection_prob: when removing a node, probability of creating
+        # a shortcut A→B for each A→N→B path to preserve connectivity.
         self.lbl_bypass         = _label("—", "mutRate")
-        mut_layout.addRow("Add node:",    self.lbl_rate_add_node)
-        mut_layout.addRow("Rem node:",    self.lbl_rate_rem_node)
-        mut_layout.addRow("Add conn:",    self.lbl_rate_add_conn)
-        mut_layout.addRow("Rem conn:",    self.lbl_rate_rem_conn)
-        mut_layout.addRow("Bypass prob:", self.lbl_bypass)
+        struct_layout.addRow("Add node:",    self.lbl_rate_add_node)
+        struct_layout.addRow("Rem node:",    self.lbl_rate_rem_node)
+        struct_layout.addRow("Add conn:",    self.lbl_rate_add_conn)
+        struct_layout.addRow("Rem conn:",    self.lbl_rate_rem_conn)
+        struct_layout.addRow("Bypass prob:", self.lbl_bypass)
+        layout.addWidget(struct)
 
-        mut_layout.addRow(_label("── avg over nodes/conns ──", "sectionTitle"), QLabel(""))
+        # ── Strategy genes (best genome) ──────────────────────────────────
+        strat = QGroupBox("Strategy genes")
+        strat_layout = QFormLayout(strat)
+        strat_layout.setSpacing(3)
+        self.lbl_crossover_prob   = _label("—", "mutRate")
+        self.lbl_offspring_factor = _label("—", "mutRate")
+        self.lbl_species_thresh   = _label("—", "mutRate")
+        self.lbl_sigma_global     = _label("—", "mutRate")
+        strat_layout.addRow("Crossover prob:",   self.lbl_crossover_prob)
+        strat_layout.addRow("Offspring factor:", self.lbl_offspring_factor)
+        strat_layout.addRow("Species threshold:", self.lbl_species_thresh)
+        strat_layout.addRow("Sigma global:",     self.lbl_sigma_global)
+        layout.addWidget(strat)
+
+        # ── Weight / Node rates (avg over best genome) ────────────────────
+        wn = QGroupBox("Weight / Node rates  (avg)")
+        wn_layout = QFormLayout(wn)
+        wn_layout.setSpacing(3)
         self.lbl_weight_rate  = _label("—", "mutRate")
         self.lbl_weight_delta = _label("—", "mutRate")
         self.lbl_bias_rate    = _label("—", "mutRate")
         self.lbl_bias_delta   = _label("—", "mutRate")
         self.lbl_activ_rate   = _label("—", "mutRate")
-        mut_layout.addRow("Weight rate:",  self.lbl_weight_rate)
-        mut_layout.addRow("Weight Δ:",     self.lbl_weight_delta)
-        mut_layout.addRow("Bias rate:",    self.lbl_bias_rate)
-        mut_layout.addRow("Bias Δ:",       self.lbl_bias_delta)
-        mut_layout.addRow("Activation:",   self.lbl_activ_rate)
-        layout.addWidget(mut)
+        wn_layout.addRow("Weight rate:", self.lbl_weight_rate)
+        wn_layout.addRow("Weight Δ:",    self.lbl_weight_delta)
+        wn_layout.addRow("Bias rate:",   self.lbl_bias_rate)
+        wn_layout.addRow("Bias Δ:",      self.lbl_bias_delta)
+        wn_layout.addRow("Activation:",  self.lbl_activ_rate)
+        layout.addWidget(wn)
+
+        layout.addStretch()
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
 
     def update_genome(self, genome, mem: dict) -> None:
         self.canvas.set_genome(genome)
-        self.lbl_nodes.setText(str(mem.get("largest_genome_nodes", "—")))
-        self.lbl_connections.setText(str(mem.get("largest_genome_connections", "—")))
-        self.lbl_population.setText(str(mem.get("total_genomes", "—")))
+
+        # Best genome
+        self.lbl_nodes.setText(str(len(genome.nodes)))
+        self.lbl_connections.setText(str(genome.connection_count))
         self.lbl_best_fit.setText(f"{genome.fitness:.4f}")
+        self.lbl_shared_fit.setText(f"{genome.shared_fitness:.4f}")
+
+        # Population aggregates
+        self.lbl_population.setText(str(mem.get("total_genomes", "—")))
+        self.lbl_species.setText(str(mem.get("species_count", "—")))
+        avg_n = mem.get("avg_nodes_per_genome")
+        avg_c = mem.get("avg_connections_per_genome")
+        self.lbl_avg_nodes.setText(f"{avg_n:.1f}" if avg_n is not None else "—")
+        self.lbl_avg_conns.setText(f"{avg_c:.1f}" if avg_c is not None else "—")
+        stag = mem.get("stagnation_count")
+        thr  = mem.get("stagnation_threshold")
+        if stag is not None and thr is not None:
+            self.lbl_stagnation.setText(f"{stag} / {thr}")
+        nw = mem.get("novelty_weight")
+        if nw is not None:
+            self.lbl_novelty_weight.setText(f"{nw:.3f}")
+
+        # Structure mutations
         self.lbl_rate_add_node.setText(f"{genome.mutation_add_node.bool_rate:.4f}")
         self.lbl_rate_rem_node.setText(f"{genome.mutation_remove_node.bool_rate:.4f}")
         self.lbl_rate_add_conn.setText(f"{genome.mutation_add_connection.bool_rate:.4f}")
         self.lbl_rate_rem_conn.setText(f"{genome.mutation_remove_connection.bool_rate:.4f}")
         self.lbl_bypass.setText(f"{genome.bypass_connection_prob:.4f}")
 
+        # Strategy genes
+        self.lbl_crossover_prob.setText(f"{genome.crossover_prob:.4f}")
+        self.lbl_offspring_factor.setText(f"{genome.offspring_factor:.4f}")
+        self.lbl_species_thresh.setText(f"{genome.species_threshold:.4f}")
+        self.lbl_sigma_global.setText(f"{genome.sigma_global:.4f}")
+
+        # Weight / Node rates (averaged over all nodes/connections)
         nodes = genome.nodes
-        conns = [(n, c) for n in nodes for c in n.connections]
+        conns = [c for n in nodes for c in n.connections]
         if nodes:
             self.lbl_bias_rate.setText(
                 f"{sum(n.mutation_bias.shift_rate for n in nodes) / len(nodes):.4f}")
@@ -208,9 +286,9 @@ class LeftPanel(QWidget):
                 f"{sum(n.mutation_activation.custom_rate for n in nodes) / len(nodes):.4f}")
         if conns:
             self.lbl_weight_rate.setText(
-                f"{sum(c.mutation.shift_rate for _, c in conns) / len(conns):.4f}")
+                f"{sum(c.mutation.shift_rate for c in conns) / len(conns):.4f}")
             self.lbl_weight_delta.setText(
-                f"{sum(c.mutation.value_delta for _, c in conns) / len(conns):.4f}")
+                f"{sum(c.mutation.value_delta for c in conns) / len(conns):.4f}")
 
 
 # ---------------------------------------------------------------------------

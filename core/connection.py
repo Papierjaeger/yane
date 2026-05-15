@@ -14,8 +14,8 @@ class Connection:
         self.weight: float = random.uniform(-1.0, 1.0)
         self.mutation = Mutation()
 
-    def mutate(self) -> None:
-        self.weight = self.mutation.mutate_value(self.weight)
+    def mutate(self, sigma: float = 1.0) -> None:
+        self.weight = self.mutation.mutate_value(self.weight, sigma)
         self.mutation.mutate_rates()
 
     def copy(self, node_map: dict[Node, Node]) -> Connection:

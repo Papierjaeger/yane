@@ -1,9 +1,36 @@
 from __future__ import annotations
+import random
 from collections import defaultdict
 
 from yane.core.connection import Connection
 from yane.core.node import Node, NodeType
 from yane.evolution.mutation import Mutation
+
+# Attributes shared between copy() and crossover() — scalars and Mutation objects.
+_SCALAR_GENES = (
+    'bypass_connection_prob', 'crossover_prob', 'offspring_factor',
+    'species_threshold', 'sigma_global',
+)
+_MUTATION_GENES = (
+    'mutation_bypass', 'mutation_add_node', 'mutation_remove_node',
+    'mutation_add_connection', 'mutation_remove_connection',
+    'mutation_crossover', 'mutation_offspring', 'mutation_species_threshold',
+    'mutation_sigma',
+)
+
+# Strategy-gene mutation specs: (attr, mutation_attr, min_val, max_val | None)
+_STRATEGY_MUTATION_SPECS = (
+    ('bypass_connection_prob', 'mutation_bypass',             0.0,  1.0),
+    ('crossover_prob',         'mutation_crossover',          0.0,  1.0),
+    ('offspring_factor',       'mutation_offspring',           0.01, None),
+    ('species_threshold',      'mutation_species_threshold',   0.01, 1.0),
+    ('sigma_global',           'mutation_sigma',               0.01, None),
+)
+
+
+def _pick(a, b):
+    """Return a or b with equal probability (used in crossover for gene selection)."""
+    return a if random.random() < 0.5 else b
 
 
 class Genome:
@@ -18,12 +45,37 @@ class Genome:
         self.max_nodes: int | None = None
         self.max_connections: int | None = None
 
+        # Structural mutation rates
         self.mutation_add_node = Mutation()
         self.mutation_remove_node = Mutation()
         self.mutation_add_connection = Mutation()
         self.mutation_remove_connection = Mutation()
         self.bypass_connection_prob: float = 0.5
         self.mutation_bypass = Mutation()
+
+        # ── Self-adaptive strategy genes ─────────────────────────────────────
+        # These are inherited and mutated like any other gene, so the
+        # population discovers good values without any external tuning.
+
+        # Probability this genome reproduces via crossover (vs. pure mutation)
+        self.crossover_prob: float = 0.3
+        self.mutation_crossover = Mutation()
+
+        # Relative reproduction drive; higher → more likely to be selected
+        # as a parent. Balanced by selection pressure over time.
+        self.offspring_factor: float = 1.0
+        self.mutation_offspring = Mutation()
+
+        # Compatibility-distance threshold for same-species membership
+        self.species_threshold: float = 0.3
+        self.mutation_species_threshold = Mutation()
+
+        # Global step-size scale for weight/bias mutations (CMA-ES style)
+        self.sigma_global: float = 1.0
+        self.mutation_sigma = Mutation()
+
+        # Set by Population.submit(); initialised here so the attribute always exists.
+        self.shared_fitness: float = 0.0
 
     # -------------------------------------------------------------------------
     # Tick mode
@@ -90,27 +142,124 @@ class Genome:
 
         if self.mutation_add_node.mutate_bool(False):
             smart_mutation.add_node(self)
-
         if self.mutation_remove_node.mutate_bool(False):
             smart_mutation.remove_node(self)
-
         if self.mutation_add_connection.mutate_bool(False):
             smart_mutation.add_connection(self)
-
         if self.mutation_remove_connection.mutate_bool(False):
             smart_mutation.remove_connection(self)
 
+        sigma = self.sigma_global
         for node in self.nodes:
-            node.mutate()
+            node.mutate(sigma)
 
-        self.bypass_connection_prob = self.mutation_bypass.mutate_value(self.bypass_connection_prob)
-        self.bypass_connection_prob = max(0.0, min(1.0, self.bypass_connection_prob))
+        for attr, mut_attr, lo, hi in _STRATEGY_MUTATION_SPECS:
+            val = getattr(self, mut_attr).mutate_value(getattr(self, attr))
+            if lo is not None:
+                val = max(lo, val)
+            if hi is not None:
+                val = min(hi, val)
+            setattr(self, attr, val)
 
-        self.mutation_add_node.mutate_rates()
-        self.mutation_remove_node.mutate_rates()
-        self.mutation_add_connection.mutate_rates()
-        self.mutation_remove_connection.mutate_rates()
-        self.mutation_bypass.mutate_rates()
+        for mut_attr in _MUTATION_GENES:
+            getattr(self, mut_attr).mutate_rates()
+
+    # -------------------------------------------------------------------------
+    # Crossover
+    # -------------------------------------------------------------------------
+
+    def crossover(self, other: Genome) -> Genome:
+        """Combine this genome (assumed fitter) with other.
+
+        Fixed nodes (input/output) come from self. Hidden nodes are inherited
+        from self always and from other with 50% probability each. Connections
+        from self are always kept; connections from other are added where both
+        endpoints exist in the child, or override existing weights at 50%.
+        Strategy genes are drawn randomly from either parent.
+        """
+        child = Genome()
+        child.max_nodes = self.max_nodes
+        child.max_connections = self.max_connections
+
+        node_map: dict[Node, Node] = {}  # parent node → child node
+
+        # Input nodes from self (anchor structure)
+        for node in self.input_nodes:
+            n = node.copy()
+            node_map[node] = n
+            child.nodes.append(n)
+            child.input_nodes.append(n)
+
+        # Output nodes from self
+        for node in self.output_nodes:
+            n = node.copy()
+            node_map[node] = n
+            child.nodes.append(n)
+            child.output_nodes.append(n)
+
+        # Map other's fixed nodes to child's (by position)
+        for s, o in zip(self.input_nodes, other.input_nodes):
+            node_map[o] = node_map[s]
+        for s, o in zip(self.output_nodes, other.output_nodes):
+            node_map[o] = node_map[s]
+
+        # Hidden nodes from self (always inherited)
+        for node in self.nodes:
+            if node.type == NodeType.HIDDEN:
+                n = node.copy()
+                node_map[node] = n
+                child.nodes.append(n)
+
+        # Hidden nodes from other (50% each, respecting max_nodes cap)
+        for node in other.nodes:
+            if node.type == NodeType.HIDDEN and node not in node_map:
+                if child.max_nodes is not None and len(child.nodes) >= child.max_nodes:
+                    break
+                if random.random() < 0.5:
+                    n = node.copy()
+                    node_map[node] = n
+                    child.nodes.append(n)
+
+        # Build connections; track count to avoid O(N) scan per connection.
+        existing: set[tuple[int, int]] = set()
+        conn_count = 0
+
+        def _add_conns(source_nodes: list[Node], override_weight: bool) -> None:
+            nonlocal conn_count
+            for old_src in source_nodes:
+                if old_src not in node_map:
+                    continue
+                child_src = node_map[old_src]
+                for conn in old_src.connections:
+                    if conn.target not in node_map:
+                        continue
+                    child_tgt = node_map[conn.target]
+                    key = (id(child_src), id(child_tgt))
+                    if key not in existing:
+                        if child.max_connections is not None and conn_count >= child.max_connections:
+                            continue
+                        new_conn = Connection(child_tgt)
+                        new_conn.weight = conn.weight
+                        new_conn.mutation = conn.mutation.copy()
+                        child_src.connections.append(new_conn)
+                        existing.add(key)
+                        conn_count += 1
+                    elif override_weight and random.random() < 0.5:
+                        for c in child_src.connections:
+                            if c.target is child_tgt:
+                                c.weight = conn.weight
+                                break
+
+        _add_conns(self.nodes, False)
+        _add_conns(other.nodes, True)
+
+        # Strategy genes: random from either parent
+        for attr in _SCALAR_GENES:
+            setattr(child, attr, _pick(getattr(self, attr), getattr(other, attr)))
+        for attr in _MUTATION_GENES:
+            setattr(child, attr, _pick(getattr(self, attr), getattr(other, attr)).copy())
+
+        return child
 
     # -------------------------------------------------------------------------
     # Copy
@@ -137,12 +286,10 @@ class Genome:
         genome.fitness = self.fitness
         genome.max_nodes = self.max_nodes
         genome.max_connections = self.max_connections
-        genome.mutation_add_node = self.mutation_add_node.copy()
-        genome.mutation_remove_node = self.mutation_remove_node.copy()
-        genome.mutation_add_connection = self.mutation_add_connection.copy()
-        genome.mutation_remove_connection = self.mutation_remove_connection.copy()
-        genome.bypass_connection_prob = self.bypass_connection_prob
-        genome.mutation_bypass = self.mutation_bypass.copy()
+        for attr in _SCALAR_GENES:
+            setattr(genome, attr, getattr(self, attr))
+        for attr in _MUTATION_GENES:
+            setattr(genome, attr, getattr(self, attr).copy())
 
         return genome
 

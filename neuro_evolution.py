@@ -162,6 +162,27 @@ class NeuroEvolution:
         self._ensure_configured()
         return self._population.get_best()
 
+    def get_ensemble(self, k: int = 3) -> list[Genome]:
+        """Return the top-k genomes by fitness for ensemble inference."""
+        self._ensure_configured()
+        return self._population.get_top(k)
+
+    def forward_ensemble(self, inputs: list[float], k: int = 3) -> list[float]:
+        """Run inputs through the top-k genomes and return averaged outputs.
+
+        Provides more robust predictions than a single genome by averaging
+        the outputs of the k best-performing networks found so far.
+        """
+        top_k = self.get_ensemble(k)
+        if not top_k:
+            raise RuntimeError("No evaluated genomes yet.")
+        all_outputs = [g.forward(inputs) for g in top_k]
+        n_out = len(all_outputs[0])
+        return [
+            sum(out[i] for out in all_outputs) / len(all_outputs)
+            for i in range(n_out)
+        ]
+
     def population_memory_info(self) -> dict:
         """Returns node/connection counts across all genomes — useful for diagnosing memory growth."""
         self._ensure_configured()
@@ -181,6 +202,10 @@ class NeuroEvolution:
             "avg_connections_per_genome": total_connections / len(all_genomes),
             "largest_genome_nodes": max_nodes,
             "largest_genome_connections": max_connections,
+            "species_count":        self._population.species_count,
+            "stagnation_count":     self._population.stagnation_count,
+            "stagnation_threshold": self._population.stagnation_threshold,
+            "novelty_weight":       self._population.novelty_weight,
         }
 
     # -------------------------------------------------------------------------

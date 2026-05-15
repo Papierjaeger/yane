@@ -39,8 +39,8 @@ class Node:
         # Non-persistent nodes reset so they start fresh next tick.
         self.value = activated if self.persist_value else 0.0
 
-    def mutate(self) -> None:
-        self.bias = self.mutation_bias.mutate_value(self.bias)
+    def mutate(self, sigma: float = 1.0) -> None:
+        self.bias = self.mutation_bias.mutate_value(self.bias, sigma)
         self.activation = self.mutation_activation.mutate_enum(self.activation, ActivationType)
         self.persist_value = self.mutation_persist.mutate_bool(self.persist_value)
         self.max_triggers = self.mutation_max_triggers.mutate_int(self.max_triggers, 1, 10)
@@ -49,7 +49,7 @@ class Node:
             self.input_index = self.mutation_input_index.mutate_int(self.input_index, 0, 255)
 
         for conn in self.connections:
-            conn.mutate()
+            conn.mutate(sigma)
 
         self.mutation_bias.mutate_rates()
         self.mutation_activation.mutate_rates()

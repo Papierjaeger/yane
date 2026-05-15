@@ -18,9 +18,9 @@ class Mutation:
         self.rate_mutation_rate = 0.1
         self.value_delta = 0.1
 
-    def mutate_value(self, value: float) -> float:
+    def mutate_value(self, value: float, sigma: float = 1.0) -> float:
         if random.random() < self.shift_rate:
-            return value + random.uniform(-self.value_delta, self.value_delta)
+            return value + random.gauss(0, self.value_delta * sigma)
         return value
 
     def mutate_bool(self, value: bool) -> bool:
