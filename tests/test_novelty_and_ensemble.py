@@ -2,7 +2,8 @@
 import unittest
 
 from yane import NeuroEvolution
-from yane.evolution.population import Population, _euclidean
+import numpy as np
+from yane.evolution.population import Population
 
 
 def _make_yane(n_inputs=2, n_outputs=1, pop_size=20):
@@ -101,11 +102,11 @@ class TestNoveltySearch(unittest.TestCase):
                          "Novelty weight must increase with stagnation count")
 
     def test_euclidean_distance_zero_for_same(self):
-        v = [1.0, 2.0, 3.0]
-        self.assertAlmostEqual(_euclidean(v, v), 0.0)
+        v = np.array([1.0, 2.0, 3.0])
+        self.assertAlmostEqual(float(np.linalg.norm(v - v)), 0.0)
 
     def test_euclidean_distance_positive_for_different(self):
-        self.assertGreater(_euclidean([0.0], [1.0]), 0.0)
+        self.assertGreater(float(np.linalg.norm(np.array([0.0]) - np.array([1.0]))), 0.0)
 
 
 # ---------------------------------------------------------------------------

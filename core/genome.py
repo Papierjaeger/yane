@@ -318,6 +318,9 @@ class Genome:
 
     @property
     def connection_count(self) -> int:
+        # Called O(N²) during speciation — computed fresh each time since
+        # mutations can add/remove connections at any point.
+        # Fast enough for typical network sizes (< 200 nodes).
         return sum(len(n.connections) for n in self.nodes)
 
     def memory_info(self) -> dict:
