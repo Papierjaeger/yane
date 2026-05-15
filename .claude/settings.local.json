@@ -48,7 +48,8 @@
       "Bash(rpm -q python3)",
       "Bash(python /tmp/test_lunar.py)",
       "Bash(python /tmp/test_bipedal.py)",
-      "Bash(python /tmp/test_carracing.py)"
+      "Bash(python /tmp/test_carracing.py)",
+      "Bash(python -m pytest yane/tests/test_genome.py -v)"
     ],
     "additionalDirectories": [
       "/tmp"
