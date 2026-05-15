@@ -35,10 +35,6 @@ def _step_hooks(total: float, env, step_callback, render_callback) -> None:
         delay = step_callback(total)
         if delay > 0:
             time.sleep(delay)
-    elif render_callback is None:
-        # Yield the GIL so the Qt main thread can process events.
-        # Without this, tight gym loops starve the UI thread.
-        time.sleep(0)
     if render_callback is not None:
         frame = env.render()
         if frame is not None:

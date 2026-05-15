@@ -1,6 +1,5 @@
 from __future__ import annotations
 import random
-from collections import defaultdict
 
 from yane.core.connection import Connection
 from yane.core.node import Node, NodeType
@@ -115,21 +114,20 @@ class Genome:
             node.value = 0.0
         self.set_inputs(data)
 
-        # Sort by self.nodes order so propagation is deterministic and identical between
-        # a genome and its copies. Raw set iteration uses id()-based order, which differs
-        # across objects and causes inconsistent outputs for the same input.
-        node_idx = {n: i for i, n in enumerate(self.nodes)}
-        pending: list[Node] = sorted(self._triggered, key=lambda n: node_idx[n])
-        trigger_counts: defaultdict[Node, int] = defaultdict(int)
+        # Filter self.nodes to maintain list order (deterministic, no lambda/dict overhead).
+        # set() membership check is O(1); iterating self.nodes is O(n) with n typically < 30.
+        trigger_counts: dict[Node, int] = {}
+        pending: list[Node] = [n for n in self.nodes if n in self._triggered]
 
         while pending:
             next_pending: set[Node] = set()
             for node in pending:
-                if trigger_counts[node] >= node.max_triggers:
+                cnt = trigger_counts.get(node, 0)
+                if cnt >= node.max_triggers:
                     continue
-                trigger_counts[node] += 1
+                trigger_counts[node] = cnt + 1
                 node.fire(next_pending)
-            pending = sorted(next_pending, key=lambda n: node_idx[n])
+            pending = [n for n in self.nodes if n in next_pending]
 
         return self.get_outputs()
 
