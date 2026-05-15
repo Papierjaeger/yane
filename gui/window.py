@@ -1,6 +1,5 @@
 """Main application window."""
 from __future__ import annotations
-import os
 import time as _time
 
 from PySide6.QtWidgets import (
@@ -553,11 +552,7 @@ class TrainingTab(QWidget):
                     last_render = now
                     _emit(frame)
 
-            # Parallel evaluation: disabled when rendering (one env drives the
-            # render callback) or when a render callback is active.
-            n_workers = 1 if render_cb is not None else max(1, os.cpu_count() or 1)
-            self._yane.set_n_workers(n_workers)
-            make_eval_fn = ex.make_eval if render_cb is None else None
+            make_eval_fn = None
             evaluate_fn = ex.make_eval(render_cb)
         except Exception as e:
             QMessageBox.critical(self, "Setup Error", str(e))
