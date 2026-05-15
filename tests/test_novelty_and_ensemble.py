@@ -150,13 +150,19 @@ class TestStagnationDetection(unittest.TestCase):
             g = yane.next_genome()
             yane.submit_fitness(float(i))
 
-        # Force stagnation
+        # Force both stagnation counters to threshold
         pop._stagnation_count = pop.stagnation_threshold
+        pop._since_last_injection = pop.stagnation_threshold
 
-        # Next spawn should inject a fresh genome and reset stagnation
+        # Next spawn should inject a fresh genome.
+        # stagnation_count must NOT reset (only resets on real fitness improvement).
+        # since_last_injection resets to 0 after injection.
+        before = pop.stagnation_count
         pop._spawn_offspring()
-        self.assertEqual(pop.stagnation_count, 0,
-                         "Stagnation count must reset after diversity injection")
+        self.assertEqual(pop.stagnation_count, before,
+                         "stagnation_count must not reset on injection — only on fitness improvement")
+        self.assertEqual(pop._since_last_injection, 0,
+                         "since_last_injection must reset after injection")
         self.assertEqual(len(pop._unevaluated), 1)
 
     def test_injected_genome_has_correct_structure(self):

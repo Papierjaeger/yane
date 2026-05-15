@@ -62,7 +62,8 @@ class Population:
 
         # Stagnation tracking — threshold scales automatically with population size.
         self._best_fitness_seen: float = float('-inf')
-        self._stagnation_count: int = 0
+        self._stagnation_count: int = 0   # resets ONLY on fitness improvement
+        self._since_last_injection: int = 0  # separate counter for injection pacing
 
         # Novelty search — probe inputs are fixed (seed 42) so behavior descriptors
         # are comparable across the lifetime of the population. No user config needed.
@@ -103,8 +104,10 @@ class Population:
         if fitness > self._best_fitness_seen:
             self._best_fitness_seen = fitness
             self._stagnation_count = 0
+            self._since_last_injection = 0
         else:
             self._stagnation_count += 1
+            self._since_last_injection += 1
 
         self._prune()
 
@@ -239,14 +242,14 @@ class Population:
         base.fitness = 0.0
         base.shared_fitness = 0.0
         self._unevaluated.append(base)
-        self._stagnation_count = 0
+        self._since_last_injection = 0  # pace injections; stagnation_count untouched
 
     def _spawn_offspring(self) -> None:
         if not self._evaluated:
             self._unevaluated.append(self._template.copy())
             return
 
-        if self._stagnation_count >= self.stagnation_threshold:
+        if self._since_last_injection >= self.stagnation_threshold:
             self._inject_fresh_genome()
             return
 
@@ -321,9 +324,16 @@ class Population:
             worst = min(candidates, key=lambda g: g.fitness)
             self._behaviors.pop(id(worst), None)
             self._evaluated.remove(worst)
+            # Remove from its species before clearing to release the reference
+            # so the genome can be GC'd without clearing all species.
+            for sp in self._species:
+                if worst in sp.members:
+                    sp.members.remove(worst)
+                    break
             worst._clear()
 
-        self._species = []
+        # Drop now-empty species; keep non-empty ones so species_count stays visible.
+        self._species = [sp for sp in self._species if sp.members]
 
     def shrink_to(self, target_size: int) -> None:
         """Keep only the best `target_size` evaluated genomes (memory pressure)."""
