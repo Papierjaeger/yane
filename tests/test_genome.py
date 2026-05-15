@@ -85,6 +85,11 @@ class TestGenomeForward(unittest.TestCase):
 
     def test_forward_output_in_sigmoid_range(self):
         g = _make_genome(2, 1)
+        # Genomes start with no connections; add one explicitly so signal
+        # reaches the output node and we can verify the sigmoid range.
+        conn = Connection(g.output_nodes[0])
+        conn.weight = 1.0
+        g.input_nodes[0].connections.append(conn)
         out = g.forward([0.5, 0.5])
         self.assertGreater(out[0], 0.0)
         self.assertLess(out[0], 1.0)

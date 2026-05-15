@@ -105,12 +105,12 @@ class NeuroEvolution:
                     conn.weight = random.uniform(-1.0, 1.0)
                     h.connections.append(conn)
         else:
-            # No hidden nodes: fully connect inputs directly to outputs.
-            for inp in initial.input_nodes:
-                for out in initial.output_nodes:
-                    conn = Connection(out)
-                    conn.weight = random.uniform(-1.0, 1.0)
-                    inp.connections.append(conn)
+            # Start with no connections — the network discovers which inputs
+            # are relevant through add_connection mutations. This keeps the
+            # initial forward pass fast and avoids unnecessary computation for
+            # tasks with many inputs (e.g. CarRacing: 144 inputs × 3 outputs
+            # would be 432 connections before training even begins).
+            pass
 
         self._population = Population(max_size=self._population_size, initial_genome=initial)
 

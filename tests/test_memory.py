@@ -18,10 +18,10 @@ def _make_yane(max_size=20, max_nodes=6, max_connections=12):
 
 
 def _burst(yane, n):
+    import random
     for _ in range(n):
-        g = yane.next_genome()
-        out = g.forward([0.5, 0.5])
-        yane.submit_fitness(out[0])
+        yane.next_genome()
+        yane.submit_fitness(random.random())
 
 
 class TestPruneClearsCycles(unittest.TestCase):

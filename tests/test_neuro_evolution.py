@@ -19,12 +19,12 @@ class TestNeuroEvolutionConfig(unittest.TestCase):
         self.assertEqual(len(g.input_nodes), 3)
         self.assertEqual(len(g.output_nodes), 2)
 
-    def test_initial_genome_is_connected(self):
+    def test_initial_genome_has_no_connections(self):
         yane = self._make(n_inputs=2, n_outputs=1)
         g = yane.next_genome()
-        # configure() must wire every input to every output
-        self.assertEqual(g.connection_count, 2,
-            "Initial genome must have n_inputs × n_outputs connections")
+        # Genomes start empty so evolution discovers relevant connections
+        self.assertEqual(g.connection_count, 0,
+            "Initial genome must have no connections — topology grows via mutation")
 
     def test_output_nodes_have_persist_value(self):
         yane = self._make(n_inputs=2, n_outputs=1)
