@@ -13,6 +13,13 @@ class NodeType(Enum):
 
 
 class Node:
+    __slots__ = (
+        'type', 'value', 'bias', '_activation', '_activate_fn',
+        'persist_value', 'max_triggers', 'input_index', 'connections',
+        'mutation_bias', 'mutation_activation', 'mutation_persist',
+        'mutation_max_triggers', 'mutation_input_index',
+    )
+
     def __init__(self, node_type: NodeType = NodeType.HIDDEN) -> None:
         self.type = node_type
         self.value: float = 0.0
@@ -30,6 +37,13 @@ class Node:
         self.mutation_persist = Mutation()
         self.mutation_max_triggers = Mutation()
         self.mutation_input_index = Mutation()
+
+    def __getstate__(self):
+        return {slot: getattr(self, slot) for slot in self.__slots__}
+
+    def __setstate__(self, state):
+        for slot, value in state.items():
+            object.__setattr__(self, slot, value)
 
     @property
     def activation(self) -> ActivationType:

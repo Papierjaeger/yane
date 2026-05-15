@@ -9,10 +9,20 @@ if TYPE_CHECKING:
 
 
 class Connection:
+    __slots__ = ('target', 'weight', 'mutation', '__weakref__')
+
     def __init__(self, target: Node) -> None:
         self.target = target
         self.weight: float = random.uniform(-1.0, 1.0)
         self.mutation = Mutation()
+
+    def __getstate__(self):
+        return {'target': self.target, 'weight': self.weight, 'mutation': self.mutation}
+
+    def __setstate__(self, state):
+        self.target = state['target']
+        self.weight = state['weight']
+        self.mutation = state['mutation']
 
     def mutate(self, sigma: float = 1.0) -> None:
         self.weight = self.mutation.mutate_value(self.weight, sigma)

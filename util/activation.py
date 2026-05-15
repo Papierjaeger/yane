@@ -27,22 +27,31 @@ def _leaky_relu(v: float) -> float: return v if v > 0.0 else 0.01 * v
 
 
 def _sigmoid(v: float) -> float:
-    v = max(-_CLIP, min(_CLIP, v))
+    if v > _CLIP:
+        v = _CLIP
+    elif v < -_CLIP:
+        v = -_CLIP
     return 1.0 / (1.0 + math.exp(-v))
 
 
 def _swish(v: float) -> float:
-    v = max(-_CLIP, min(_CLIP, v))
+    if v > _CLIP:
+        v = _CLIP
+    elif v < -_CLIP:
+        v = -_CLIP
     return v / (1.0 + math.exp(-v))
 
 
 def _softplus(v: float) -> float:
-    v = max(-_CLIP, min(_CLIP, v))
+    if v > 20.0:    return v           # log(1+exp(v)) ≈ v for v > 20
+    if v < -_CLIP:  return 0.0         # log(1+exp(-500)) ≈ 0
     return math.log(1.0 + math.exp(v))
 
 
 def _elu(v: float) -> float:
-    return v if v >= 0.0 else math.exp(max(-_CLIP, v)) - 1.0
+    if v >= 0.0:    return v
+    if v < -_CLIP:  return -1.0        # exp(-500) - 1 ≈ -1
+    return math.exp(v) - 1.0
 
 
 # Lookup table: ActivationType → named module-level function.

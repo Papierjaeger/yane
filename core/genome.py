@@ -42,6 +42,7 @@ class Genome:
         self._connection_count: int = 0   # cached; updated by _invalidate_topology()
         self._exec_order: list | None = None  # topological order; None = not yet computed
         self._has_cycles: bool = False        # True = skip topo sort, use BFS
+        self._reset_nodes: list | None = None # nodes that need explicit reset before forward
 
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
@@ -114,17 +115,32 @@ class Genome:
     def _build_exec_order(self) -> list[Node] | None:
         """Topological sort (Kahn's algorithm) for acyclic networks.
 
-        Returns the non-input nodes in execution order, or None if cycles exist.
-        Cached as _exec_order; invalidated by _invalidate_topology().
+        Input nodes are treated as already-processed sources: their outgoing
+        edges are counted but their in_degree contribution is immediately
+        removed so their targets can enter the queue first.
+
+        Returns non-input nodes in execution order, or None if cycles exist.
         """
         inputs = set(self.input_nodes)
         in_degree: dict[Node, int] = {n: 0 for n in self.nodes if n not in inputs}
         for node in self.nodes:
             for conn in node.connections:
-                if conn.target not in inputs and conn.target in in_degree:
+                if conn.target in in_degree:
                     in_degree[conn.target] += 1
 
-        queue = [n for n in self.nodes if n not in inputs and in_degree[n] == 0]
+        # Input nodes are "pre-processed" — decrement their targets immediately.
+        queue: list[Node] = []
+        for inp in self.input_nodes:
+            for conn in inp.connections:
+                if conn.target in in_degree:
+                    in_degree[conn.target] -= 1
+                    if in_degree[conn.target] == 0:
+                        queue.append(conn.target)
+        # Nodes with no incoming connections at all (isolated hidden nodes).
+        for node, deg in in_degree.items():
+            if deg == 0 and node not in queue:
+                queue.append(node)
+
         order: list[Node] = []
         while queue:
             node = queue.pop(0)
@@ -150,13 +166,21 @@ class Genome:
                 self._has_cycles = True
 
         if self._exec_order is not None:
-            # Fast path: iterate in static topological order — no sets or dicts.
-            for node in self.nodes:
+            # Fast path: no BFS sets/dicts, no trigger counting.
+            # Persistent non-input nodes keep their value after fire_simple()
+            # and must be reset. All other nodes are zeroed by fire_simple()
+            # itself, or overwritten by the input-setter loop.
+            if self._reset_nodes is None:
+                self._reset_nodes = [
+                    n for n in self.nodes
+                    if n.persist_value and n not in self.input_nodes
+                ]
+            for node in self._reset_nodes:
                 node.value = 0.0
             n = len(data)
             for node in self.input_nodes:
-                if node.input_index < n:
-                    node.value = data[node.input_index]
+                node.value = data[node.input_index] if node.input_index < n else 0.0
+                node.fire_simple()   # propagate input values to connected nodes
             for node in self._exec_order:
                 node.fire_simple()
             return self.get_outputs()
@@ -343,9 +367,9 @@ class Genome:
             setattr(genome, attr, getattr(self, attr).copy())
 
         genome._connection_count = self._connection_count
-        # Topology cache is valid only if node objects are the same — copy gets
-        # new Node objects, so the exec order must be recomputed on first use.
+        # Topology caches reference old Node objects — must recompute for the copy.
         genome._exec_order = None
+        genome._reset_nodes = None
         genome._has_cycles = self._has_cycles
         return genome
 
@@ -376,6 +400,7 @@ class Genome:
         self._connection_count = sum(len(n.connections) for n in self.nodes)
         self._exec_order = None
         self._has_cycles = False
+        self._reset_nodes = None
 
     @property
     def connection_count(self) -> int:
