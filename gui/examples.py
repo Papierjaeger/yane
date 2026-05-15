@@ -78,6 +78,88 @@ def _make_discrete_action_eval(
     return make
 
 
+def _make_continuous_action_eval(
+    env_id: str,
+    n_outputs: int,
+    early_stop: float | None = None,
+    max_steps: int = 1000,
+):
+    """Generic factory for envs with Box action space in [-1, 1].
+
+    Sigmoid genome outputs [0, 1] are scaled to [-1, 1] per output.
+    """
+    def make(render_callback=None, step_callback=None, demo=False):
+        import gymnasium as gym
+        env = gym.make(env_id,
+                       render_mode="rgb_array" if render_callback else None,
+                       max_episode_steps=max_steps if not demo else None)
+
+        def evaluate(genome: Genome) -> float:
+            state, _ = env.reset()
+            total = 0.0
+            done = False
+            while not done:
+                raw = genome.forward(list(state))
+                action = [r * 2.0 - 1.0 for r in raw[:n_outputs]]
+                state, reward, terminated, truncated, _ = env.step(action)
+                total += reward
+                done = terminated or truncated
+                if not demo and early_stop is not None and total < early_stop:
+                    break
+                _step_hooks(total, env, step_callback, render_callback)
+            return total
+
+        evaluate._env = env
+        return evaluate
+    return make
+
+
+def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
+    """Returns make(render_callback, step_callback, demo) → eval_fn.
+
+    CarRacing has 96×96×3 pixel observations — far too many raw inputs for
+    NEAT. We downsample to grid×grid grayscale (default 144 inputs) so
+    topology stays manageable. Action space is [steering, gas, brake]:
+    steering uses the full [-1,1] range; gas and brake are [0,1].
+    """
+    n_inputs = grid * grid
+
+    def make(render_callback=None, step_callback=None, demo=False):
+        import numpy as np
+        import gymnasium as gym
+        env = gym.make("CarRacing-v3",
+                       render_mode="rgb_array" if render_callback else None,
+                       continuous=True)
+
+        def evaluate(genome: Genome) -> float:
+            obs, _ = env.reset()
+            total = 0.0
+            done = False
+            steps = 0
+            cap = 10_000 if demo else max_steps
+            while not done and steps < cap:
+                # downsample to grid×grid grayscale, flatten to [0, 1]
+                gray = obs.mean(axis=2)
+                h, w = gray.shape
+                small = gray.reshape(grid, h // grid, grid, w // grid).mean(axis=(1, 3))
+                inputs = (small.flatten() / 255.0).tolist()
+
+                raw = genome.forward(inputs)
+                steering = raw[0] * 2.0 - 1.0          # sigmoid → [-1, 1]
+                gas      = max(0.0, min(1.0, raw[1]))   # sigmoid → [0, 1]
+                brake    = max(0.0, min(1.0, raw[2]))   # sigmoid → [0, 1]
+                obs, reward, terminated, truncated, _ = env.step(np.array([steering, gas, brake], dtype=np.float64))
+                total += reward
+                done = terminated or truncated
+                steps += 1
+                _step_hooks(total, env, step_callback, render_callback)
+            return total
+
+        evaluate._env = env
+        return evaluate
+    return make
+
+
 def _make_mountaincar_discrete_eval(max_train_steps: int = 200):
     """Returns make(render_callback, step_callback, demo) → eval_fn.
 
@@ -277,6 +359,33 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=20, max_connections=60,
                 make_eval=_make_pendulum_eval(max_train_steps=200),
                 target_fitness=-300,
+                supports_render=True,
+            ),
+            ExampleConfig(
+                name="LunarLander",
+                description="Land a rocket between two flags with 4 discrete thrusters (8 inputs, 4 outputs).",
+                n_inputs=8, n_outputs=4,
+                max_nodes=40, max_connections=150,
+                make_eval=_make_discrete_action_eval("LunarLander-v3", early_stop=-200, max_steps=1000),
+                target_fitness=200,
+                supports_render=True,
+            ),
+            ExampleConfig(
+                name="BipedalWalker",
+                description="Walk with a two-legged robot using 4 continuous joint torques (24 inputs, 4 outputs).",
+                n_inputs=24, n_outputs=4,
+                max_nodes=60, max_connections=300,
+                make_eval=_make_continuous_action_eval("BipedalWalker-v3", n_outputs=4, early_stop=-50, max_steps=1000),
+                target_fitness=200,
+                supports_render=True,
+            ),
+            ExampleConfig(
+                name="CarRacing",
+                description="Race a car around a track — pixel obs downsampled to 12×12 grayscale (144 inputs, 3 outputs).",
+                n_inputs=144, n_outputs=3,
+                max_nodes=80, max_connections=500,
+                make_eval=_make_carracing_eval(grid=12, max_steps=500),
+                target_fitness=800,
                 supports_render=True,
             ),
         ]
