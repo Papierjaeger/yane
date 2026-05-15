@@ -259,9 +259,11 @@ class NeuroEvolution:
         self._current_genome = None
 
     def next_genome_batch(self, n: int) -> list[Genome]:
-        """Select n genomes for parallel evaluation."""
+        """Select n distinct genomes for parallel evaluation."""
         self._ensure_configured()
-        return [self._population.select_for_evaluation() for _ in range(n)]
+        while len(self._population._unevaluated) < n:
+            self._population._spawn_offspring()
+        return list(self._population._unevaluated[:n])
 
     def submit_fitness_batch(self, results: list[tuple[Genome, float]]) -> None:
         """Submit fitness values for a batch of genomes."""

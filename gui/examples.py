@@ -160,6 +160,49 @@ def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
     return make
 
 
+def _make_acrobot_eval(max_steps: int = 500):
+    """Returns make(render_callback, step_callback, demo) → eval_fn.
+
+    Acrobot-v1 reward is -1/step regardless of behavior → with empty-start
+    genomes all get the same fitness, killing the selection gradient.
+    Shaping adds tip height so evolution has a signal before fully solving.
+
+    Tip height = -cos(θ1) - cos(θ1+θ2) ∈ [-2, 2]; goal is height ≥ 1.
+    From observation: obs = [cos θ1, sin θ1, cos θ2, sin θ2, dθ1, dθ2]
+      tip_height = -obs[0] - (obs[0]*obs[2] - obs[1]*obs[3])
+    """
+    def make(render_callback=None, step_callback=None, demo=False):
+        import numpy as np
+        import gymnasium as gym
+        env = gym.make("Acrobot-v1",
+                       render_mode="rgb_array" if render_callback else None,
+                       max_episode_steps=max_steps)
+
+        def evaluate(genome: Genome) -> float:
+            state, _ = env.reset()
+            max_tip = -2.0
+            solved = False
+            done = False
+            while not done:
+                out = genome.forward(list(state))
+                action = int(np.argmax(out))
+                state, reward, terminated, truncated, _ = env.step(action)
+                # tip height = -cos(θ1) - cos(θ1+θ2) ∈ [-2, 2]
+                tip = -state[0] - (state[0] * state[2] - state[1] * state[3])
+                if tip > max_tip:
+                    max_tip = tip
+                done = terminated or truncated
+                if terminated:
+                    solved = True
+                _step_hooks(max_tip, env, step_callback, render_callback)
+            # max_tip gives dense gradient; bonus ensures solved > unsolved
+            return max_tip + (10.0 if solved else 0.0)
+
+        evaluate._env = env
+        return evaluate
+    return make
+
+
 def _make_mountaincar_discrete_eval(max_train_steps: int = 200):
     """Returns make(render_callback, step_callback, demo) → eval_fn.
 
@@ -330,8 +373,8 @@ def load_examples() -> list[ExampleConfig]:
                 description="Swing up a two-link robot arm (6 inputs, 3 outputs).",
                 n_inputs=6, n_outputs=3,
                 max_nodes=30, max_connections=100,
-                make_eval=_make_discrete_action_eval("Acrobot-v1", early_stop=-200, max_steps=1000),
-                target_fitness=-100,
+                make_eval=_make_acrobot_eval(max_steps=500),
+                target_fitness=0,
                 supports_render=True,
             ),
             ExampleConfig(

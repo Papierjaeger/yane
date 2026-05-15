@@ -255,7 +255,10 @@ class Population:
     def _compute_shared_fitness(self) -> None:
         # Parsimony pressure: tiny penalty per node/connection so evolution
         # prefers compact networks that achieve the same fitness.
-        _PARSIMONY = 0.001
+        # Must be small enough not to dominate fitness ranges — for envs like
+        # Acrobot (range [-2, 2]) 0.001 × 18 conns = 0.018 already overwhelms
+        # the fitness signal.
+        _PARSIMONY = 0.0001
         for sp in self._species:
             n = len(sp.members)
             for genome in sp.members:
@@ -284,7 +287,14 @@ class Population:
         else:
             base = self._template.copy()
             if strategy == 1:
-                # Re-randomise all weights to escape the initial-weight attractor.
+                # Add random connections and re-randomise weights.
+                # (Re-randomising an empty template is a no-op — we need
+                # connections first so the genome can actually behave differently.)
+                from yane.evolution import smart_mutation
+                n_in = len(base.input_nodes)
+                n_out = len(base.output_nodes)
+                for _ in range(random.randint(n_out, min(n_in * n_out, 50))):
+                    smart_mutation.add_connection(base)
                 for node in base.nodes:
                     for conn in node.connections:
                         conn.weight = random.uniform(-1.0, 1.0)
@@ -296,9 +306,33 @@ class Population:
         self._unevaluated.append(base)
         self._since_last_injection = 0  # pace injections; stagnation_count untouched
 
+    def _bootstrap_initial_population(self) -> None:
+        """Fill unevaluated with a diverse random initial generation.
+
+        Each genome gets at least n_inputs random connections so every input
+        has a chance to influence an output. This is the minimum needed to
+        produce behavioural diversity — fewer connections often perform no
+        better (or worse) than doing nothing, which kills the selection gradient.
+        """
+        from yane.evolution import smart_mutation
+        n_in = len(self._template.input_nodes)
+        n_out = len(self._template.output_nodes)
+        # Enough connections for every output to receive at least one input
+        # signal, but capped at 50 so large-input envs (e.g. CarRacing: 144
+        # inputs × 3 outputs = 432 possible) stay sparse and fast.
+        min_conn = n_out
+        max_conn = min(n_in * n_out, max(n_in, 50))
+        for _ in range(self.max_size):
+            g = self._template.copy()
+            n_conn = random.randint(min_conn, max_conn)
+            for _ in range(n_conn):
+                smart_mutation.add_connection(g)
+            self._unevaluated.append(g)
+
     def _spawn_offspring(self) -> None:
         if not self._evaluated:
-            self._unevaluated.append(self._template.copy())
+            if not self._unevaluated:
+                self._bootstrap_initial_population()
             return
 
         if self._since_last_injection >= self.stagnation_threshold:
@@ -311,31 +345,27 @@ class Population:
         novelty = self._compute_novelty()
         nw = self.novelty_weight
 
-        # Elite genomes: best of each species + global best reproduce as exact copies.
-        elites: set[int] = set()
-        global_best = self.get_best()
-        elites.add(id(global_best))
-        for sp in self._species:
-            elites.add(id(sp.best()))
-
-        # Tournament selection (k=3): pick k random candidates, keep the best
-        # by shared_fitness × offspring_factor × novelty bonus.
-        # More robust than roulette-wheel: one high-fitness outlier can't
-        # dominate the selection pool.
+        # Tournament selection (k=3): pick k random candidates, keep the best.
+        # Shift fitness to be non-negative before multiplying by offspring_factor
+        # and novelty — multiplying a negative shared_fitness by offspring_factor
+        # inverts the ranking (larger factor → more negative → worse), which would
+        # cause selection to prefer genomes with smaller offspring_factor.
         k = min(3, len(self._evaluated))
         candidates = random.sample(self._evaluated, k)
+        min_fit = min(g.shared_fitness for g in self._evaluated)
         parent = max(
             candidates,
-            key=lambda g: (g.shared_fitness * g.offspring_factor
-                           * (1.0 + nw * novelty.get(id(g), 0.0))),
+            key=lambda g: (
+                max(0.0, g.shared_fitness - min_fit + 1e-6)
+                * g.offspring_factor
+                * (1.0 + nw * novelty.get(id(g), 0.0))
+            ),
         )
 
-        if id(parent) in elites:
-            child = parent.copy()
-            child.fitness = 0.0
-            self._unevaluated.append(child)
-            return
-
+        # Note: elite protection is handled by _prune() which never removes the
+        # global best or species bests. Here, even elite parents produce mutated
+        # children — otherwise a small population fills with unmutated clones and
+        # exploration stalls (especially critical with the empty-connection start).
         if random.random() < parent.crossover_prob and len(self._evaluated) >= 2:
             sp_members = next(
                 (sp.members for sp in self._species if parent in sp.members),

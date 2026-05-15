@@ -1,5 +1,6 @@
 """Main application window."""
 from __future__ import annotations
+import os
 import time as _time
 
 from PySide6.QtWidgets import (
@@ -554,7 +555,6 @@ class TrainingTab(QWidget):
 
             # Parallel evaluation: disabled when rendering (one env drives the
             # render callback) or when a render callback is active.
-            import os
             n_workers = 1 if render_cb is not None else max(1, os.cpu_count() or 1)
             self._yane.set_n_workers(n_workers)
             make_eval_fn = ex.make_eval if render_cb is None else None

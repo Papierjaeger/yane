@@ -1,9 +1,9 @@
 """Background threads for training and the API server."""
 from __future__ import annotations
 import gc
-import multiprocessing as _mp
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 from PySide6.QtCore import QThread, Signal
@@ -25,53 +25,15 @@ def _close_env(eval_fn) -> None:
             pass
 
 
-def _eval_worker_loop(make_eval_fn, genome_q, result_q) -> None:
-    """Runs in a forked child process — inherits make_eval_fn closure directly."""
-    eval_fn = make_eval_fn()
-    while True:
-        genome = genome_q.get()
-        if genome is None:       # shutdown sentinel
-            break
-        result_q.put(eval_fn(genome))
-
-
-class EvalWorker:
-    """One forked subprocess that owns a single gym env and evaluates genomes.
-
-    Uses fork (Linux) so make_eval_fn closures are inherited without pickling.
-    Only the genome (now picklable) travels through the queue.
-    """
-
-    def __init__(self, make_eval_fn: Callable) -> None:
-        ctx = _mp.get_context("fork")
-        self._genome_q: _mp.Queue = ctx.Queue()
-        self._result_q: _mp.Queue = ctx.Queue()
-        self._proc = ctx.Process(
-            target=_eval_worker_loop,
-            args=(make_eval_fn, self._genome_q, self._result_q),
-            daemon=True,
-        )
-        self._proc.start()
-
-    def submit(self, genome) -> None:
-        self._genome_q.put(genome)
-
-    def result(self) -> float:
-        return self._result_q.get()
-
-    def close(self) -> None:
-        self._genome_q.put(None)
-        self._proc.join(timeout=2)
-        if self._proc.is_alive():
-            self._proc.terminate()
-
-
 class TrainingWorker(QThread):
     """Runs the manual training loop in a background thread.
 
     When yane._n_workers > 1, evaluates a batch of genomes in parallel using
-    a ThreadPoolExecutor — each worker gets its own gym env instance via
-    make_eval_fn so environments are never shared between threads.
+    a ThreadPoolExecutor — each worker thread gets its own gym env instance
+    via make_eval_fn. ThreadPoolExecutor is used (not multiprocessing) because
+    forking a running Qt process is unsafe due to inherited mutex state.
+    Box2D-based environments release the GIL during physics simulation so
+    threads provide real concurrency for LunarLander, BipedalWalker, CarRacing.
     """
 
     iteration_done = Signal(int, float, object, dict)
@@ -135,21 +97,18 @@ class TrainingWorker(QThread):
         _close_env(self._evaluate)
 
     def _run_parallel(self, n_workers: int, last_emit: float) -> None:
-        # One forked subprocess per worker — each inherits make_eval_fn via
-        # fork so gym env closures don't need to be pickled. Only genomes
-        # (picklable) travel through the queue.
-        workers = [EvalWorker(self._make_eval_fn) for _ in range(n_workers)]
+        # Each thread owns its own eval_fn (and thus its own gym env).
+        eval_fns = [self._make_eval_fn() for _ in range(n_workers)]
 
-        try:
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
             while self._running:
                 while self._paused and self._running:
                     time.sleep(0.05)
 
                 try:
                     genomes = self._yane.next_genome_batch(n_workers)
-                    for w, g in zip(workers, genomes):
-                        w.submit(g)
-                    fitnesses = [w.result() for w in workers]
+                    futures = [pool.submit(fn, g) for fn, g in zip(eval_fns, genomes)]
+                    fitnesses = [f.result() for f in futures]
                     results = list(zip(genomes, fitnesses))
                     self._yane.submit_fitness_batch(results)
                     self._iteration += len(results)
@@ -177,9 +136,9 @@ class TrainingWorker(QThread):
                 except Exception as exc:
                     self.error_occurred.emit(str(exc))
                     break
-        finally:
-            for w in workers:
-                w.close()
+
+        for fn in eval_fns:
+            _close_env(fn)
 
         self._emit_final()
 
