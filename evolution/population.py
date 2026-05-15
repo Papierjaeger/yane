@@ -238,18 +238,30 @@ class Population:
     # ------------------------------------------------------------------
 
     def _inject_fresh_genome(self) -> None:
-        """Escape stagnation by injecting a heavily-mutated genome.
+        """Escape stagnation by injecting a diverse genome.
 
-        Alternates between mutating the global best (directed exploration near
-        a known-good solution) and mutating the topology template (broad
-        exploration of the search space).
+        Uses three strategies with equal probability:
+        - Heavily mutated best genome (exploit known-good structure + weights)
+        - Template copy with re-randomised weights (same topology, fresh weights)
+        - Heavily mutated template (structural + weight exploration)
+        Fresh weights are critical: mutating from the same initial weights can
+        keep the population in the same attractor basin indefinitely.
         """
-        if self._evaluated and random.random() < 0.5:
+        strategy = random.randint(0, 2)
+        if strategy == 0 and self._evaluated:
             base = self.get_best().copy()
+            for _ in range(random.randint(2, 5)):
+                base.mutate()
         else:
             base = self._template.copy()
-        for _ in range(random.randint(2, 5)):
-            base.mutate()
+            if strategy == 1:
+                # Re-randomise all weights to escape the initial-weight attractor.
+                for node in base.nodes:
+                    for conn in node.connections:
+                        conn.weight = random.uniform(-1.0, 1.0)
+            else:
+                for _ in range(random.randint(2, 5)):
+                    base.mutate()
         base.fitness = 0.0
         base.shared_fitness = 0.0
         self._unevaluated.append(base)

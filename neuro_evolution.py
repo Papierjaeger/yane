@@ -52,14 +52,17 @@ class NeuroEvolution:
         n_outputs: int,
         max_nodes: int | None = None,
         max_connections: int | None = None,
+        n_initial_hidden: int = 0,
     ) -> None:
         """Set up the input/output topology and initialise the population.
 
         The initial genome is fully connected (every input → every output).
         max_nodes / max_connections cap network growth per genome.
-        Without caps, networks can grow without bound and consume all memory.
+        n_initial_hidden pre-adds hidden nodes so the network has structural
+        capacity from the start — useful for non-linearly-separable tasks.
         """
         from yane.core.connection import Connection
+        from yane.util.activation import ActivationType
         import random
 
         initial = Genome()
@@ -69,19 +72,45 @@ class NeuroEvolution:
         for i in range(n_inputs):
             node = Node(NodeType.INPUT)
             node.input_index = i
+            # LINEAR pass-through so raw input values reach the network unchanged.
+            # SIGMOID would compress binary inputs (0→0.5, 1→0.73), distorting
+            # the fitness landscape for classification tasks like XOR.
+            node.activation = ActivationType.LINEAR
             initial.nodes.append(node)
             initial.input_nodes.append(node)
         for _ in range(n_outputs):
             node = Node(NodeType.OUTPUT)
-            node.persist_value = True  # retain activated output for reading
+            node.persist_value = True
             initial.nodes.append(node)
             initial.output_nodes.append(node)
 
-        for inp in initial.input_nodes:
-            for out in initial.output_nodes:
-                conn = Connection(out)
-                conn.weight = random.uniform(-1.0, 1.0)
-                inp.connections.append(conn)
+        if n_initial_hidden > 0:
+            # Build a proper fully-connected hidden layer: inputs→hidden→outputs.
+            # This gives the network structural capacity from the start and avoids
+            # the stuck-at-local-optimum problem for non-linearly-separable tasks.
+            hidden_nodes = []
+            for _ in range(n_initial_hidden):
+                h = Node(NodeType.HIDDEN)
+                # SIGMOID on hidden nodes adds the non-linearity needed for XOR
+                initial.nodes.append(h)
+                hidden_nodes.append(h)
+            for inp in initial.input_nodes:
+                for h in hidden_nodes:
+                    conn = Connection(h)
+                    conn.weight = random.uniform(-1.0, 1.0)
+                    inp.connections.append(conn)
+            for h in hidden_nodes:
+                for out in initial.output_nodes:
+                    conn = Connection(out)
+                    conn.weight = random.uniform(-1.0, 1.0)
+                    h.connections.append(conn)
+        else:
+            # No hidden nodes: fully connect inputs directly to outputs.
+            for inp in initial.input_nodes:
+                for out in initial.output_nodes:
+                    conn = Connection(out)
+                    conn.weight = random.uniform(-1.0, 1.0)
+                    inp.connections.append(conn)
 
         self._population = Population(max_size=self._population_size, initial_genome=initial)
 

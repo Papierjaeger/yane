@@ -125,6 +125,7 @@ class ExampleConfig:
         max_connections: int,
         make_eval: Callable,   # (render_callback=None, step_callback=None, demo=False) -> eval_fn
         target_fitness: float,
+        n_initial_hidden: int = 0,
         supports_render: bool = False,
         test_cases: list[tuple[list[float], list[float]]] | None = None,
     ) -> None:
@@ -136,6 +137,7 @@ class ExampleConfig:
         self.max_connections = max_connections
         self.make_eval = make_eval
         self.target_fitness = target_fitness
+        self.n_initial_hidden = n_initial_hidden
         self.supports_render = supports_render
         self.test_cases = test_cases
 
@@ -147,6 +149,7 @@ def load_examples() -> list[ExampleConfig]:
             description="Learn the XOR function (2 inputs, 1 output).",
             n_inputs=2, n_outputs=1,
             max_nodes=20, max_connections=50,
+            n_initial_hidden=2,
             make_eval=lambda cb=None, step_cb=None, demo=False: _xor_eval,
             target_fitness=-0.1,
             supports_render=False,

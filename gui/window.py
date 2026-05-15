@@ -533,6 +533,7 @@ class TrainingTab(QWidget):
                 n_outputs=self.spin_outputs.value(),
                 max_nodes=self.spin_nodes.value() or None,
                 max_connections=self.spin_conns.value() or None,
+                n_initial_hidden=ex.n_initial_hidden,
             )
             self._yane.set_population_size(self.spin_pop.value())
             self._yane.set_resource_limits(max_process_gb=self.dspin_mem.value())
