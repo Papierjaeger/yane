@@ -158,16 +158,31 @@ class LeftPanel(QWidget):
         mut = QGroupBox("Mutation rates (best genome)")
         mut_layout = QFormLayout(mut)
         mut_layout.setSpacing(3)
+
         self.lbl_rate_add_node  = _label("—", "mutRate")
         self.lbl_rate_rem_node  = _label("—", "mutRate")
         self.lbl_rate_add_conn  = _label("—", "mutRate")
         self.lbl_rate_rem_conn  = _label("—", "mutRate")
+        # bypass_connection_prob: when a node is removed, each A→N→B path gets
+        # a direct A→B shortcut connection with this probability.
         self.lbl_bypass         = _label("—", "mutRate")
         mut_layout.addRow("Add node:",    self.lbl_rate_add_node)
         mut_layout.addRow("Rem node:",    self.lbl_rate_rem_node)
         mut_layout.addRow("Add conn:",    self.lbl_rate_add_conn)
         mut_layout.addRow("Rem conn:",    self.lbl_rate_rem_conn)
         mut_layout.addRow("Bypass prob:", self.lbl_bypass)
+
+        mut_layout.addRow(_label("── avg over nodes/conns ──", "sectionTitle"), QLabel(""))
+        self.lbl_weight_rate  = _label("—", "mutRate")
+        self.lbl_weight_delta = _label("—", "mutRate")
+        self.lbl_bias_rate    = _label("—", "mutRate")
+        self.lbl_bias_delta   = _label("—", "mutRate")
+        self.lbl_activ_rate   = _label("—", "mutRate")
+        mut_layout.addRow("Weight rate:",  self.lbl_weight_rate)
+        mut_layout.addRow("Weight Δ:",     self.lbl_weight_delta)
+        mut_layout.addRow("Bias rate:",    self.lbl_bias_rate)
+        mut_layout.addRow("Bias Δ:",       self.lbl_bias_delta)
+        mut_layout.addRow("Activation:",   self.lbl_activ_rate)
         layout.addWidget(mut)
 
     def update_genome(self, genome, mem: dict) -> None:
@@ -181,6 +196,21 @@ class LeftPanel(QWidget):
         self.lbl_rate_add_conn.setText(f"{genome.mutation_add_connection.bool_rate:.4f}")
         self.lbl_rate_rem_conn.setText(f"{genome.mutation_remove_connection.bool_rate:.4f}")
         self.lbl_bypass.setText(f"{genome.bypass_connection_prob:.4f}")
+
+        nodes = genome.nodes
+        conns = [(n, c) for n in nodes for c in n.connections]
+        if nodes:
+            self.lbl_bias_rate.setText(
+                f"{sum(n.mutation_bias.shift_rate for n in nodes) / len(nodes):.4f}")
+            self.lbl_bias_delta.setText(
+                f"{sum(n.mutation_bias.value_delta for n in nodes) / len(nodes):.4f}")
+            self.lbl_activ_rate.setText(
+                f"{sum(n.mutation_activation.custom_rate for n in nodes) / len(nodes):.4f}")
+        if conns:
+            self.lbl_weight_rate.setText(
+                f"{sum(c.mutation.shift_rate for _, c in conns) / len(conns):.4f}")
+            self.lbl_weight_delta.setText(
+                f"{sum(c.mutation.value_delta for _, c in conns) / len(conns):.4f}")
 
 
 # ---------------------------------------------------------------------------
