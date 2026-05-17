@@ -1,6 +1,7 @@
 """Background threads for training and the API server."""
 from __future__ import annotations
 import gc
+import multiprocessing as mp
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -88,8 +89,11 @@ class TrainingWorker(QThread):
         last_emit = 0.0
 
         n_workers = getattr(self._yane, '_n_workers', 1)
-        if n_workers > 1:
-            self._run_multiprocess(n_workers, last_emit)
+        if n_workers == 0:
+            # Auto: let _run_multiprocess measure eval speed and choose
+            self._run_multiprocess(mp.cpu_count(), last_emit, auto=True)
+        elif n_workers > 1:
+            self._run_multiprocess(n_workers, last_emit, auto=False)
         else:
             self._run_sequential(last_emit)
 
@@ -185,7 +189,8 @@ class TrainingWorker(QThread):
 
         self._emit_final()
 
-    def _run_multiprocess(self, n_workers: int, last_emit: float) -> None:
+    def _run_multiprocess(self, n_workers: int, last_emit: float,
+                          auto: bool = False) -> None:
         """Evaluate genomes in parallel subprocesses using fork.
 
         Genome objects are pickled for IPC; the fitness function is inherited
@@ -214,9 +219,30 @@ class TrainingWorker(QThread):
             self.error_occurred.emit(str(exc))
             return
 
-        if eval_ms < _MP_MIN_MS:
-            # Evaluation is too fast — MP overhead (~16ms IPC+pickle) would dominate.
-            # Fall back to sequential and inform the user via the status bar.
+        # Auto-mode or manual MP: decide how many workers to actually use.
+        # Formula: keep workers busy when eval_ms × batch / n_workers >> overhead.
+        # Optimal: n = min(cpu_count, eval_ms × batch / overhead).
+        # Constants from benchmark: overhead ≈ 16ms, batch ≈ max_size.
+        _OVERHEAD_MS = 16.0
+        batch_size   = self._yane._population.max_size
+        optimal      = max(1, int(eval_ms * batch_size / _OVERHEAD_MS))
+        chosen       = min(n_workers, optimal)
+
+        if auto:
+            if chosen <= 1:
+                self.info_message.emit(
+                    f"Auto-Worker: sequenziell ({eval_ms:.2f}ms/Genome, "
+                    f"MP-Overhead würde dominieren)"
+                )
+                self._run_sequential(0.0)
+                return
+            else:
+                self.info_message.emit(
+                    f"Auto-Worker: {chosen} Prozesse gewählt "
+                    f"({eval_ms:.1f}ms/Genome, {_mp.cpu_count()} CPUs verfügbar)"
+                )
+                n_workers = chosen
+        elif eval_ms < _MP_MIN_MS:
             self.info_message.emit(
                 f"MP-Overhead > Nutzen ({eval_ms:.1f}ms/Genome < {_MP_MIN_MS:.0f}ms Schwelle) "
                 f"— Training läuft sequenziell."

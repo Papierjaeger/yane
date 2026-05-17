@@ -601,21 +601,24 @@ class TrainingTab(QWidget):
             "0 = empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!)")
 
         import multiprocessing as _mp
+        _ncpu = _mp.cpu_count()
         self.spin_workers = QSpinBox()
-        self.spin_workers.setRange(1, _mp.cpu_count())
-        self.spin_workers.setValue(1)
-        self.spin_workers.setSpecialValueText("1 (sequenziell)")
+        self.spin_workers.setRange(0, _ncpu)
+        self.spin_workers.setValue(0)
+        self.spin_workers.setSpecialValueText("Auto")
         self.spin_workers.setToolTip(
-            f"Anzahl paralleler Prozesse für die Fitness-Berechnung.\n"
-            f"1 = sequenziell (Standard, immer korrekt).\n\n"
-            f"Wann lohnt sich Multiprocessing?\n"
-            f"  ✓ Gym-Environments mit langen Episoden (>10ms/Genome)\n"
-            f"    z.B. LunarLander, BipedalWalker, MNIST\n"
-            f"  ✗ Schnelle Dataset-Aufgaben (XOR, Multiplication, Regression)\n"
-            f"    — Overhead ~16ms >> Evaluation ~0.01ms → langsamer!\n\n"
-            f"Automatische Erkennung: Wenn die erste Evaluation zu schnell\n"
-            f"ist, schaltet das System automatisch auf sequenziell um.\n\n"
-            f"Dein System hat {_mp.cpu_count()} CPU-Kerne.")
+            f"Anzahl paralleler Prozesse für die Fitness-Berechnung.\n\n"
+            f"Auto (0): Misst die Evaluierungsgeschwindigkeit und wählt\n"
+            f"   automatisch die optimale Worker-Anzahl:\n"
+            f"   - Zu schnell (<0.5ms/Genome): sequenziell\n"
+            f"   - Mittel (1-10ms/Genome): 2–8 Worker\n"
+            f"   - Langsam (>10ms/Genome): alle {_ncpu} CPU-Kerne\n\n"
+            f"1: Immer sequenziell (kein MP-Overhead).\n"
+            f"2–{_ncpu}: Feste Worker-Anzahl.\n\n"
+            f"MP lohnt sich nur für langsame Fitness-Funktionen\n"
+            f"(Gym mit langen Episoden, MNIST, eigene komplexe Funktionen).\n"
+            f"Für XOR/Regression ist 'Auto' immer optimal.\n\n"
+            f"Dein System hat {_ncpu} CPU-Kerne.")
 
         self.spin_species = QSpinBox()
         self.spin_species.setRange(2, 50)
@@ -844,6 +847,7 @@ class TrainingTab(QWidget):
                 n_initial_hidden=ex.n_initial_hidden,
             )
             self._yane.set_population_size(self.spin_pop.value())
+            # 0 = Auto (worker determines optimal count at runtime)
             self._yane.set_n_workers(self.spin_workers.value())
             self._yane.set_target_species(self.spin_species.value())
             lamarck_steps = self.spin_lamarck.value()
