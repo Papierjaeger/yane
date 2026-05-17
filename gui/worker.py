@@ -258,23 +258,33 @@ class TrainingWorker(QThread):
         else:
             self.workers_resolved.emit(n_workers)
 
-        # Worker processes inherit make_eval_fn via fork; initializer creates
-        # the actual evaluator (e.g. opens a gym environment) once per process.
-        try:
-            pool = ctx.Pool(
-                processes=n_workers,
+        n_workers_max = n_workers   # ceiling for auto-mode rescaling
+
+        def _make_pool(nw: int):
+            return ctx.Pool(
+                processes=nw,
                 initializer=_mp_initializer,
-                initargs=(self._make_eval_fn, None),  # no render in workers
+                initargs=(self._make_eval_fn, None),
             )
+
+        try:
+            pool = _make_pool(n_workers)
         except Exception as exc:
             self.error_occurred.emit(f"Multiprocessing Pool konnte nicht erstellt werden: {exc}")
             return
 
         # Evaluate a full generation per round so workers stay busy.
-        # With n_workers=16 and batch=100: each worker gets ~6 genomes,
-        # amortising the IPC/pickle overhead over many evaluations.
-        # Without this, each worker gets 1 genome and is idle 99% of the time.
         batch_size = max(n_workers * 4, self._yane._population.max_size)
+
+        # Adaptive scaling state:
+        # eval_ema — exponential moving average of eval time per genome (ms).
+        # Estimated as: (batch_wall - overhead) * n_workers / batch_size.
+        # Every _RESCALE_EVERY batches the optimal worker count is recomputed;
+        # if it differs by >= 2, the pool is recreated.
+        _ALPHA         = 0.25   # EMA smoothing (higher = reacts faster)
+        _RESCALE_EVERY = 10     # check every N batches
+        eval_ema       = eval_ms
+        batch_count    = 0
 
         try:
             while self._running:
@@ -283,12 +293,35 @@ class TrainingWorker(QThread):
 
                 try:
                     genomes   = self._yane.next_genome_batch(batch_size)
-                    # chunksize: how many genomes each worker gets per IPC round-trip
                     chunksize = max(1, len(genomes) // n_workers)
+
+                    t_map = time.perf_counter()
                     fitnesses = pool.map(_mp_evaluate, genomes, chunksize=chunksize)
-                    results   = list(zip(genomes, fitnesses))
+                    map_ms    = (time.perf_counter() - t_map) * 1000.0
+
+                    results = list(zip(genomes, fitnesses))
                     self._yane.submit_fitness_batch(results)
                     self._iteration += len(results)
+                    batch_count += 1
+
+                    # Update eval estimate and optionally rescale pool
+                    est = max(0.01, (map_ms - _OVERHEAD_MS) * n_workers / len(genomes))
+                    eval_ema = (1 - _ALPHA) * eval_ema + _ALPHA * est
+
+                    if auto and batch_count % _RESCALE_EVERY == 0:
+                        new_opt = min(n_workers_max,
+                                      max(1, int(eval_ema * batch_size / _OVERHEAD_MS)))
+                        if abs(new_opt - n_workers) >= 2:
+                            pool.terminate(); pool.join()
+                            n_workers  = new_opt
+                            batch_size = max(n_workers * 4,
+                                            self._yane._population.max_size)
+                            pool = _make_pool(n_workers)
+                            self.workers_resolved.emit(n_workers)
+                            self.info_message.emit(
+                                f"Auto → {n_workers} Worker "
+                                f"(eval {eval_ema:.1f}ms/Genome, angepasst)"
+                            )
 
                     best_fitness = max(fitnesses)
                     best_genome  = genomes[fitnesses.index(best_fitness)]
