@@ -18,7 +18,7 @@ def make_eval(render_callback=None, step_callback=None, demo=False):
     def evaluate(genome):
         fitness = 0.0
         for sample in dataset:
-            genome.reset()  # stateless: reset before each sample
+            # stateless: _forward already zeros output nodes; no reset needed
             outputs = genome.forward(sample["input"])
             for i, target in enumerate(sample["output"]):
                 fitness -= abs(outputs[i] - target)

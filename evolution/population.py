@@ -188,12 +188,13 @@ class Population:
             self._behaviors[id(genome)] = np.array(rows, dtype=np.float64).ravel()
         self._novelty_evals_since_recompute += 1
 
-        topo = (len(genome.nodes), genome.connection_count)
+        _cc = genome.connection_count   # cache property once; avoids descriptor overhead in the two reads below
+        topo = (len(genome.nodes), _cc)
         if fitness > self._best_fitness_seen:
             self._best_fitness_seen = fitness
             self._stagnation_count = 0
             self._since_last_injection = 0
-            self._last_improvement_connections = genome.connection_count
+            self._last_improvement_connections = _cc
             # If the new best has a different topology, reset structural stagnation.
             if topo != self._best_topology:
                 self._best_topology = topo
@@ -334,19 +335,19 @@ class Population:
             if last_sp_id is not None:
                 sp = species_by_id.get(last_sp_id)
                 if sp is not None and _compatibility(genome, sp.representative) < threshold:
-                    sp.add(genome)
+                    sp.members.append(genome)   # inlined sp.add() to eliminate method-call overhead
                     placed = True
 
             if not placed:
                 for sp in self._species:
                     if _compatibility(genome, sp.representative) < threshold:
-                        sp.add(genome)
+                        sp.members.append(genome)   # inlined sp.add()
                         genome._last_species_id = id(sp)
                         placed = True
                         break
             if not placed:
                 new_sp = Species(genome)
-                new_sp.add(genome)
+                new_sp.members.append(genome)   # inlined sp.add()
                 self._species.append(new_sp)
                 species_by_id[id(new_sp)] = new_sp
                 genome._last_species_id = id(new_sp)
