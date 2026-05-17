@@ -1332,6 +1332,8 @@ class InspectTab(QWidget):
             example.n_outputs if example else 0,
         )
         self._rebuild_sequence_table()
+        stateful = example.stateful if example else True
+        self.btn_reset_mem.setVisible(stateful)
 
     def reset_genome(self) -> None:
         if self._genome is not None:
@@ -1358,8 +1360,8 @@ class InspectTab(QWidget):
             self._genome._clear()
         self._genome = genome
         self.btn_run.setEnabled(bool(self._input_widgets))
-        self.btn_reset_mem.setEnabled(True)
         stateful = self._example.stateful if self._example else True
+        self.btn_reset_mem.setEnabled(stateful)
         for row in self._test_rows:
             row.update(genome, stateful=stateful)
         if self._seq_samples:
@@ -1462,9 +1464,9 @@ class InspectTab(QWidget):
             self._memory_labels.append(val_lbl)
 
         n = len(mem_nodes)
-        self._memory_group.setTitle(
-            f"Gedächtniszustand  ({n} {'Knoten' if n != 1 else 'Knoten'})"
-        )
+        stateful = self._example.stateful if self._example else True
+        suffix = "" if stateful else "  ·  Auto-Reset"
+        self._memory_group.setTitle(f"Gedächtniszustand  ({n} Knoten){suffix}")
 
     def _update_memory_display(self) -> None:
         if self._genome is None:
