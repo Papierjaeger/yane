@@ -1117,6 +1117,76 @@ class _TestCaseRow:
         self._tick.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
 
 
+class _SequenceStepRow:
+    """One row in the sequence-trace table. Created once, updated or cleared in place."""
+
+    _MONO = "font-family: monospace; font-size: 12px;"
+
+    def __init__(self, layout, step_idx: int,
+                 inputs: list[float], expected: list[float]) -> None:
+        self._inputs   = inputs
+        self._expected = expected
+        self._delta: float | None = None
+
+        row = QWidget()
+        rlay = QHBoxLayout(row)
+        rlay.setContentsMargins(2, 2, 2, 2)
+        rlay.setSpacing(6)
+
+        step_lbl = QLabel(f"{step_idx + 1:>2}.")
+        step_lbl.setFixedWidth(24)
+        step_lbl.setStyleSheet(self._MONO + " color: #585b70;")
+
+        in_str  = "[" + ", ".join(f"{v:.3f}" for v in inputs)   + "]"
+        exp_str = "[" + ", ".join(f"{v:.3f}" for v in expected) + "]"
+
+        self._in_lbl    = QLabel(in_str)
+        self._exp_lbl   = QLabel(exp_str)
+        self._out_lbl   = QLabel("—")
+        self._delta_lbl = QLabel("—")
+        self._tick      = QLabel("?")
+
+        for lbl, w in ((self._in_lbl, 75), (self._exp_lbl, 75),
+                       (self._out_lbl, 75), (self._delta_lbl, 52)):
+            lbl.setMinimumWidth(w)
+            lbl.setStyleSheet(self._MONO)
+
+        self._delta_lbl.setStyleSheet(self._MONO + " color: #a6adc8;")
+        self._tick.setFixedWidth(22)
+        self._tick.setStyleSheet("color: #585b70; font-size: 14px; font-weight: bold;")
+
+        self._row_widget = row
+        for w in (step_lbl, self._in_lbl, self._exp_lbl,
+                  self._out_lbl, self._delta_lbl, self._tick):
+            rlay.addWidget(w)
+        rlay.addStretch()
+
+        layout.addWidget(row)
+
+    def set_result(self, outputs: list[float]) -> float:
+        out_str = "[" + ", ".join(f"{v:.3f}" for v in outputs) + "]"
+        self._out_lbl.setText(out_str)
+        self._delta = sum(abs(o - e) for o, e in zip(outputs, self._expected))
+        self._delta_lbl.setText(f"{self._delta:.3f}")
+        thresh = 0.2 * len(self._expected)
+        tick, color = ("✓", "#a6e3a1") if self._delta < thresh else ("✗", "#f38ba8")
+        self._tick.setText(tick)
+        self._tick.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
+        return self._delta
+
+    def clear(self) -> None:
+        self._delta = None
+        self._out_lbl.setText("—")
+        self._delta_lbl.setText("—")
+        self._tick.setText("?")
+        self._tick.setStyleSheet("color: #585b70; font-size: 14px; font-weight: bold;")
+
+    def set_highlighted(self, on: bool) -> None:
+        self._row_widget.setStyleSheet(
+            "background-color: #313244; border-radius: 4px;" if on else ""
+        )
+
+
 class InspectTab(QWidget):
     """Shows the best genome's outputs for known test cases and manual inputs."""
 
@@ -1125,19 +1195,34 @@ class InspectTab(QWidget):
         self._genome = None
         self._example = None
         self._test_rows: list[_TestCaseRow] = []
+        self._seq_rows: list[_SequenceStepRow] = []
+        self._seq_samples: list[tuple] = []
+        self._seq_step: int = 0      # number of steps executed so far
+        self._memory_labels: list[QLabel] = []
+        self._mem_sig: tuple = ()    # (innovation,...) of current memory nodes
 
-        layout = QVBoxLayout(self)
+        # Outer layout + scroll area
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll)
+
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
         layout.setSpacing(10)
         layout.setContentsMargins(14, 14, 14, 14)
+        scroll.setWidget(inner)
 
-        # --- Test cases ---
+        # ── Test Cases ─────────────────────────────────────────────────────
         self._test_group = QGroupBox("Test Cases — best genome output vs. expected")
         self._test_inner = QVBoxLayout(self._test_group)
         self._placeholder = _label("Select an example to see test cases.", "sectionTitle")
         self._test_inner.addWidget(self._placeholder)
         layout.addWidget(self._test_group)
 
-        # --- Manual test ---
+        # ── Manual Forward Pass ────────────────────────────────────────────
         manual = QGroupBox("Manual Forward Pass")
         manual_layout = QVBoxLayout(manual)
 
@@ -1151,17 +1236,90 @@ class InspectTab(QWidget):
         self._no_genome_lbl.setWordWrap(True)
         manual_layout.addWidget(self._no_genome_lbl)
 
-        self.btn_run = QPushButton("▶  Run Forward Pass")
+        # Button row: reset memory + forward pass
+        btn_row = QWidget()
+        btn_row_layout = QHBoxLayout(btn_row)
+        btn_row_layout.setContentsMargins(0, 0, 0, 0)
+        btn_row_layout.setSpacing(8)
+        self.btn_reset_mem = QPushButton("↺  Gedächtnis zurücksetzen")
+        self.btn_reset_mem.setEnabled(False)
+        self.btn_reset_mem.setToolTip(
+            "Setzt den internen Gedächtniszustand zurück (genome.reset())\n"
+            "Nützlich für Gym-Umgebungen, um das Netz frisch zu testen."
+        )
+        self.btn_reset_mem.clicked.connect(self._reset_memory)
+        self.btn_run = QPushButton("▶  Forward Pass")
         self.btn_run.setEnabled(False)
         self.btn_run.clicked.connect(self._run_manual)
-        manual_layout.addWidget(self.btn_run)
+        btn_row_layout.addWidget(self.btn_reset_mem)
+        btn_row_layout.addWidget(self.btn_run)
+        manual_layout.addWidget(btn_row)
 
-        self._output_group = QGroupBox("Outputs")
+        # Outputs
+        self._output_group = QGroupBox("Ausgaben")
         self._output_layout = QFormLayout(self._output_group)
         self._output_labels: list[QLabel] = []
         manual_layout.addWidget(self._output_group)
 
+        # Memory state display (hidden until memory nodes exist)
+        self._memory_group = QGroupBox("Gedächtniszustand")
+        self._memory_form  = QFormLayout(self._memory_group)
+        self._memory_group.setVisible(False)
+        manual_layout.addWidget(self._memory_group)
+
         layout.addWidget(manual)
+
+        # ── Sequence Trace ─────────────────────────────────────────────────
+        self._seq_group = QGroupBox("Sequenz-Trace")
+        seq_outer_layout = QVBoxLayout(self._seq_group)
+        self._seq_group.setVisible(False)
+
+        # Sequence control buttons
+        seq_btn_row = QWidget()
+        seq_btn_layout = QHBoxLayout(seq_btn_row)
+        seq_btn_layout.setContentsMargins(0, 0, 0, 0)
+        seq_btn_layout.setSpacing(6)
+        self.btn_seq_prev  = QPushButton("◀  Zurück")
+        self.btn_seq_next  = QPushButton("▶  Nächster Schritt")
+        self.btn_seq_all   = QPushButton("⏭  Alle ausführen")
+        self.btn_seq_reset = QPushButton("↺  Zurücksetzen")
+        for b in (self.btn_seq_prev, self.btn_seq_next,
+                  self.btn_seq_all, self.btn_seq_reset):
+            b.setEnabled(False)
+            seq_btn_layout.addWidget(b)
+        self.btn_seq_prev.clicked.connect(self._seq_prev)
+        self.btn_seq_next.clicked.connect(self._seq_next)
+        self.btn_seq_all.clicked.connect(self._seq_run_all)
+        self.btn_seq_reset.clicked.connect(self._seq_reset)
+        seq_outer_layout.addWidget(seq_btn_row)
+
+        # Header row for sequence table
+        seq_hdr = QWidget()
+        seq_hdr_layout = QHBoxLayout(seq_hdr)
+        seq_hdr_layout.setContentsMargins(2, 0, 2, 0)
+        seq_hdr_layout.setSpacing(6)
+        for txt, w, fixed in [("#", 24, True), ("Input", 75, False), ("Erwartet", 75, False),
+                               ("Ausgabe", 75, False), ("Δ", 52, False), ("", 22, True)]:
+            lbl = _label(txt, "sectionTitle")
+            if fixed:
+                lbl.setFixedWidth(w)
+            else:
+                lbl.setMinimumWidth(w)
+            seq_hdr_layout.addWidget(lbl)
+        seq_hdr_layout.addStretch()
+        seq_outer_layout.addWidget(seq_hdr)
+
+        # Sequence step rows added dynamically by _rebuild_sequence_table()
+        self._seq_rows_container = QWidget()
+        self._seq_rows_layout = QVBoxLayout(self._seq_rows_container)
+        self._seq_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._seq_rows_layout.setSpacing(1)
+        seq_outer_layout.addWidget(self._seq_rows_container)
+
+        self._acc_fitness_lbl = _label("", "sectionTitle")
+        seq_outer_layout.addWidget(self._acc_fitness_lbl)
+
+        layout.addWidget(self._seq_group)
         layout.addStretch()
 
     # ------------------------------------------------------------------
@@ -1173,6 +1331,7 @@ class InspectTab(QWidget):
             example.n_inputs  if example else 0,
             example.n_outputs if example else 0,
         )
+        self._rebuild_sequence_table()
 
     def reset_genome(self) -> None:
         if self._genome is not None:
@@ -1180,8 +1339,18 @@ class InspectTab(QWidget):
         self._genome = None
         self._no_genome_lbl.setVisible(True)
         self.btn_run.setEnabled(False)
+        self.btn_reset_mem.setEnabled(False)
         for row in self._test_rows:
             row.update(None)
+        self._memory_group.setVisible(False)
+        self._mem_sig = ()
+        self._memory_labels.clear()
+        if self._seq_rows:
+            self._seq_step = 0
+            for row in self._seq_rows:
+                row.clear()
+            self._acc_fitness_lbl.setText("")
+        self._update_seq_buttons()
 
     def update_genome(self, genome, mem: dict) -> None:
         self._no_genome_lbl.setVisible(False)
@@ -1189,17 +1358,20 @@ class InspectTab(QWidget):
             self._genome._clear()
         self._genome = genome
         self.btn_run.setEnabled(bool(self._input_widgets))
+        self.btn_reset_mem.setEnabled(True)
         stateful = self._example.stateful if self._example else True
         for row in self._test_rows:
             row.update(genome, stateful=stateful)
+        if self._seq_samples:
+            self._seq_run_all()
+        else:
+            self._update_memory_display()
+        self._update_seq_buttons()
 
     # ------------------------------------------------------------------
 
     def _rebuild_test_rows(self) -> None:
-        """Called only when the example changes (rare). Rebuilds the table once."""
         self._test_rows.clear()
-
-        # Clear the layout (header + rows)
         while self._test_inner.count():
             item = self._test_inner.takeAt(0)
             if item.widget():
@@ -1213,7 +1385,6 @@ class InspectTab(QWidget):
             self._test_inner.addWidget(self._placeholder)
             return
 
-        # Header
         header = QWidget()
         hlay = QHBoxLayout(header)
         hlay.setContentsMargins(0, 0, 0, 0)
@@ -1251,6 +1422,168 @@ class InspectTab(QWidget):
 
         self.btn_run.setEnabled(n_inputs > 0 and self._genome is not None)
 
+    def _rebuild_sequence_table(self) -> None:
+        self._seq_rows.clear()
+        while self._seq_rows_layout.count():
+            item = self._seq_rows_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        samples = (self._example.sequence_samples if self._example else None) or []
+        if not samples:
+            self._seq_group.setVisible(False)
+            self._seq_samples = []
+            self._seq_step = 0
+            return
+
+        self._seq_samples = samples
+        self._seq_step = 0
+        self._seq_group.setVisible(True)
+        self._acc_fitness_lbl.setText("")
+
+        for idx, (inp, exp) in enumerate(samples):
+            row = _SequenceStepRow(self._seq_rows_layout, idx, inp, exp)
+            self._seq_rows.append(row)
+
+        self._update_seq_buttons()
+
+    def _rebuild_memory_display(self, mem_nodes: list) -> None:
+        while self._memory_form.rowCount():
+            self._memory_form.removeRow(0)
+        self._memory_labels.clear()
+
+        all_hidden = [n for n in self._genome.nodes if n.type.value == "hidden"]
+        for node in mem_nodes:
+            idx = all_hidden.index(node) if node in all_hidden else -1
+            act = node.activation.value[:3]
+            lbl_text = f"H{idx}  {act}  b={node.bias:.2f}"
+            val_lbl = _label(f"{node.value:.5f}", "statValue")
+            self._memory_form.addRow(lbl_text + ":", val_lbl)
+            self._memory_labels.append(val_lbl)
+
+        n = len(mem_nodes)
+        self._memory_group.setTitle(
+            f"Gedächtniszustand  ({n} {'Knoten' if n != 1 else 'Knoten'})"
+        )
+
+    def _update_memory_display(self) -> None:
+        if self._genome is None:
+            self._memory_group.setVisible(False)
+            return
+        mem_nodes = [n for n in self._genome.nodes
+                     if n.type.value == "hidden" and n.persist_value]
+        if not mem_nodes:
+            self._memory_group.setVisible(False)
+            return
+        self._memory_group.setVisible(True)
+        curr_sig = tuple(n.innovation for n in mem_nodes)
+        if curr_sig != self._mem_sig:
+            self._mem_sig = curr_sig
+            self._rebuild_memory_display(mem_nodes)
+        else:
+            for lbl, node in zip(self._memory_labels, mem_nodes):
+                lbl.setText(f"{node.value:.5f}")
+
+    def _update_seq_buttons(self) -> None:
+        has_genome  = self._genome is not None
+        has_samples = bool(self._seq_samples)
+        at_start    = self._seq_step == 0
+        at_end      = self._seq_step >= len(self._seq_samples)
+        self.btn_seq_prev.setEnabled(has_genome and has_samples and not at_start)
+        self.btn_seq_next.setEnabled(has_genome and has_samples and not at_end)
+        self.btn_seq_all.setEnabled(has_genome and has_samples)
+        self.btn_seq_reset.setEnabled(has_genome and has_samples)
+
+    def _update_acc_fitness(self) -> None:
+        if not self._seq_rows:
+            return
+        deltas = [r._delta for r in self._seq_rows if r._delta is not None]
+        if not deltas:
+            self._acc_fitness_lbl.setText("")
+            return
+        total   = sum(deltas)
+        correct = sum(1 for r in self._seq_rows
+                      if r._delta is not None and r._delta < 0.2)
+        done    = len(deltas)
+        self._acc_fitness_lbl.setText(
+            f"Σ Δ: {total:.4f}  |  Fitness: {-total:.4f}  |  "
+            f"{correct}/{done} korrekt"
+        )
+
+    # ── Sequence step navigation ───────────────────────────────────────
+
+    def _seq_next(self) -> None:
+        if self._genome is None or self._seq_step >= len(self._seq_samples):
+            return
+        if self._seq_step == 0:
+            self._genome.reset()
+        inp, _exp = self._seq_samples[self._seq_step]
+        try:
+            outputs = self._genome.forward(inp)
+        except Exception:
+            return
+        self._seq_rows[self._seq_step].set_result(outputs)
+        self._seq_step += 1
+        self._update_memory_display()
+        self._update_acc_fitness()
+        self._update_seq_buttons()
+
+    def _seq_prev(self) -> None:
+        if self._genome is None or self._seq_step == 0:
+            return
+        self._seq_step -= 1
+        self._seq_rows[self._seq_step].clear()
+        self._genome.reset()
+        for i in range(self._seq_step):
+            try:
+                self._genome.forward(self._seq_samples[i][0])
+            except Exception:
+                break
+        self._update_memory_display()
+        self._update_acc_fitness()
+        self._update_seq_buttons()
+
+    def _seq_run_all(self) -> None:
+        if self._genome is None:
+            return
+        self._genome.reset()
+        self._seq_step = 0
+        n_out = self._example.n_outputs if self._example else 1
+        for i, (inp, _exp) in enumerate(self._seq_samples):
+            try:
+                outputs = self._genome.forward(inp)
+            except Exception:
+                outputs = [0.0] * n_out
+            self._seq_rows[i].set_result(outputs)
+            self._seq_step = i + 1
+        self._update_memory_display()
+        self._update_acc_fitness()
+        self._update_seq_buttons()
+
+    def _seq_reset(self) -> None:
+        if self._genome is not None:
+            self._genome.reset()
+        self._seq_step = 0
+        for row in self._seq_rows:
+            row.clear()
+        self._acc_fitness_lbl.setText("")
+        self._update_memory_display()
+        self._update_seq_buttons()
+
+    # ── Manual forward pass ────────────────────────────────────────────
+
+    def _reset_memory(self) -> None:
+        if self._genome is None:
+            return
+        self._genome.reset()
+        if self._seq_rows:
+            self._seq_step = 0
+            for row in self._seq_rows:
+                row.clear()
+            self._acc_fitness_lbl.setText("")
+            self._update_seq_buttons()
+        self._update_memory_display()
+
     def _run_manual(self) -> None:
         if self._genome is None:
             return
@@ -1265,6 +1598,7 @@ class InspectTab(QWidget):
         except Exception as e:
             for lbl in self._output_labels:
                 lbl.setText(f"Error: {e}")
+        self._update_memory_display()
 
 
 # ---------------------------------------------------------------------------

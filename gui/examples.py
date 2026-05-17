@@ -26,6 +26,7 @@ from yane.examples.simple_3_3_continuous import (
 from yane.examples.sequence_recall_PI import (
     make_eval as _pi_make_eval,
     N_INPUTS as _PI_NI, N_OUTPUTS as _PI_NO, TARGET_FITNESS as _PI_FIT,
+    dataset as _PI_DATASET, DECIMAL_PLACES as _PI_DECIMAL_PLACES,
 )
 
 
@@ -560,6 +561,7 @@ class ExampleConfig:
         supports_normalization: bool = False,
         test_cases: list[tuple[list[float], list[float]]] | None = None,
         stateful: bool = True,
+        sequence_samples: list[tuple[list[float], list[float]]] | None = None,
     ) -> None:
         self.name = name
         self.description = description
@@ -575,6 +577,7 @@ class ExampleConfig:
         self.supports_normalization = supports_normalization
         self.test_cases = test_cases
         self.stateful = stateful
+        self.sequence_samples = sequence_samples
 
 
 def load_examples() -> list[ExampleConfig]:
@@ -636,6 +639,7 @@ def load_examples() -> list[ExampleConfig]:
             category="Dataset",
             supports_normalization=True,
             stateful=True,
+            sequence_samples=[(s["input"], s["output"]) for s in _PI_DATASET[:_PI_DECIMAL_PLACES]],
         ),
     ]
 
