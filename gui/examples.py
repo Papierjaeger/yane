@@ -30,7 +30,7 @@ def _xor_eval(genome: Genome) -> float:
 # ---------------------------------------------------------------------------
 
 def _step_hooks(total: float, env, step_callback, render_callback) -> None:
-    """Handle per-step callbacks and GIL yielding after each env step."""
+    """Handle per-step callbacks. Only called when at least one callback is active."""
     if step_callback is not None:
         delay = step_callback(total)
         if delay > 0:
@@ -39,6 +39,29 @@ def _step_hooks(total: float, env, step_callback, render_callback) -> None:
         frame = env.render()
         if frame is not None:
             render_callback(frame)
+
+
+def _make_step_hooks(step_callback, render_callback):
+    """Return a per-step hook callable, or None if no callbacks are active.
+
+    Callers check `if _hooks:` once per step instead of calling _step_hooks
+    unconditionally — eliminates 600k+ function calls per training run.
+    """
+    if step_callback is None and render_callback is None:
+        return None
+    sc, rc = step_callback, render_callback
+
+    def _hooks(total, env):
+        if sc is not None:
+            delay = sc(total)
+            if delay > 0:
+                time.sleep(delay)
+        if rc is not None:
+            frame = env.render()
+            if frame is not None:
+                rc(frame)
+
+    return _hooks
 
 
 def _make_discrete_action_eval(
@@ -57,6 +80,7 @@ def _make_discrete_action_eval(
         env = gym.make(env_id,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=max_steps)
+        _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
@@ -70,7 +94,7 @@ def _make_discrete_action_eval(
                 total += reward
                 if not demo and early_stop is not None and total < early_stop:
                     break
-                _step_hooks(total, env, step_callback, render_callback)
+                if _hooks: _hooks(total, env)
             return total
 
         evaluate._env = env
@@ -93,6 +117,7 @@ def _make_continuous_action_eval(
         env = gym.make(env_id,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=max_steps if not demo else None)
+        _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
@@ -106,7 +131,7 @@ def _make_continuous_action_eval(
                 done = terminated or truncated
                 if not demo and early_stop is not None and total < early_stop:
                     break
-                _step_hooks(total, env, step_callback, render_callback)
+                if _hooks: _hooks(total, env)
             return total
 
         evaluate._env = env
@@ -130,6 +155,7 @@ def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
         env = gym.make("CarRacing-v3",
                        render_mode="rgb_array" if render_callback else None,
                        continuous=True)
+        _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
             obs, _ = env.reset()
@@ -152,7 +178,7 @@ def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
                 total += reward
                 done = terminated or truncated
                 steps += 1
-                _step_hooks(total, env, step_callback, render_callback)
+                if _hooks: _hooks(total, env)
             return total
 
         evaluate._env = env
@@ -177,6 +203,7 @@ def _make_acrobot_eval(max_steps: int = 500):
         env = gym.make("Acrobot-v1",
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=max_steps)
+        _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
@@ -194,7 +221,7 @@ def _make_acrobot_eval(max_steps: int = 500):
                 done = terminated or truncated
                 if terminated:
                     solved = True
-                _step_hooks(max_tip, env, step_callback, render_callback)
+                if _hooks: _hooks(max_tip, env)
             # max_tip gives dense gradient; bonus ensures solved > unsolved
             return max_tip + (10.0 if solved else 0.0)
 
@@ -217,6 +244,7 @@ def _make_mountaincar_discrete_eval(max_train_steps: int = 200):
         env = gym.make("MountainCar-v0",
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=200)
+        _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
@@ -227,8 +255,8 @@ def _make_mountaincar_discrete_eval(max_train_steps: int = 200):
                 action = int(np.argmax(out))
                 state, reward, terminated, truncated, _ = env.step(action)
                 pos = state[0]
-                max_pos = max(max_pos, pos)
-                _step_hooks(max_pos, env, step_callback, render_callback)
+                if pos > max_pos: max_pos = pos
+                if _hooks: _hooks(max_pos, env)
                 if terminated or truncated:
                     solved = terminated
                     break
@@ -250,6 +278,7 @@ def _make_pendulum_eval(max_train_steps: int = 500):
         env = gym.make("Pendulum-v1",
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=200)
+        _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
@@ -261,7 +290,7 @@ def _make_pendulum_eval(max_train_steps: int = 500):
                 action = [raw[0] * 4.0 - 2.0]
                 state, reward, terminated, truncated, _ = env.step(action)
                 total += reward
-                _step_hooks(total, env, step_callback, render_callback)
+                if _hooks: _hooks(total, env)
                 if terminated or truncated:
                     break
             return total
@@ -278,6 +307,7 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
         env = gym.make("MountainCarContinuous-v0",
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=100_000)
+        _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset()
@@ -290,8 +320,8 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
                 action = [raw[0] * 2.0 - 1.0]
                 state, reward, terminated, truncated, _ = env.step(action)
                 pos = state[0]
-                max_pos = max(max_pos, pos)
-                _step_hooks(max_pos, env, step_callback, render_callback)
+                if pos > max_pos: max_pos = pos
+                if _hooks: _hooks(max_pos, env)
                 if terminated or truncated:
                     solved = terminated  # truncated = timeout, terminated = goal reached
                     break
