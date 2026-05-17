@@ -159,6 +159,7 @@ class Genome:
                     val = data[node.input_index] if node.input_index < n else 0.0
                     for conn in conns:
                         conn.target.value += conn.weight * val
+                    node.value = 0.0   # mirror fire_simple: non-persistent → zero after push
                 for node in general_inputs:
                     node.value = data[node.input_index] if node.input_index < n else 0.0
                     node.fire_simple()
@@ -174,6 +175,7 @@ class Genome:
                     val = data[node.input_index] if node.input_index < n else 0.0
                     for conn in conns:
                         conn.target.value += conn.weight * val
+                    node.value = 0.0   # non-persistent → zero after push
                 for node in exec_order:
                     node.fire_simple()
                 return [node.value for node in output_nodes]

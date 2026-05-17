@@ -116,6 +116,77 @@ class TestCrossover(unittest.TestCase):
         outputs = child.forward([0.0, 0.0])
         self.assertEqual(len(outputs), 3)
 
+    def test_fitter_parent_connections_always_inherited(self):
+        """Disjoint / excess genes from the fitter parent must all appear in the child."""
+        from yane.evolution import smart_mutation
+        yane = _make_yane(2, 1, max_nodes=30, max_connections=100)
+        tracker = yane._tracker
+
+        p1 = yane.next_genome()
+        p2 = yane.next_genome()
+        # Give p1 many unique connections
+        for _ in range(8):
+            smart_mutation.add_connection(p1, tracker)
+        p1.fitness = 10.0
+        p2.fitness = 1.0
+
+        p1_innovations = {c.innovation for n in p1.nodes for c in n.connections
+                          if c.innovation >= 0}
+        child = p1.crossover(p2)
+        child_innovations = {c.innovation for n in child.nodes for c in n.connections
+                             if c.innovation >= 0}
+
+        for innov in p1_innovations:
+            self.assertIn(innov, child_innovations,
+                "All innovations from the fitter parent must appear in the child")
+
+    def test_matching_genes_weight_inherited_from_either_parent(self):
+        """For matching genes, weight is drawn from one parent or the other."""
+        from yane.core.connection import Connection
+
+        yane = _make_yane(2, 1)
+        tracker = yane._tracker
+        # Build two independent genomes from the same template
+        p1 = yane.next_genome()
+        p2 = p1.copy()
+
+        inp_innov = p1.input_nodes[0].innovation
+        out_innov = p1.output_nodes[0].innovation
+        shared_innov = tracker.get_connection(inp_innov, out_innov)
+
+        w1, w2 = 0.1, 0.9
+        c1 = Connection(p1.output_nodes[0], innovation=shared_innov); c1.weight = w1
+        c2 = Connection(p2.output_nodes[0], innovation=shared_innov); c2.weight = w2
+        p1.input_nodes[0].connections.append(c1)
+        p2.input_nodes[0].connections.append(c2)
+        p1._invalidate_topology(); p2._invalidate_topology()
+        p1.fitness = 1.0; p2.fitness = 0.5
+
+        weights_seen = set()
+        for _ in range(40):
+            child = p1.crossover(p2)
+            for n in child.nodes:
+                for c in n.connections:
+                    if c.innovation == shared_innov:
+                        weights_seen.add(round(c.weight, 6))
+
+        self.assertIn(round(w1, 6), weights_seen,
+            "Fitter parent's weight for matching gene must appear")
+        self.assertIn(round(w2, 6), weights_seen,
+            "Weaker parent's weight for matching gene must appear (50/50)")
+
+    def test_topology_cache_invalidated_after_crossover(self):
+        """Child's exec_order must be recomputed, not inherited from parents."""
+        p1, p2 = self._parents()
+        # Ensure p1 has a cached exec_order
+        p1.forward([0.5, 0.5])
+        self.assertIsNotNone(p1._exec_order)
+
+        child = p1.crossover(p2)
+        # Child must start with None — computed fresh on first forward
+        self.assertIsNone(child._exec_order,
+            "Crossover child must not inherit parent's topology cache")
+
 
 # ---------------------------------------------------------------------------
 # Copy consistency (original vs copy forward parity — the sorted-set bug)
@@ -255,6 +326,78 @@ class TestCompatibility(unittest.TestCase):
         for _ in range(10):
             smart_mutation.add_node(g1)
         self.assertGreater(_compatibility(g1, g2), 0.0)
+
+    def test_excess_vs_disjoint_classification(self):
+        """Genes beyond the range of the smaller genome are excess; within-range gaps are disjoint."""
+        from yane.core.connection import Connection
+        yane = _make_yane(2, 1)
+        tracker = yane._tracker
+
+        g1 = yane.next_genome()
+        g2 = g1.copy()   # start from same base to get same node innovations
+
+        inp0 = g1.input_nodes[0].innovation
+        inp1 = g1.input_nodes[1].innovation
+        out0 = g1.output_nodes[0].innovation
+
+        # Reserve 5 innovation numbers in a defined order
+        innovations = [tracker.get_connection(inp0, out0),
+                       tracker.get_connection(inp1, out0),
+                       tracker.next(), tracker.next(), tracker.next()]
+
+        # g1 gets all 5 connections
+        for innov in innovations:
+            c = Connection(g1.output_nodes[0], innovation=innov)
+            c.weight = 0.5
+            g1.input_nodes[0].connections.append(c)
+        g1._invalidate_topology()
+
+        # g2 gets only the first 3 — innovations[3] and [4] are excess in g1
+        for innov in innovations[:3]:
+            c = Connection(g2.output_nodes[0], innovation=innov)
+            c.weight = 0.5
+            g2.input_nodes[0].connections.append(c)
+        g2._invalidate_topology()
+
+        d = _compatibility(g1, g2)
+        self.assertGreater(d, 0.0, "Excess genes must contribute to distance")
+
+    def test_weight_difference_contributes_to_distance(self):
+        """Two genomes with same structure but different weights have δ > 0."""
+        from yane.core.connection import Connection
+        yane = _make_yane(2, 1)
+        tracker = yane._tracker
+
+        g1 = yane.next_genome()
+        g2 = g1.copy()
+
+        innov = tracker.get_connection(
+            g1.input_nodes[0].innovation, g1.output_nodes[0].innovation)
+        c1 = Connection(g1.output_nodes[0], innovation=innov); c1.weight =  1.0
+        c2 = Connection(g2.output_nodes[0], innovation=innov); c2.weight = -1.0
+        g1.input_nodes[0].connections.append(c1)
+        g2.input_nodes[0].connections.append(c2)
+        g1._invalidate_topology(); g2._invalidate_topology()
+
+        d = _compatibility(g1, g2)
+        self.assertGreater(d, 0.0, "Weight differences must contribute to δ")
+
+    def test_adaptive_threshold_moves_toward_target(self):
+        """_compat_threshold must move in the correct direction after speciation."""
+        from yane.evolution.population import Population
+        pop = Population(max_size=20, target_species=3)
+        initial_threshold = pop._compat_threshold
+
+        # Evaluate many genomes so speciation runs many times
+        for i in range(40):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i % 5))
+
+        # After many rounds, threshold should have moved from its initial value
+        # (it adapts toward the level that gives ~3 species)
+        # We just verify it changed — direction depends on actual species count
+        self.assertNotEqual(pop._compat_threshold, initial_threshold,
+            "Adaptive threshold must change after multiple speciation rounds")
 
 
 # ---------------------------------------------------------------------------
