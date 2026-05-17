@@ -15,6 +15,24 @@ _EMIT_INTERVAL_S    = 0.5    # emit UI update at most every 500 ms
 _MEMORY_CHECK_EVERY = 500    # check resource limits every N iterations
 _GC_EVERY           = 5000   # force gc.collect() + malloc_trim every N iterations
 
+# ---------------------------------------------------------------------------
+# Multiprocessing helpers — must be at module level to be picklable
+# ---------------------------------------------------------------------------
+
+_mp_eval_fn = None   # set once per subprocess by _mp_initializer
+
+def _mp_initializer(make_eval_fn, render_cb):
+    """Called once in each worker process to create the fitness evaluator.
+    Uses fork semantics: make_eval_fn is inherited from the parent process,
+    so closures (gym environments, datasets) work without pickling.
+    """
+    global _mp_eval_fn
+    _mp_eval_fn = make_eval_fn(render_cb)
+
+def _mp_evaluate(genome: Genome) -> float:
+    """Evaluate a single genome — runs inside a worker process."""
+    return _mp_eval_fn(genome)
+
 
 def _close_env(eval_fn) -> None:
     env = getattr(eval_fn, "_env", None)
@@ -70,7 +88,7 @@ class TrainingWorker(QThread):
 
         n_workers = getattr(self._yane, '_n_workers', 1)
         if n_workers > 1:
-            self._run_parallel(n_workers, last_emit)
+            self._run_multiprocess(n_workers, last_emit)
         else:
             self._run_sequential(last_emit)
 
@@ -163,6 +181,72 @@ class TrainingWorker(QThread):
 
         for fn in eval_fns:
             _close_env(fn)
+
+        self._emit_final()
+
+    def _run_multiprocess(self, n_workers: int, last_emit: float) -> None:
+        """Evaluate genomes in parallel subprocesses using fork.
+
+        Genome objects are pickled for IPC; the fitness function is inherited
+        from the parent process via fork so closures (datasets, gym envs) work
+        without additional pickling.  Each subprocess calls make_eval_fn once
+        in its initializer to set up its own environment.
+        """
+        import multiprocessing as mp
+
+        ctx = mp.get_context('fork')
+        # Worker processes inherit make_eval_fn via fork; initializer creates
+        # the actual evaluator (e.g. opens a gym environment) once per process.
+        try:
+            pool = ctx.Pool(
+                processes=n_workers,
+                initializer=_mp_initializer,
+                initargs=(self._make_eval_fn, None),  # no render in workers
+            )
+        except Exception as exc:
+            self.error_occurred.emit(f"Multiprocessing Pool konnte nicht erstellt werden: {exc}")
+            return
+
+        try:
+            while self._running:
+                while self._paused and self._running:
+                    time.sleep(0.05)
+
+                try:
+                    genomes = self._yane.next_genome_batch(n_workers)
+                    fitnesses = pool.map(_mp_evaluate, genomes)
+                    results   = list(zip(genomes, fitnesses))
+                    self._yane.submit_fitness_batch(results)
+                    self._iteration += len(results)
+
+                    best_fitness = max(fitnesses)
+                    best_genome  = genomes[fitnesses.index(best_fitness)]
+                    if self._yane.min_fitness is not None and best_fitness >= self._yane.min_fitness:
+                        self._running = False
+
+                    if self._iteration % _MEMORY_CHECK_EVERY < n_workers:
+                        self._yane._enforce_memory_limit()
+                        guard = self._yane._resource_guard
+                        while self._running and not guard.system_ok():
+                            time.sleep(0.5)
+
+                    if self._iteration % _GC_EVERY < n_workers and self._running:
+                        gc.collect()
+                        _return_memory_to_os()
+
+                    now = time.perf_counter()
+                    if now - last_emit >= _EMIT_INTERVAL_S:
+                        last_emit = now
+                        self._emit_update(best_genome, best_fitness)
+
+                    time.sleep(0)   # yield GIL to Qt event loop
+
+                except Exception as exc:
+                    self.error_occurred.emit(str(exc))
+                    break
+        finally:
+            pool.terminate()
+            pool.join()
 
         self._emit_final()
 

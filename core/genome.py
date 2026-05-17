@@ -497,6 +497,27 @@ class Genome:
         return genome
 
     # -------------------------------------------------------------------------
+    # Pickle support (multiprocessing)
+    # -------------------------------------------------------------------------
+
+    def __getstate__(self) -> dict:
+        """Return picklable state — strip compiled closures that can't be pickled.
+
+        _compiled_forward and _forward_dispatch are nested closures created by
+        _compile_forward().  They capture local variables and are not importable,
+        so pickle rejects them.  Clearing them here is safe: the first forward()
+        call in the subprocess will rebuild them from the node/connection data,
+        which IS pickled correctly.
+        """
+        state = self.__dict__.copy()
+        state['_compiled_forward'] = None
+        state['_forward_dispatch'] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+
+    # -------------------------------------------------------------------------
     # Diagnostics
     # -------------------------------------------------------------------------
 

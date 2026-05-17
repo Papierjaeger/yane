@@ -600,6 +600,22 @@ class TrainingTab(QWidget):
             "3–5 = gut für Regression/Supervised Learning\n"
             "0 = empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!)")
 
+        import multiprocessing as _mp
+        self.spin_workers = QSpinBox()
+        self.spin_workers.setRange(1, _mp.cpu_count())
+        self.spin_workers.setValue(1)
+        self.spin_workers.setSpecialValueText("1 (sequenziell)")
+        self.spin_workers.setToolTip(
+            f"Anzahl paralleler Prozesse für die Fitness-Berechnung.\n"
+            f"1 = sequenziell (Standard).\n"
+            f"> 1 = Multiprocessing mit fork — jeder Prozess wertet ein\n"
+            f"      Genome aus, alle parallel. Speedup ≈ Anzahl CPUs.\n\n"
+            f"Empfohlen für CPU-gebundene Aufgaben: Dataset-Beispiele,\n"
+            f"kleine Gym-Environments.\n"
+            f"Für Gym mit Physics (LunarLander, BipedalWalker): Threads\n"
+            f"geben weniger Overhead, aber Prozesse helfen auch.\n\n"
+            f"Dein System hat {_mp.cpu_count()} CPU-Kerne.")
+
         self.spin_species = QSpinBox()
         self.spin_species.setRange(2, 50)
         self.spin_species.setValue(5)
@@ -629,6 +645,7 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Max nodes:",      self.spin_nodes)
         cfg_form.addRow("Max connections:", self.spin_conns)
         cfg_form.addRow("Population:",     self.spin_pop)
+        cfg_form.addRow("Workers:",        self.spin_workers)
         cfg_form.addRow("Zielarten:",      self.spin_species)
         cfg_form.addRow("Lamarck steps:",  self.spin_lamarck)
         cfg_form.addRow("Normalisierung:", self.chk_normalize)
@@ -826,6 +843,7 @@ class TrainingTab(QWidget):
                 n_initial_hidden=ex.n_initial_hidden,
             )
             self._yane.set_population_size(self.spin_pop.value())
+            self._yane.set_n_workers(self.spin_workers.value())
             self._yane.set_target_species(self.spin_species.value())
             lamarck_steps = self.spin_lamarck.value()
             if lamarck_steps > 0:
