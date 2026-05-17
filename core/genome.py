@@ -264,17 +264,17 @@ class Genome:
     # Mutation
     # -------------------------------------------------------------------------
 
-    def mutate(self) -> None:
+    def mutate(self, tracker=None) -> None:
         from yane.evolution import smart_mutation
 
         if self.mutation_add_node.mutate_bool(False):
-            smart_mutation.add_node(self)
+            smart_mutation.add_node(self, tracker)
         if self.mutation_remove_node.mutate_bool(False):
-            smart_mutation.remove_node(self)
+            smart_mutation.remove_node(self, tracker)
         if self.mutation_add_connection.mutate_bool(False):
-            smart_mutation.add_connection(self)
+            smart_mutation.add_connection(self, tracker)
         if self.mutation_remove_connection.mutate_bool(False):
-            smart_mutation.remove_connection(self)
+            smart_mutation.remove_connection(self, tracker)
 
         sigma = self.sigma_global
         for node in self.nodes:
@@ -296,89 +296,127 @@ class Genome:
     # -------------------------------------------------------------------------
 
     def crossover(self, other: Genome) -> Genome:
-        """Combine this genome (assumed fitter) with other.
+        """NEAT-style crossover aligned by innovation numbers.
 
-        Fixed nodes (input/output) come from self. Hidden nodes are inherited
-        from self always and from other with 50% probability each. Connections
-        from self are always kept; connections from other are added where both
-        endpoints exist in the child, or override existing weights at 50%.
-        Strategy genes are drawn randomly from either parent.
+        self is assumed to be the fitter parent.
+
+        Gene alignment rules (original NEAT paper):
+        - Matching genes (same innovation number): inherit weight randomly
+          from either parent with 50/50 probability.
+        - Disjoint / excess genes from the FITTER parent (self): always
+          inherited — these represent structure that was already selected for.
+        - Disjoint / excess genes from the WEAKER parent (other): discarded,
+          because they haven't proven their fitness in self's lineage.
+
+        Node inheritance follows the same logic: nodes that appear in self are
+        always included; nodes only in other are discarded (their connections
+        are already filtered above anyway).
         """
         child = Genome()
         child.max_nodes = self.max_nodes
         child.max_connections = self.max_connections
 
+        # --- Node alignment by innovation number ---
+        # Build innovation → node for both parents.
+        self_nodes: dict[int, Node] = {n.innovation: n for n in self.nodes if n.innovation >= 0}
+        other_nodes: dict[int, Node] = {n.innovation: n for n in other.nodes if n.innovation >= 0}
+
         node_map: dict[Node, Node] = {}  # parent node → child node
 
-        # Input nodes from self (anchor structure)
-        for node in self.input_nodes:
+        # Copy all nodes from fitter parent (self); for matching nodes, bias
+        # remains from self but activation is picked randomly.
+        for node in self.nodes:
             n = node.copy()
             node_map[node] = n
             child.nodes.append(n)
-            child.input_nodes.append(n)
+            if node.type == NodeType.INPUT:
+                child.input_nodes.append(n)
+            elif node.type == NodeType.OUTPUT:
+                child.output_nodes.append(n)
 
-        # Output nodes from self
-        for node in self.output_nodes:
-            n = node.copy()
-            node_map[node] = n
-            child.nodes.append(n)
-            child.output_nodes.append(n)
-
-        # Map other's fixed nodes to child's (by position)
+        # Map other's fixed nodes to child's equivalents (same structural role)
         for s, o in zip(self.input_nodes, other.input_nodes):
             node_map[o] = node_map[s]
         for s, o in zip(self.output_nodes, other.output_nodes):
             node_map[o] = node_map[s]
 
-        # Hidden nodes from self (always inherited)
-        for node in self.nodes:
-            if node.type == NodeType.HIDDEN:
-                n = node.copy()
-                node_map[node] = n
-                child.nodes.append(n)
-
-        # Hidden nodes from other (50% each, respecting max_nodes cap)
-        for node in other.nodes:
-            if node.type == NodeType.HIDDEN and node not in node_map:
-                if child.max_nodes is not None and len(child.nodes) >= child.max_nodes:
-                    break
+        # For matching hidden nodes (same innovation), map other's node to
+        # child's copy of self's node and blend bias randomly.
+        for innov, other_node in other_nodes.items():
+            if other_node.type != NodeType.HIDDEN:
+                continue
+            if innov in self_nodes:
+                child_node = node_map[self_nodes[innov]]
+                node_map[other_node] = child_node
+                # 50/50: take bias and activation from either parent
                 if random.random() < 0.5:
-                    n = node.copy()
-                    node_map[node] = n
-                    child.nodes.append(n)
+                    child_node.bias = other_node.bias
+                if random.random() < 0.5:
+                    child_node.activation = other_node.activation
+            # Disjoint / excess from weaker parent: skip.
 
-        # Build connections; track count to avoid O(N) scan per connection.
-        existing: set[tuple[int, int]] = set()
+        # --- Connection alignment by innovation number ---
+        # Build innovation → (source_node, connection) for both parents.
+        self_conns: dict[int, tuple[Node, Connection]] = {
+            conn.innovation: (src, conn)
+            for src in self.nodes
+            for conn in src.connections
+            if conn.innovation >= 0
+        }
+        other_conns: dict[int, tuple[Node, Connection]] = {
+            conn.innovation: (src, conn)
+            for src in other.nodes
+            for conn in src.connections
+            if conn.innovation >= 0
+        }
+
         conn_count = 0
 
-        def _add_conns(source_nodes: list[Node], override_weight: bool) -> None:
-            nonlocal conn_count
-            for old_src in source_nodes:
-                if old_src not in node_map:
+        # Inherit all connections from self (fitter parent, disjoint/excess kept)
+        for innov, (old_src, conn) in self_conns.items():
+            if conn.target not in node_map:
+                continue
+            child_src = node_map[old_src]
+            child_tgt = node_map[conn.target]
+            weight = conn.weight
+            # Matching gene: randomly pick weight from either parent
+            if innov in other_conns and random.random() < 0.5:
+                weight = other_conns[innov][1].weight
+            if child.max_connections is not None and conn_count >= child.max_connections:
+                break
+            new_conn = Connection(child_tgt, innovation=innov)
+            new_conn.weight = weight
+            new_conn.mutation = conn.mutation.copy()
+            child_src.connections.append(new_conn)
+            conn_count += 1
+
+        # Fallback for untracked connections (innovation == -1): use old topology-based logic
+        untracked_self = [
+            (src, conn) for src in self.nodes for conn in src.connections
+            if conn.innovation < 0
+        ]
+        if untracked_self:
+            existing_keys: set[tuple[int, int]] = {
+                (id(node_map[src]), id(node_map[conn.target]))
+                for src, conn in self_conns.values()
+                if conn.target in node_map
+            }
+            for old_src, conn in untracked_self:
+                if old_src not in node_map or conn.target not in node_map:
                     continue
                 child_src = node_map[old_src]
-                for conn in old_src.connections:
-                    if conn.target not in node_map:
-                        continue
-                    child_tgt = node_map[conn.target]
-                    key = (id(child_src), id(child_tgt))
-                    if key not in existing:
-                        if child.max_connections is not None and conn_count >= child.max_connections:
-                            continue
-                        new_conn = Connection(child_tgt)
-                        new_conn.weight = conn.weight
-                        new_conn.mutation = conn.mutation.copy()
-                        child_src.connections.append(new_conn)
-                        existing.add(key)
-                        conn_count += 1
-                    elif override_weight and random.random() < 0.5:
-                        for c in child_src.connections:
-                            if c.target is child_tgt:
-                                c.weight = conn.weight
-                                break
-
-        _add_conns(self.nodes, False)
-        _add_conns(other.nodes, True)
+                child_tgt = node_map[conn.target]
+                key = (id(child_src), id(child_tgt))
+                if key in existing_keys:
+                    continue
+                if child.max_connections is not None and conn_count >= child.max_connections:
+                    break
+                new_conn = Connection(child_tgt, innovation=-1)
+                new_conn.weight = conn.weight
+                new_conn.mutation = conn.mutation.copy()
+                child_src.connections.append(new_conn)
+                existing_keys.add(key)
+                conn_count += 1
 
         # Strategy genes: random from either parent
         for attr in _SCALAR_GENES:
@@ -437,8 +475,8 @@ class Genome:
 
         Node A → Connection → Node B → Connection → Node A creates a cycle that
         Python's reference counter cannot resolve alone; it waits for the cyclic GC.
-        In fast training loops genomes are discarded faster than the GC runs, causing
-        RAM to grow. Explicitly clearing connections breaks every cycle here.
+        _forward_dispatch may hold a bound method (self._bfs_forward) which also
+        creates a genome → method → genome cycle; clear it here too.
         """
         for node in self.nodes:
             node.connections.clear()
@@ -446,6 +484,9 @@ class Genome:
         self.input_nodes.clear()
         self.output_nodes.clear()
         self._triggered.clear()
+        self._compiled_forward = None
+        self._forward_dispatch = None
+        self._reset_nodes = None
 
     def all_connections(self) -> list[tuple[Node, Connection]]:
         """All (source, connection) pairs in the network."""

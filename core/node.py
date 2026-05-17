@@ -18,12 +18,14 @@ class Node:
         'persist_value', 'max_triggers', 'input_index', 'connections',
         'mutation_bias', 'mutation_activation', 'mutation_persist',
         'mutation_max_triggers', 'mutation_input_index',
+        'innovation',
     )
 
-    def __init__(self, node_type: NodeType = NodeType.HIDDEN) -> None:
+    def __init__(self, node_type: NodeType = NodeType.HIDDEN, innovation: int = -1) -> None:
         self.type = node_type
         self.value: float = 0.0
         self.bias: float = 0.0
+        self.innovation: int = innovation   # global unique ID; -1 = untracked legacy
         self._activation = ActivationType.SIGMOID
         self._activate_fn = ACTIVATION_FNS[ActivationType.SIGMOID]
         self.persist_value: bool = False
@@ -42,8 +44,8 @@ class Node:
         return {slot: getattr(self, slot) for slot in self.__slots__}
 
     def __setstate__(self, state):
-        for slot, value in state.items():
-            object.__setattr__(self, slot, value)
+        for slot in self.__slots__:
+            object.__setattr__(self, slot, state.get(slot, -1 if slot == 'innovation' else None))
 
     @property
     def activation(self) -> ActivationType:
@@ -87,7 +89,7 @@ class Node:
         self.mutation_input_index.mutate_rates()
 
     def copy(self) -> Node:
-        n = Node(self.type)
+        n = Node(self.type, innovation=self.innovation)
         n.bias = self.bias
         n.activation = self.activation
         n.persist_value = self.persist_value

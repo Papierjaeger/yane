@@ -8,7 +8,7 @@ from yane.core.connection import Connection
 from yane.util.activation import ActivationType
 
 
-def add_node(genome) -> None:
+def add_node(genome, tracker=None) -> None:
     """Insert a new hidden node on a random existing connection.
 
     A → B (weight w)  becomes  A → N → B
@@ -25,24 +25,30 @@ def add_node(genome) -> None:
         source, conn = random.choice(connections)
         old_target = conn.target
 
-        new_node = Node(NodeType.HIDDEN)
+        if tracker is not None:
+            node_innov, conn_in_innov, conn_out_innov = tracker.get_split(conn.innovation)
+        else:
+            node_innov = conn_in_innov = conn_out_innov = -1
+
+        new_node = Node(NodeType.HIDDEN, innovation=node_innov)
         new_node.activation = ActivationType.LINEAR
         new_node.bias = 0.0
 
         conn.target = new_node
+        conn.innovation = conn_in_innov if tracker is not None else conn.innovation
 
-        bypass = Connection(old_target)
+        bypass = Connection(old_target, innovation=conn_out_innov)
         bypass.weight = 1.0
         new_node.connections.append(bypass)
     else:
-        # No connections exist yet — add a bare hidden node as a starting point
-        new_node = Node(NodeType.HIDDEN)
+        new_node = Node(NodeType.HIDDEN,
+                        innovation=tracker.next() if tracker is not None else -1)
 
     genome.nodes.append(new_node)
     genome._invalidate_topology()
 
 
-def remove_node(genome) -> None:
+def remove_node(genome, tracker=None) -> None:
     """Remove a random hidden node.
 
     For each A→N→B pair, a bypass connection A→B is created with probability
@@ -65,7 +71,9 @@ def remove_node(genome) -> None:
     for source_node, in_conn in incoming:
         for out_conn in outgoing_snapshot:
             if random.random() < genome.bypass_connection_prob:
-                bypass = Connection(out_conn.target)
+                innov = (tracker.get_connection(source_node.innovation, out_conn.target.innovation)
+                         if tracker is not None else -1)
+                bypass = Connection(out_conn.target, innovation=innov)
                 bypass.weight = in_conn.weight * out_conn.weight
                 source_node.connections.append(bypass)
 
@@ -76,7 +84,7 @@ def remove_node(genome) -> None:
     genome._invalidate_topology()
 
 
-def add_connection(genome) -> None:
+def add_connection(genome, tracker=None) -> None:
     """Add a random connection between any two nodes (cycles allowed).
 
     Skips silently if genome.max_connections is set and already reached.
@@ -94,16 +102,17 @@ def add_connection(genome) -> None:
         if conn.target is target:
             return
 
+    innov = tracker.get_connection(source.innovation, target.innovation) if tracker is not None else -1
     fan_in = sum(1 for n in genome.nodes for c in n.connections if c.target is target)
     fan_in = max(fan_in, 1)
     std = math.sqrt(2.0 / (fan_in + 1))  # Xavier/He init
-    conn = Connection(target)
+    conn = Connection(target, innovation=innov)
     conn.weight = random.gauss(0.0, std)
     source.connections.append(conn)
     genome._invalidate_topology()
 
 
-def remove_connection(genome) -> None:
+def remove_connection(genome, tracker=None) -> None:
     """Remove a random connection from the network."""
     connections = [(node, i) for node in genome.nodes for i in range(len(node.connections))]
 

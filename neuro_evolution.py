@@ -30,6 +30,8 @@ class NeuroEvolution:
         self._resource_check_interval: int = 1
         self._population_size: int = 100
         self._n_workers: int = 1
+        from yane.evolution.innovation import InnovationTracker
+        self._tracker = InnovationTracker()
 
     @property
     def current_genome(self) -> Genome | None:
@@ -66,54 +68,50 @@ class NeuroEvolution:
         from yane.util.activation import ActivationType
         import random
 
+        tracker = self._tracker
         initial = Genome()
         initial.max_nodes = max_nodes
         initial.max_connections = max_connections
 
         for i in range(n_inputs):
-            node = Node(NodeType.INPUT)
+            node = Node(NodeType.INPUT, innovation=tracker.next())
             node.input_index = i
             # LINEAR pass-through so raw input values reach the network unchanged.
-            # SIGMOID would compress binary inputs (0→0.5, 1→0.73), distorting
-            # the fitness landscape for classification tasks like XOR.
             node.activation = ActivationType.LINEAR
             initial.nodes.append(node)
             initial.input_nodes.append(node)
         for _ in range(n_outputs):
-            node = Node(NodeType.OUTPUT)
+            node = Node(NodeType.OUTPUT, innovation=tracker.next())
             node.persist_value = True
             initial.nodes.append(node)
             initial.output_nodes.append(node)
 
         if n_initial_hidden > 0:
-            # Build a proper fully-connected hidden layer: inputs→hidden→outputs.
-            # This gives the network structural capacity from the start and avoids
-            # the stuck-at-local-optimum problem for non-linearly-separable tasks.
             hidden_nodes = []
             for _ in range(n_initial_hidden):
-                h = Node(NodeType.HIDDEN)
-                # SIGMOID on hidden nodes adds the non-linearity needed for XOR
+                h = Node(NodeType.HIDDEN, innovation=tracker.next())
                 initial.nodes.append(h)
                 hidden_nodes.append(h)
             for inp in initial.input_nodes:
                 for h in hidden_nodes:
-                    conn = Connection(h)
+                    innov = tracker.get_connection(inp.innovation, h.innovation)
+                    conn = Connection(h, innovation=innov)
                     conn.weight = random.uniform(-1.0, 1.0)
                     inp.connections.append(conn)
             for h in hidden_nodes:
                 for out in initial.output_nodes:
-                    conn = Connection(out)
+                    innov = tracker.get_connection(h.innovation, out.innovation)
+                    conn = Connection(out, innovation=innov)
                     conn.weight = random.uniform(-1.0, 1.0)
                     h.connections.append(conn)
-        else:
-            # Start with no connections — the network discovers which inputs
-            # are relevant through add_connection mutations. This keeps the
-            # initial forward pass fast and avoids unnecessary computation for
-            # tasks with many inputs (e.g. CarRacing: 144 inputs × 3 outputs
-            # would be 432 connections before training even begins).
-            pass
+        # else: empty start — bootstrap adds connections via add_connection(tracker)
 
-        self._population = Population(max_size=self._population_size, initial_genome=initial)
+        initial._invalidate_topology()
+        self._population = Population(
+            max_size=self._population_size,
+            initial_genome=initial,
+            tracker=tracker,
+        )
 
     def set_min_fitness(self, value: float) -> None:
         self.min_fitness = value

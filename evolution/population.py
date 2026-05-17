@@ -11,12 +11,53 @@ from yane.core.genome import Genome
 # ---------------------------------------------------------------------------
 
 def _compatibility(g1: Genome, g2: Genome) -> float:
-    """Structural distance in [0, 1]: 0 = identical topology, 1 = fully different."""
-    n1, n2 = len(g1.nodes), len(g2.nodes)
-    c1, c2 = g1.connection_count, g2.connection_count
-    node_diff = abs(n1 - n2) / max(n1, n2, 1)
-    conn_diff = abs(c1 - c2) / max(c1, c2, 1)
-    return (node_diff + conn_diff) / 2.0
+    """NEAT-style compatibility distance δ = c1·E/N + c2·D/N + c3·W̄
+
+    When innovation numbers are available, uses the original NEAT formula
+    with excess (E), disjoint (D) and average weight difference (W̄) of
+    matching genes.  Falls back to the old topology-count heuristic for
+    genomes without innovation tracking.
+
+    Coefficients tuned to keep δ in roughly [0, 2]:
+      c1 = 1.0 (excess)   c2 = 1.0 (disjoint)   c3 = 0.4 (weight diff)
+    """
+    # Collect connection innovations
+    g1_innov = {conn.innovation: conn for src in g1.nodes for conn in src.connections
+                if conn.innovation >= 0}
+    g2_innov = {conn.innovation: conn for src in g2.nodes for conn in src.connections
+                if conn.innovation >= 0}
+
+    if not g1_innov and not g2_innov:
+        # Legacy fallback: simple topology distance
+        n1, n2 = len(g1.nodes), len(g2.nodes)
+        c1, c2 = g1.connection_count, g2.connection_count
+        node_diff = abs(n1 - n2) / max(n1, n2, 1)
+        conn_diff = abs(c1 - c2) / max(c1, c2, 1)
+        return (node_diff + conn_diff) / 2.0
+
+    all_innovs  = g1_innov.keys() | g2_innov.keys()
+    max_innov_g1 = max(g1_innov, default=-1)
+    max_innov_g2 = max(g2_innov, default=-1)
+    smaller_max  = min(max_innov_g1, max_innov_g2)
+    N = max(len(g1_innov), len(g2_innov), 1)
+
+    excess = disjoint = matching = 0
+    weight_diff_sum = 0.0
+
+    for innov in all_innovs:
+        in_g1 = innov in g1_innov
+        in_g2 = innov in g2_innov
+        if in_g1 and in_g2:
+            matching += 1
+            weight_diff_sum += abs(g1_innov[innov].weight - g2_innov[innov].weight)
+        else:
+            if innov > smaller_max:
+                excess += 1
+            else:
+                disjoint += 1
+
+    W_bar = weight_diff_sum / matching if matching > 0 else 0.0
+    return (1.0 * excess / N) + (1.0 * disjoint / N) + (0.4 * W_bar)
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +88,13 @@ class Species:
 # ---------------------------------------------------------------------------
 
 class Population:
-    def __init__(self, max_size: int = 100, initial_genome: Genome | None = None) -> None:
+    def __init__(
+        self,
+        max_size: int = 100,
+        initial_genome: Genome | None = None,
+        tracker=None,
+        target_species: int = 5,
+    ) -> None:
         self.max_size = max_size
         seed = initial_genome or Genome()
         self._unevaluated: list[Genome] = [seed]
@@ -56,11 +103,18 @@ class Population:
         self._template: Genome = seed.copy()
         self._evaluated: list[Genome] = []
         self._species: list[Species] = []
+        self._tracker = tracker  # InnovationTracker shared with NeuroEvolution
 
         # Stagnation tracking — threshold scales automatically with population size.
         self._best_fitness_seen: float = float('-inf')
         self._stagnation_count: int = 0   # resets ONLY on fitness improvement
         self._since_last_injection: int = 0  # separate counter for injection pacing
+
+        # Adaptive global species threshold (replaces per-genome thresholds).
+        # After each speciation round the threshold is adjusted ±0.05 to push
+        # species count toward target_species.
+        self._target_species: int = target_species
+        self._compat_threshold: float = 0.3
 
         # Novelty search — probe inputs are fixed (seed 42) so behavior descriptors
         # are comparable across the lifetime of the population. No user config needed.
@@ -229,22 +283,12 @@ class Population:
         for sp in self._species:
             sp.members = []
 
-        # Precompute (n_nodes, n_connections) once per genome to avoid O(N) property
-        # lookup inside the O(N²) compatibility loop.
-        def _stats(g):
-            return len(g.nodes), g.connection_count
-
-        rep_stats = {id(sp.representative): _stats(sp.representative) for sp in self._species}
+        threshold = self._compat_threshold
 
         for genome in self._evaluated:
-            gn, gc = _stats(genome)
             placed = False
             for sp in self._species:
-                rn, rc = rep_stats[id(sp.representative)]
-                threshold = (genome.species_threshold + sp.representative.species_threshold) / 2
-                node_diff = abs(gn - rn) / max(gn, rn, 1)
-                conn_diff = abs(gc - rc) / max(gc, rc, 1)
-                if (node_diff + conn_diff) / 2.0 < threshold:
+                if _compatibility(genome, sp.representative) < threshold:
                     sp.add(genome)
                     placed = True
                     break
@@ -252,11 +296,17 @@ class Population:
                 new_sp = Species(genome)
                 new_sp.add(genome)
                 self._species.append(new_sp)
-                rep_stats[id(genome)] = (gn, gc)
 
         self._species = [sp for sp in self._species if sp.members]
         for sp in self._species:
             sp.representative = sp.best()
+
+        # Adapt threshold so species count converges to target_species.
+        n = len(self._species)
+        if n > self._target_species:
+            self._compat_threshold = min(1.5, self._compat_threshold + 0.05)
+        elif n < self._target_species:
+            self._compat_threshold = max(0.05, self._compat_threshold - 0.05)
 
     def _compute_shared_fitness(self) -> None:
         # Parsimony pressure: tiny penalty per node/connection so evolution
@@ -289,24 +339,21 @@ class Population:
         if strategy == 0 and self._evaluated:
             base = self.get_best().copy()
             for _ in range(random.randint(2, 5)):
-                base.mutate()
+                base.mutate(self._tracker)
         else:
             base = self._template.copy()
             if strategy == 1:
-                # Add random connections and re-randomise weights.
-                # (Re-randomising an empty template is a no-op — we need
-                # connections first so the genome can actually behave differently.)
                 from yane.evolution import smart_mutation
                 n_in = len(base.input_nodes)
                 n_out = len(base.output_nodes)
                 for _ in range(random.randint(n_out, min(n_in * n_out, 50))):
-                    smart_mutation.add_connection(base)
+                    smart_mutation.add_connection(base, self._tracker)
                 for node in base.nodes:
                     for conn in node.connections:
                         conn.weight = random.uniform(-1.0, 1.0)
             else:
                 for _ in range(random.randint(2, 5)):
-                    base.mutate()
+                    base.mutate(self._tracker)
         base.fitness = 0.0
         base.shared_fitness = 0.0
         self._unevaluated.append(base)
@@ -323,16 +370,13 @@ class Population:
         from yane.evolution import smart_mutation
         n_in = len(self._template.input_nodes)
         n_out = len(self._template.output_nodes)
-        # Enough connections for every output to receive at least one input
-        # signal, but capped at 50 so large-input envs (e.g. CarRacing: 144
-        # inputs × 3 outputs = 432 possible) stay sparse and fast.
         min_conn = n_out
         max_conn = min(n_in * n_out, max(n_in, 50))
         for _ in range(self.max_size):
             g = self._template.copy()
             n_conn = random.randint(min_conn, max_conn)
             for _ in range(n_conn):
-                smart_mutation.add_connection(g)
+                smart_mutation.add_connection(g, self._tracker)
             self._unevaluated.append(g)
 
     def _spawn_offspring(self) -> None:
@@ -389,7 +433,7 @@ class Population:
         else:
             child = parent.copy()
 
-        child.mutate()
+        child.mutate(self._tracker)
         child.fitness = 0.0
         self._unevaluated.append(child)
 
@@ -403,8 +447,13 @@ class Population:
                 break
 
             protected: set[int] = {id(self.get_best())}
+            # Only protect species champions of multi-member species.
+            # Single-genome species don't represent "protected innovation" —
+            # they're just isolated genomes that happened to form their own
+            # cluster. Protecting all single-genome champions would block
+            # pruning entirely when every genome is in its own species.
             for sp in self._species:
-                if sp.members:
+                if len(sp.members) > 1:
                     protected.add(id(sp.best()))
 
             candidates = [g for g in self._evaluated if id(g) not in protected]
@@ -419,6 +468,10 @@ class Population:
             for sp in self._species:
                 if worst in sp.members:
                     sp.members.remove(worst)
+                    # Keep representative up-to-date so it doesn't hold a
+                    # stale reference to the cleared genome.
+                    if sp.representative is worst:
+                        sp.representative = sp.best() if sp.members else None
                     break
             worst._clear()
 

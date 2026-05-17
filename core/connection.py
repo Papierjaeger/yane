@@ -9,27 +9,32 @@ if TYPE_CHECKING:
 
 
 class Connection:
-    __slots__ = ('target', 'weight', 'mutation', '__weakref__')
+    __slots__ = ('target', 'weight', 'mutation', 'innovation', '__weakref__')
 
-    def __init__(self, target: Node) -> None:
+    def __init__(self, target: Node, innovation: int = -1) -> None:
         self.target = target
         self.weight: float = random.uniform(-1.0, 1.0)
         self.mutation = Mutation()
+        self.innovation: int = innovation   # global unique ID; -1 = untracked legacy
 
     def __getstate__(self):
-        return {'target': self.target, 'weight': self.weight, 'mutation': self.mutation}
+        return {
+            'target': self.target, 'weight': self.weight,
+            'mutation': self.mutation, 'innovation': self.innovation,
+        }
 
     def __setstate__(self, state):
-        self.target = state['target']
-        self.weight = state['weight']
+        self.target   = state['target']
+        self.weight   = state['weight']
         self.mutation = state['mutation']
+        self.innovation = state.get('innovation', -1)
 
     def mutate(self, sigma: float = 1.0) -> None:
         self.weight = self.mutation.mutate_value(self.weight, sigma)
         self.mutation.mutate_rates()
 
     def copy(self, node_map: dict[Node, Node]) -> Connection:
-        conn = Connection(node_map[self.target])
+        conn = Connection(node_map[self.target], innovation=self.innovation)
         conn.weight = self.weight
         conn.mutation = self.mutation.copy()
         return conn
