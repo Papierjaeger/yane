@@ -623,12 +623,9 @@ class TrainingTab(QWidget):
                 self._yane.set_min_fitness(target)
             render_cb = None
             if ex.supports_render and self.btn_render.isChecked():
-                # Rate limiting is now done in _make_step_hooks (before env.render()),
-                # so here we just forward every frame that arrives.
                 render_cb = self.render_frame.emit
 
-            make_eval_fn = None
-            evaluate_fn = ex.make_eval(render_cb)
+            make_eval_fn = ex.make_eval   # factory — called on worker thread, not here
         except Exception as e:
             QMessageBox.critical(self, "Setup Error", str(e))
             return
@@ -644,7 +641,7 @@ class TrainingTab(QWidget):
         # when Python GC and Qt internal refcount race each other.
         self._run_id += 1
         run_id = self._run_id
-        worker = TrainingWorker(self._yane, evaluate_fn, make_eval_fn=make_eval_fn)
+        worker = TrainingWorker(self._yane, make_eval_fn, render_cb=render_cb)
         worker.finished.connect(worker.deleteLater)
         worker.iteration_done.connect(self._on_iteration)
         worker.error_occurred.connect(self._on_error)

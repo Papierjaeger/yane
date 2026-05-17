@@ -28,6 +28,10 @@ def _close_env(eval_fn) -> None:
 class TrainingWorker(QThread):
     """Runs the manual training loop in a background thread.
 
+    The eval function is created inside run() on the worker thread so that
+    gym.make() (which can take 0.5–2 s and initialises pygame/OpenGL) never
+    blocks the main thread.
+
     When yane._n_workers > 1, evaluates a batch of genomes in parallel using
     a ThreadPoolExecutor — each worker thread gets its own gym env instance
     via make_eval_fn. ThreadPoolExecutor is used (not multiprocessing) because
@@ -42,14 +46,15 @@ class TrainingWorker(QThread):
     def __init__(
         self,
         yane,
-        evaluate_fn: Callable[[Genome], float],
-        make_eval_fn: Callable | None = None,
+        make_eval_fn: Callable,   # called on the worker thread to create the eval fn
+        render_cb: Callable | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._yane = yane
-        self._evaluate = evaluate_fn
         self._make_eval_fn = make_eval_fn
+        self._render_cb = render_cb
+        self._evaluate: Callable | None = None
         self._running = False
         self._paused = False
         self._iteration = 0
@@ -64,12 +69,20 @@ class TrainingWorker(QThread):
         last_emit = 0.0
 
         n_workers = getattr(self._yane, '_n_workers', 1)
-        if n_workers > 1 and self._make_eval_fn is not None:
+        if n_workers > 1:
             self._run_parallel(n_workers, last_emit)
         else:
             self._run_sequential(last_emit)
 
     def _run_sequential(self, last_emit: float) -> None:
+        # Create the eval fn here on the worker thread so gym.make() never blocks
+        # the main thread (gym init can take 0.5–2 s for Acrobot, CartPole, etc.).
+        try:
+            self._evaluate = self._make_eval_fn(self._render_cb)
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
+            return
+
         while self._running:
             while self._paused and self._running:
                 time.sleep(0.05)
@@ -98,7 +111,13 @@ class TrainingWorker(QThread):
 
     def _run_parallel(self, n_workers: int, last_emit: float) -> None:
         # Each thread owns its own eval_fn (and thus its own gym env).
-        eval_fns = [self._make_eval_fn() for _ in range(n_workers)]
+        # Only the first gets the render callback; parallel rendering would race.
+        try:
+            eval_fns = [self._make_eval_fn(self._render_cb if i == 0 else None)
+                        for i in range(n_workers)]
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
+            return
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             while self._running:
