@@ -82,7 +82,10 @@
       "Bash(python -m pytest yane/tests/test_bugs_and_coverage.py yane/tests/test_crossover_and_speciation.py -v)",
       "Bash(python -m pytest yane/tests/test_bugs_and_coverage.py yane/tests/test_crossover_and_speciation.py -v --timeout=30)",
       "Bash(python /tmp/run_tests.py)",
-      "Bash(python -m pytest yane/tests/ -q --tb=short)"
+      "Bash(python -m pytest yane/tests/ -q --tb=short)",
+      "Bash(python -m pytest --co -q)",
+      "Bash(python -m pytest --help)",
+      "Bash(git commit -m 'pytest.ini: 30s Timeout pro Test via pytest-timeout *)"
     ],
     "additionalDirectories": [
       "/tmp"
