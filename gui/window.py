@@ -388,8 +388,8 @@ class TrainingTab(QWidget):
 
         self.spin_inputs  = QSpinBox(); self.spin_inputs.setRange(1, 1024)
         self.spin_outputs = QSpinBox(); self.spin_outputs.setRange(1, 256)
-        self.spin_nodes   = QSpinBox(); self.spin_nodes.setRange(2, 500); self.spin_nodes.setSpecialValueText("unlimited")
-        self.spin_conns   = QSpinBox(); self.spin_conns.setRange(1, 5000); self.spin_conns.setSpecialValueText("unlimited")
+        self.spin_nodes   = QSpinBox(); self.spin_nodes.setRange(0, 500); self.spin_nodes.setSpecialValueText("unlimited")
+        self.spin_conns   = QSpinBox(); self.spin_conns.setRange(0, 5000); self.spin_conns.setSpecialValueText("unlimited")
         self.spin_pop     = QSpinBox(); self.spin_pop.setRange(2, 1000); self.spin_pop.setValue(100)
         self.dspin_mem    = QDoubleSpinBox(); self.dspin_mem.setRange(0.1, 32.0); self.dspin_mem.setSingleStep(0.5); self.dspin_mem.setValue(2.0); self.dspin_mem.setSuffix(" GB")
         self.dspin_target = QDoubleSpinBox(); self.dspin_target.setRange(-1e9, 1e9); self.dspin_target.setSingleStep(0.1); self.dspin_target.setDecimals(4); self.dspin_target.setSpecialValueText("—")
@@ -448,7 +448,7 @@ class TrainingTab(QWidget):
         ram_layout.addWidget(QLabel("RAM:"))
         self.ram_bar = QProgressBar()
         self.ram_bar.setRange(0, 100)
-        self.ram_bar.setFormat("%v%  (%p%)")
+        self.ram_bar.setFormat("%p%")
         self.ram_bar.setFixedHeight(18)
         ram_layout.addWidget(self.ram_bar)
         self.lbl_ram = QLabel(f"0.00 / {self.dspin_mem.value():.2f} GB")
@@ -683,10 +683,10 @@ class TrainingTab(QWidget):
         if self._yane is not None:
             try:
                 best = self._yane.get_best().copy()
-                mem = self._yane.population_memory_info()
+                mem  = self._yane.population_memory_info()
                 if self._best_genome is not None:
                     self._best_genome._clear()
-                self._best_genome = best.copy()
+                self._best_genome = best
                 self.btn_run_best.setEnabled(True)
                 self.genome_updated.emit(best, mem)
             except Exception:

@@ -1,6 +1,7 @@
 """Network topology canvas and fitness history chart."""
 from __future__ import annotations
 import math
+import random
 
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QPointF, QRectF, QSize
@@ -20,10 +21,145 @@ _C_CHART    = QColor("#4CAF50")
 _NODE_R     = 13
 
 
-class NetworkCanvas(QWidget):
-    """Draws the topology of a Genome: nodes as circles, connections as arrows."""
+# ---------------------------------------------------------------------------
+# Force-directed layout
+# ---------------------------------------------------------------------------
 
-    _REPAINT_INTERVAL_S = 0.5   # repaint at most every 500 ms (2 fps)
+def _force_layout(
+    nodes_all: list,
+    inputs: list,
+    outputs: list,
+    hidden: list,
+    w: int,
+    h: int,
+    iterations: int = 120,
+) -> dict[int, list[float]]:
+    """Fruchterman-Reingold spring layout.
+
+    Input and output nodes are fixed (left/right columns).
+    Hidden nodes are placed by minimising a spring energy:
+    - Attraction along edges proportional to |weight|
+    - Repulsion between every pair of nodes
+    - Soft boundary keep nodes inside the canvas
+    """
+    pad = _NODE_R + 18
+
+    def spread_y(idx: int, total: int) -> float:
+        if total == 1:
+            return h / 2.0
+        return pad + (h - 2 * pad) * idx / (total - 1)
+
+    pos: dict[int, list[float]] = {}
+
+    # Fixed anchors
+    x_in  = pad + _NODE_R
+    x_out = w - pad - _NODE_R
+    for i, n in enumerate(inputs):
+        pos[id(n)] = [x_in, spread_y(i, len(inputs))]
+    for i, n in enumerate(outputs):
+        pos[id(n)] = [x_out, spread_y(i, len(outputs))]
+
+    if not hidden:
+        return pos
+
+    # Initialise hidden nodes in the centre with small random offsets
+    rng = random.Random(42)
+    cx, cy = (x_in + x_out) / 2.0, h / 2.0
+    spread = min(w, h) * 0.15
+    for n in hidden:
+        pos[id(n)] = [
+            cx + rng.uniform(-spread, spread),
+            cy + rng.uniform(-spread, spread),
+        ]
+
+    # Build weighted edge list (skip self-loops for layout)
+    edges: list[tuple[int, int, float]] = []
+    for src in nodes_all:
+        for conn in src.connections:
+            if conn.target is not src and id(conn.target) in pos:
+                edges.append((id(src), id(conn.target), abs(conn.weight)))
+
+    hidden_ids = {id(n) for n in hidden}
+    all_ids    = list(pos.keys())
+
+    # Area-based optimal distance (Fruchterman-Reingold)
+    area = (w - 2 * pad) * (h - 2 * pad)
+    k    = math.sqrt(area / max(len(all_ids), 1)) * 0.7
+
+    for step in range(iterations):
+        temp = k * (1.0 - step / iterations) * 0.5 + k * 0.05
+
+        disp: dict[int, list[float]] = {nid: [0.0, 0.0] for nid in hidden_ids}
+
+        # Repulsion between every pair
+        for i in range(len(all_ids)):
+            aid = all_ids[i]
+            ax, ay = pos[aid]
+            for j in range(i + 1, len(all_ids)):
+                bid = all_ids[j]
+                bx, by = pos[bid]
+                dx, dy = ax - bx, ay - by
+                dist2  = dx * dx + dy * dy
+                dist   = math.sqrt(dist2) if dist2 > 0.01 else 0.1
+                f_rep  = (k * k) / dist          # F-R repulsion
+                ux, uy = dx / dist, dy / dist
+                if aid in disp:
+                    disp[aid][0] += f_rep * ux
+                    disp[aid][1] += f_rep * uy
+                if bid in disp:
+                    disp[bid][0] -= f_rep * ux
+                    disp[bid][1] -= f_rep * uy
+
+        # Attraction along weighted edges
+        for (sid, tid, w_edge) in edges:
+            if sid not in pos or tid not in pos:
+                continue
+            dx = pos[tid][0] - pos[sid][0]
+            dy = pos[tid][1] - pos[sid][1]
+            dist2 = dx * dx + dy * dy
+            dist  = math.sqrt(dist2) if dist2 > 0.01 else 0.1
+            # Stronger connection = stronger pull; scale so that weight≈1 gives
+            # a pull similar to the F-R attractive force
+            f_attr = (dist * dist / k) * (0.4 + 0.8 * w_edge)
+            ux, uy = dx / dist, dy / dist
+            if sid in disp:
+                disp[sid][0] += f_attr * ux
+                disp[sid][1] += f_attr * uy
+            if tid in disp:
+                disp[tid][0] -= f_attr * ux
+                disp[tid][1] -= f_attr * uy
+
+        # Apply displacement, capped by temperature
+        for nid in hidden_ids:
+            fx, fy = disp[nid]
+            mag = math.sqrt(fx * fx + fy * fy)
+            if mag > 0.01:
+                scale = min(mag, temp) / mag
+                fx *= scale
+                fy *= scale
+            x = pos[nid][0] + fx
+            y = pos[nid][1] + fy
+            # Soft clamp: stay inside canvas with padding
+            x = max(pad + _NODE_R, min(w - pad - _NODE_R, x))
+            y = max(pad + _NODE_R, min(h - pad - _NODE_R, y))
+            pos[nid] = [x, y]
+
+    return pos
+
+
+# ---------------------------------------------------------------------------
+# NetworkCanvas
+# ---------------------------------------------------------------------------
+
+class NetworkCanvas(QWidget):
+    """Draws the topology of a Genome using a force-directed layout.
+
+    Inputs are pinned to the left, outputs to the right.  Hidden nodes
+    cluster near strongly-connected neighbours and spread away from nodes
+    they share no connections with.
+    """
+
+    _REPAINT_INTERVAL_S = 0.5
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -35,11 +171,10 @@ class NetworkCanvas(QWidget):
 
     def set_genome(self, genome) -> None:
         import time as _t
-        if self._genome is not None and self._genome is not genome:
-            self._genome._clear()
+        # Do NOT call _clear() on the old genome — it is still owned by the
+        # caller (Population); clearing it here would destroy its node data.
         self._genome = genome
         self._pos_cache = {}
-        # Throttle repaints: no more than 2 fps to avoid blocking the event loop
         now = _t.perf_counter()
         if now - self._last_repaint >= self._REPAINT_INTERVAL_S:
             self._last_repaint = now
@@ -52,56 +187,29 @@ class NetworkCanvas(QWidget):
         g = self._genome
         if not g:
             return {}
-
-        positions: dict[int, QPointF] = {}
-        pad = _NODE_R + 14
         inputs  = g.input_nodes
         outputs = g.output_nodes
         hidden  = [n for n in g.nodes if n.type == NodeType.HIDDEN]
+        raw = _force_layout(g.nodes, inputs, outputs, hidden, w, h)
+        return {k: QPointF(v[0], v[1]) for k, v in raw.items()}
 
-        def col_x(frac):
-            return pad + frac * (w - 2 * pad)
+    # ------------------------------------------------------------------
 
-        def spread_y(idx, total):
-            if total == 1:
-                return h / 2
-            return pad + (h - 2 * pad) * idx / (total - 1)
-
-        for i, n in enumerate(inputs):
-            positions[id(n)] = QPointF(col_x(0.08), spread_y(i, len(inputs)))
-
-        for i, n in enumerate(outputs):
-            positions[id(n)] = QPointF(col_x(0.92), spread_y(i, len(outputs)))
-
-        if hidden:
-            cols = max(1, math.ceil(math.sqrt(len(hidden))))
-            rows = math.ceil(len(hidden) / cols)
-            x_start = col_x(0.35)
-            x_step  = col_x(0.30) / max(cols, 1)
-            y_step  = (h - 2 * pad) / max(rows, 1)
-            for i, n in enumerate(hidden):
-                c, r = i % cols, i // cols
-                positions[id(n)] = QPointF(
-                    x_start + x_step * (c + 0.5),
-                    pad + y_step * (r + 0.5),
-                )
-
-        return positions
-
-    def _arrow_head(self, painter: QPainter, src: QPointF, dst: QPointF, color: QColor) -> None:
+    def _arrow_head(self, painter: QPainter, src: QPointF, dst: QPointF,
+                    color: QColor, size: int = 7) -> None:
         dx, dy = dst.x() - src.x(), dst.y() - src.y()
         length = math.hypot(dx, dy)
         if length < 1:
             return
         ux, uy = dx / length, dy / length
-        # move tip to node border
         tx = dst.x() - ux * (_NODE_R + 2)
         ty = dst.y() - uy * (_NODE_R + 2)
-        size = 7
         path = QPainterPath()
         path.moveTo(tx, ty)
-        path.lineTo(tx - ux * size - uy * size * 0.4, ty - uy * size + ux * size * 0.4)
-        path.lineTo(tx - ux * size + uy * size * 0.4, ty - uy * size - ux * size * 0.4)
+        path.lineTo(tx - ux * size - uy * size * 0.45,
+                    ty - uy * size + ux * size * 0.45)
+        path.lineTo(tx - ux * size + uy * size * 0.45,
+                    ty - uy * size - ux * size * 0.45)
         path.closeSubpath()
         painter.setBrush(color)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -115,22 +223,23 @@ class NetworkCanvas(QWidget):
 
             if not self._genome or not self._genome.nodes:
                 painter.setPen(_C_TEXT)
-                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No genome loaded")
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                                 "No genome loaded")
                 return
 
             w, h = self.width(), self.height()
             if not self._pos_cache or self._cached_size != (w, h):
-                self._pos_cache = self._positions(w, h)
+                self._pos_cache  = self._positions(w, h)
                 self._cached_size = (w, h)
             pos = self._pos_cache
 
             from yane.core.node import NodeType
 
-            # Connections — reuse a single QColor/QPen per connection (avoid per-conn alloc)
+            # --- Connections ---
             _conn_color = QColor()
             _pr, _pg, _pb = _C_POS_CONN.red(), _C_POS_CONN.green(), _C_POS_CONN.blue()
             _nr, _ng, _nb = _C_NEG_CONN.red(), _C_NEG_CONN.green(), _C_NEG_CONN.blue()
-            _pen = QPen(_conn_color, 1.5)
+            _pen = QPen(_conn_color, 1.0)
 
             for node in self._genome.nodes:
                 src = pos.get(id(node))
@@ -141,43 +250,77 @@ class NetworkCanvas(QWidget):
                     if dst is None:
                         continue
 
-                    alpha = min(230, max(40, int(abs(conn.weight) * 160 + 40)))
+                    # Alpha and width both scale with |weight|
+                    w_abs  = abs(conn.weight)
+                    alpha  = min(220, max(35, int(w_abs * 150 + 35)))
+                    lwidth = min(3.5, max(0.8, w_abs * 1.8))
+
                     if conn.weight >= 0:
                         _conn_color.setRgb(_pr, _pg, _pb, alpha)
                     else:
                         _conn_color.setRgb(_nr, _ng, _nb, alpha)
+
                     _pen.setColor(_conn_color)
+                    _pen.setWidthF(lwidth)
                     painter.setPen(_pen)
 
                     if conn.target is node:
-                        loop_rect = QRectF(src.x(), src.y() - _NODE_R * 2.8, _NODE_R * 2, _NODE_R * 2)
+                        # Self-loop: small arc above the node
+                        r = _NODE_R * 1.6
+                        loop_rect = QRectF(
+                            src.x() - r * 0.5,
+                            src.y() - _NODE_R - r * 1.8,
+                            r, r,
+                        )
                         painter.drawArc(loop_rect, 0, 360 * 16)
                     else:
                         painter.drawLine(src, dst)
-                        self._arrow_head(painter, src, dst, _conn_color)
+                        self._arrow_head(painter, src, dst, _conn_color,
+                                         size=max(5, int(5 + lwidth)))
 
-            # Nodes
-            font = QFont(); font.setPointSize(7)
+            # --- Nodes ---
+            font = QFont()
+            font.setPointSize(7)
+            font.setBold(True)
             painter.setFont(font)
 
             for node in self._genome.nodes:
                 p = pos.get(id(node))
                 if p is None:
                     continue
-                color = (_C_INPUT if node.type == NodeType.INPUT
-                         else _C_OUTPUT if node.type == NodeType.OUTPUT
-                         else _C_HIDDEN)
+
+                color = (_C_INPUT  if node.type == NodeType.INPUT  else
+                         _C_OUTPUT if node.type == NodeType.OUTPUT else
+                         _C_HIDDEN)
+
+                # Glow: faint larger circle underneath
+                glow = QColor(color)
+                glow.setAlpha(40)
+                painter.setBrush(QBrush(glow))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(
+                    QRectF(p.x() - _NODE_R - 3, p.y() - _NODE_R - 3,
+                           (_NODE_R + 3) * 2, (_NODE_R + 3) * 2)
+                )
+
+                # Main circle
                 painter.setBrush(QBrush(color))
                 painter.setPen(QPen(_C_BORDER, 1.5))
-                painter.drawEllipse(QRectF(p.x() - _NODE_R, p.y() - _NODE_R, _NODE_R * 2, _NODE_R * 2))
+                painter.drawEllipse(
+                    QRectF(p.x() - _NODE_R, p.y() - _NODE_R,
+                           _NODE_R * 2, _NODE_R * 2)
+                )
 
+                # Activation label
                 label = node.activation.value[0].upper()
                 painter.setPen(_C_BG)
                 painter.drawText(
-                    QRectF(p.x() - _NODE_R, p.y() - _NODE_R, _NODE_R * 2, _NODE_R * 2),
+                    QRectF(p.x() - _NODE_R, p.y() - _NODE_R,
+                           _NODE_R * 2, _NODE_R * 2),
                     Qt.AlignmentFlag.AlignCenter,
                     label,
                 )
+
         finally:
             painter.end()
 
@@ -188,32 +331,38 @@ class NetworkCanvas(QWidget):
 # ---------------------------------------------------------------------------
 
 class FitnessChart(QWidget):
-    """Simple scrolling line chart for fitness history."""
+    """Scrolling line chart for fitness history with best-so-far line."""
 
-    _MAX_POINTS = 300
+    _MAX_POINTS = 400
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._history: list[float] = []
+        self._best_history: list[float] = []
         self._lo: float = 0.0
         self._hi: float = 0.0
         self.setMinimumHeight(110)
 
     def add_point(self, fitness: float) -> None:
         self._history.append(fitness)
-        trimmed = len(self._history) > self._MAX_POINTS
-        if trimmed:
-            self._history = self._history[-self._MAX_POINTS:]
-            self._lo, self._hi = min(self._history), max(self._history)
+        best_so_far = (max(self._best_history[-1] if self._best_history else fitness,
+                           fitness))
+        self._best_history.append(best_so_far)
+
+        if len(self._history) > self._MAX_POINTS:
+            self._history     = self._history[-self._MAX_POINTS:]
+            self._best_history = self._best_history[-self._MAX_POINTS:]
+            self._lo, self._hi = min(self._history), max(self._best_history)
         elif len(self._history) == 1:
             self._lo = self._hi = fitness
         else:
             self._lo = min(self._lo, fitness)
-            self._hi = max(self._hi, fitness)
+            self._hi = max(self._hi, best_so_far)
         self.update()
 
     def clear(self) -> None:
         self._history.clear()
+        self._best_history.clear()
         self._lo = self._hi = 0.0
         self.update()
 
@@ -229,9 +378,9 @@ class FitnessChart(QWidget):
         painter.fillRect(self.rect(), _C_BG)
 
         w, h = self.width(), self.height()
-        pad_l, pad_r, pad_t, pad_b = 42, 8, 8, 20
+        pad_l, pad_r, pad_t, pad_b = 48, 10, 10, 22
 
-        # Grid
+        # Grid lines
         painter.setPen(QPen(_C_GRID, 1))
         for i in range(4):
             y = pad_t + (h - pad_t - pad_b) * i / 3
@@ -241,31 +390,47 @@ class FitnessChart(QWidget):
             painter.setPen(_C_TEXT)
             font = QFont(); font.setPointSize(8)
             painter.setFont(font)
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for data…")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                             "Waiting for data…")
             return
 
-        vals = self._history
         lo, hi = self._lo, self._hi
         if lo == hi:
             hi = lo + 1e-6
 
+        n = len(self._history)
+
         def px(i: int) -> float:
-            return pad_l + (w - pad_l - pad_r) * i / (len(vals) - 1)
+            return pad_l + (w - pad_l - pad_r) * i / (n - 1)
 
         def py(v: float) -> float:
             return h - pad_b - (h - pad_t - pad_b) * (v - lo) / (hi - lo)
 
-        # Line
-        pen = QPen(_C_CHART, 2)
-        painter.setPen(pen)
-        for i in range(1, len(vals)):
-            painter.drawLine(int(px(i - 1)), int(py(vals[i - 1])), int(px(i)), int(py(vals[i])))
+        # Current-fitness line (thin, dimmed)
+        pen_cur = QPen(QColor("#4CAF5088"), 1)
+        painter.setPen(pen_cur)
+        for i in range(1, n):
+            painter.drawLine(int(px(i - 1)), int(py(self._history[i - 1])),
+                             int(px(i)),     int(py(self._history[i])))
+
+        # Best-so-far line (bright)
+        pen_best = QPen(_C_CHART, 2)
+        painter.setPen(pen_best)
+        for i in range(1, len(self._best_history)):
+            painter.drawLine(int(px(i - 1)), int(py(self._best_history[i - 1])),
+                             int(px(i)),     int(py(self._best_history[i])))
 
         # Axis labels
         font = QFont(); font.setPointSize(7)
         painter.setFont(font)
         painter.setPen(_C_TEXT)
-        painter.drawText(2, pad_t + 10, f"{hi:.3f}")
-        painter.drawText(2, h - pad_b, f"{lo:.3f}")
-        painter.drawText(pad_l, h - 4, "0")
-        painter.drawText(w - pad_r - 20, h - 4, f"{len(vals)}")
+        painter.drawText(2, pad_t + 10, f"{hi:.3g}")
+        painter.drawText(2, h - pad_b,  f"{lo:.3g}")
+        painter.drawText(pad_l,         h - 5, "0")
+        painter.drawText(w - pad_r - 26, h - 5, str(n))
+
+        # Legend
+        painter.setPen(QPen(_C_CHART, 2))
+        painter.drawLine(w - 90, pad_t + 8, w - 70, pad_t + 8)
+        painter.setPen(_C_TEXT)
+        painter.drawText(w - 66, pad_t + 12, "best")
