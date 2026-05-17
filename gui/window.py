@@ -649,7 +649,17 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Max nodes:",      self.spin_nodes)
         cfg_form.addRow("Max connections:", self.spin_conns)
         cfg_form.addRow("Population:",     self.spin_pop)
-        cfg_form.addRow("Workers:",        self.spin_workers)
+        workers_row = QWidget()
+        workers_lay = QHBoxLayout(workers_row)
+        workers_lay.setContentsMargins(0, 0, 0, 0)
+        workers_lay.addWidget(self.spin_workers)
+        self.lbl_workers_active = _label("", "mutRate")
+        self.lbl_workers_active.setToolTip(
+            "Tatsächlich genutzte Worker-Anzahl während des Trainings.\n"
+            "Wird beim Start automatisch bestimmt (Auto-Modus)\n"
+            "oder entspricht dem manuell gewählten Wert.")
+        workers_lay.addWidget(self.lbl_workers_active)
+        cfg_form.addRow("Workers:", workers_row)
         cfg_form.addRow("Zielarten:",      self.spin_species)
         cfg_form.addRow("Lamarck steps:",  self.spin_lamarck)
         cfg_form.addRow("Normalisierung:", self.chk_normalize)
@@ -886,6 +896,7 @@ class TrainingTab(QWidget):
         worker.iteration_done.connect(self._on_iteration)
         worker.error_occurred.connect(self._on_error)
         worker.info_message.connect(self.status_lbl.setText)
+        worker.workers_resolved.connect(self._on_workers_resolved)
         worker.finished.connect(lambda: self._on_finished(run_id))
         if self._episode_runner and self._episode_runner.isRunning():
             self._episode_runner.stop()
@@ -901,6 +912,7 @@ class TrainingTab(QWidget):
         self.species_chart.clear()
         self._start_time = _time.perf_counter()
         self._last_heavy_update = 0.0
+        self.lbl_workers_active.setText("")   # cleared until workers_resolved fires
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
         self.btn_stop.setEnabled(True)
@@ -928,6 +940,12 @@ class TrainingTab(QWidget):
         else:
             self._reset_training_buttons()
             self.status_lbl.setText("Stopped")
+
+    def _on_workers_resolved(self, n: int) -> None:
+        if n <= 1:
+            self.lbl_workers_active.setText("→ sequenziell")
+        else:
+            self.lbl_workers_active.setText(f"→ {n} Prozesse")
 
     def _on_iteration(self, iteration: int, fitness: float, best_genome, mem: dict) -> None:
         elapsed = _time.perf_counter() - self._start_time

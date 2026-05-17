@@ -59,9 +59,10 @@ class TrainingWorker(QThread):
     threads provide real concurrency for LunarLander, BipedalWalker, CarRacing.
     """
 
-    iteration_done = Signal(int, float, object, dict)
-    error_occurred = Signal(str)
-    info_message   = Signal(str)   # non-fatal status update (e.g. MP fallback)
+    iteration_done   = Signal(int, float, object, dict)
+    error_occurred   = Signal(str)
+    info_message     = Signal(str)   # non-fatal status update (e.g. MP fallback)
+    workers_resolved = Signal(int)   # actual worker count chosen (0 = sequential)
 
     def __init__(
         self,
@@ -93,8 +94,10 @@ class TrainingWorker(QThread):
             # Auto: let _run_multiprocess measure eval speed and choose
             self._run_multiprocess(mp.cpu_count(), last_emit, auto=True)
         elif n_workers > 1:
+            self.workers_resolved.emit(n_workers)
             self._run_multiprocess(n_workers, last_emit, auto=False)
         else:
+            self.workers_resolved.emit(1)
             self._run_sequential(last_emit)
 
     def _run_sequential(self, last_emit: float) -> None:
@@ -230,25 +233,30 @@ class TrainingWorker(QThread):
 
         if auto:
             if chosen <= 1:
+                self.workers_resolved.emit(1)
                 self.info_message.emit(
-                    f"Auto-Worker: sequenziell ({eval_ms:.2f}ms/Genome, "
-                    f"MP-Overhead würde dominieren)"
+                    f"Auto → 1 Worker (sequenziell): {eval_ms:.2f}ms/Genome, "
+                    f"MP-Overhead würde dominieren"
                 )
                 self._run_sequential(0.0)
                 return
             else:
-                self.info_message.emit(
-                    f"Auto-Worker: {chosen} Prozesse gewählt "
-                    f"({eval_ms:.1f}ms/Genome, {_mp.cpu_count()} CPUs verfügbar)"
-                )
                 n_workers = chosen
+                self.workers_resolved.emit(n_workers)
+                self.info_message.emit(
+                    f"Auto → {n_workers} Worker "
+                    f"({eval_ms:.1f}ms/Genome, {mp.cpu_count()} CPUs)"
+                )
         elif eval_ms < _MP_MIN_MS:
+            self.workers_resolved.emit(1)
             self.info_message.emit(
                 f"MP-Overhead > Nutzen ({eval_ms:.1f}ms/Genome < {_MP_MIN_MS:.0f}ms Schwelle) "
                 f"— Training läuft sequenziell."
             )
             self._run_sequential(0.0)
             return
+        else:
+            self.workers_resolved.emit(n_workers)
 
         # Worker processes inherit make_eval_fn via fork; initializer creates
         # the actual evaluator (e.g. opens a gym environment) once per process.
