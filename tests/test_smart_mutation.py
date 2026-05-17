@@ -178,5 +178,77 @@ class TestRemoveConnection(unittest.TestCase):
         self.assertEqual(g.connection_count, 0)
 
 
+class TestAddNodeSplitCorrectness(unittest.TestCase):
+
+    def test_add_node_preserves_output_value(self):
+        """A→B (weight w) becomes A→N→B. Output must be identical immediately after split."""
+        from yane import NeuroEvolution
+        from yane.core.connection import Connection
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+
+        c = Connection(g.output_nodes[0]); c.weight = 0.7
+        g.input_nodes[0].connections.append(c)
+        g._invalidate_topology()
+
+        data = [0.8, 0.3]
+        out_before = g.forward(data)[0]
+
+        smart_mutation.add_node(g, yane._tracker)
+        out_after = g.forward(data)[0]
+
+        self.assertAlmostEqual(out_before, out_after, places=5,
+            msg="add_node must preserve network output immediately after the split")
+
+    def test_consecutive_add_node_stays_valid(self):
+        """Multiple consecutive add_node calls must produce a forward-passable network."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+        from yane.core.connection import Connection
+        g.input_nodes[0].connections.append(Connection(g.output_nodes[0]))
+        g._invalidate_topology()
+
+        for _ in range(8):
+            smart_mutation.add_node(g, yane._tracker)
+
+        result = g.forward([0.5, 0.5])
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0] != result[0], "After 8 splits, output must not be NaN")
+
+    def test_remove_node_bypass_weight_product(self):
+        """Bypass weight must equal w_in × w_out when both weights are exact."""
+        from yane import NeuroEvolution
+        from yane.core.connection import Connection
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+
+        # Build A→N→B manually with known weights
+        from yane.core.node import Node, NodeType
+        n = Node(NodeType.HIDDEN, innovation=yane._tracker.next())
+        g.nodes.append(n)
+        c_in  = Connection(n);                  c_in.weight  = 2.0
+        c_out = Connection(g.output_nodes[0]);  c_out.weight = 3.0
+        g.input_nodes[0].connections.append(c_in)
+        n.connections.append(c_out)
+        g._invalidate_topology()
+
+        g.bypass_connection_prob = 1.0   # always create bypass
+        smart_mutation.remove_node(g, yane._tracker)
+
+        # Find bypass connection from input[0] to output[0]
+        bypass = next(
+            (c for c in g.input_nodes[0].connections
+             if c.target is g.output_nodes[0]),
+            None,
+        )
+        self.assertIsNotNone(bypass, "Bypass connection must be created")
+        self.assertAlmostEqual(bypass.weight, 2.0 * 3.0, places=6,
+            msg="Bypass weight must equal w_in × w_out = 6.0")
+
+
 if __name__ == "__main__":
     unittest.main()

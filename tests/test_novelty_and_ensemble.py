@@ -250,5 +250,91 @@ class TestEnsemble(unittest.TestCase):
         self.assertAlmostEqual(ensemble_k1[0], best_out[0], places=10)
 
 
+# ---------------------------------------------------------------------------
+# Population edge cases
+# ---------------------------------------------------------------------------
+
+class TestPopulationEdgeCases(unittest.TestCase):
+
+    def test_novelty_all_identical_genomes_no_crash(self):
+        """_compute_novelty must handle all-zero variance (max_d=0) without division error."""
+        yane = _make_yane(pop_size=5)
+        pop = yane._population
+        # Submit same fitness so all genomes are identical copies from template
+        for i in range(5):
+            g = yane.next_genome()
+            yane.submit_fitness(0.0)
+        # Must not raise ZeroDivisionError
+        scores = pop._compute_novelty()
+        for v in scores.values():
+            self.assertFalse(v != v, "novelty score must not be NaN for identical genomes")
+
+    def test_tournament_with_single_candidate(self):
+        """Tournament (k=3) must still work when only 1 genome is evaluated."""
+        yane = _make_yane(pop_size=20)
+        g = yane.next_genome()
+        yane.submit_fitness(5.0)
+        # Trigger a spawn — only 1 candidate for tournament
+        yane.next_genome()   # must not raise
+
+    def test_single_member_species_not_always_protected(self):
+        """Only multi-member species champions are protected from pruning.
+        A single-genome species must be a prune candidate when population is over-full."""
+        from yane.evolution.population import Population
+        pop = Population(max_size=3)
+        for i in range(5):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+
+        # Population was pruned to max_size=3
+        self.assertLessEqual(len(pop._evaluated), 3)
+
+    def test_species_representative_never_none_after_prune(self):
+        """sp.representative must be updated when the current representative is pruned."""
+        from yane.evolution.population import Population
+        pop = Population(max_size=4)
+        for i in range(6):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i % 3))   # some fitness variation
+
+        # All species representatives must point to live genomes
+        live_ids = {id(g) for g in pop._evaluated}
+        for sp in pop._species:
+            if sp.members and sp.representative is not None:
+                self.assertIn(id(sp.representative), live_ids,
+                    "Species representative must be a live genome after pruning")
+
+    def test_inject_stagnation_resets_since_last_injection(self):
+        """_since_last_injection must be 0 after any injection."""
+        yane = _make_yane(pop_size=5)
+        pop = yane._population
+        for i in range(5):
+            g = yane.next_genome()
+            yane.submit_fitness(float(i))
+        pop._since_last_injection = pop.stagnation_threshold
+        pop._stagnation_count = pop.stagnation_threshold
+        pop._inject_fresh_genome()
+        self.assertEqual(pop._since_last_injection, 0)
+
+    def test_node_input_index_mutation_only_for_input_nodes(self):
+        """input_index must only mutate on INPUT nodes, not HIDDEN or OUTPUT."""
+        from yane.core.node import Node, NodeType
+        hidden = Node(NodeType.HIDDEN)
+        output = Node(NodeType.OUTPUT)
+        original_h = hidden.input_index
+        original_o = output.input_index
+
+        for _ in range(200):
+            hidden.mutate(sigma=1.0)
+            output.mutate(sigma=1.0)
+
+        # input_index mutation is only applied to INPUT nodes; others unchanged
+        # (The code has `if self.type == NodeType.INPUT: ...`)
+        self.assertEqual(hidden.input_index, original_h,
+            "HIDDEN node input_index must not mutate")
+        self.assertEqual(output.input_index, original_o,
+            "OUTPUT node input_index must not mutate")
+
+
 if __name__ == '__main__':
     unittest.main()

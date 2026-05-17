@@ -79,5 +79,41 @@ class TestConnectionBasics(unittest.TestCase):
         self.assertIsNone(ref(), "Connection must be freed when removed from node.connections")
 
 
+class TestConnectionNumerics(unittest.TestCase):
+
+    def test_weight_stays_finite_after_many_mutations(self):
+        """Weights must remain finite even after thousands of mutations with large sigma."""
+        n = _node()
+        c = Connection(n)
+        for _ in range(2000):
+            c.weight = c.mutation.mutate_value(c.weight, sigma=10.0)
+            c.mutation.mutate_rates()
+        self.assertFalse(c.weight != c.weight, "weight became NaN after many mutations")
+        self.assertFalse(abs(c.weight) == float('inf'), "weight became Inf after many mutations")
+
+    def test_mutation_rate_stays_above_minimum(self):
+        """mutate_rates must never push any rate below MIN_RATE."""
+        from yane.evolution.mutation import Mutation
+        m = Mutation()
+        for _ in range(5000):
+            m.mutate_rates()
+        self.assertGreaterEqual(m.shift_rate,        Mutation.MIN_RATE)
+        self.assertGreaterEqual(m.custom_rate,       Mutation.MIN_RATE)
+        self.assertGreaterEqual(m.bool_rate,         Mutation.MIN_RATE)
+        self.assertGreaterEqual(m.int_rate,          Mutation.MIN_RATE)
+        self.assertGreaterEqual(m.rate_mutation_rate, Mutation.MIN_RATE)
+        self.assertGreater(m.value_delta, 0.0)
+
+    def test_mutation_rate_stays_below_maximum(self):
+        """mutate_rates must never push any rate above 0.999."""
+        from yane.evolution.mutation import Mutation
+        m = Mutation()
+        m.shift_rate = m.custom_rate = m.bool_rate = m.int_rate = 0.99
+        for _ in range(1000):
+            m.mutate_rates()
+        self.assertLessEqual(m.shift_rate,  0.999)
+        self.assertLessEqual(m.custom_rate, 0.999)
+
+
 if __name__ == "__main__":
     unittest.main()

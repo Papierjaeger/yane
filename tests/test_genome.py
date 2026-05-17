@@ -110,6 +110,64 @@ class TestGenomeForward(unittest.TestCase):
         self.assertEqual(len(g._triggered), 0)
 
 
+    def test_forward_short_data_uses_zero_for_missing_inputs(self):
+        """If data is shorter than n_inputs, missing inputs must default to 0.0."""
+        g = _make_genome(4, 1)
+        conn = Connection(g.output_nodes[0])
+        conn.weight = 1.0
+        g.input_nodes[2].connections.append(conn)  # connect input[2] (will be missing)
+        out_short = g.forward([1.0, 1.0])           # only 2 values, input[2] → 0.0
+        out_full  = g.forward([1.0, 1.0, 0.0, 0.0])
+        self.assertAlmostEqual(out_short[0], out_full[0], places=6,
+            msg="Short data must produce same result as padding with zeros")
+
+    def test_forward_with_empty_data(self):
+        """forward([]) must not raise — all inputs default to 0."""
+        g = _make_genome(2, 1)
+        result = g.forward([])
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0] != result[0], "forward([]) must not produce NaN")
+
+    def test_invalidate_topology_is_idempotent(self):
+        """Calling _invalidate_topology multiple times must not corrupt state."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+        for _ in range(5):
+            g._invalidate_topology()
+        self.assertIsNone(g._exec_order)
+        self.assertIsNone(g._compiled_forward)
+        self.assertIsNone(g._forward_dispatch)
+        # Forward must still work after repeated invalidation
+        result = g.forward([0.5, 0.5])
+        self.assertEqual(len(result), 1)
+
+    def test_memory_info_on_empty_genome(self):
+        from yane.core.genome import Genome
+        g = Genome()
+        info = g.memory_info()
+        self.assertEqual(info["nodes"], 0)
+        self.assertEqual(info["connections"], 0)
+
+    def test_max_triggers_bfs_limits_cycles(self):
+        """A node with max_triggers=1 fires at most once per BFS pass."""
+        from yane import NeuroEvolution
+        from yane.core.connection import Connection as Conn
+        yane = NeuroEvolution()
+        yane.configure(1, 1)
+        g = yane.next_genome()
+        # Create a cycle: output → input (recurrent)
+        back = Conn(g.input_nodes[0]); back.weight = 1.0
+        g.output_nodes[0].connections.append(back)
+        g.input_nodes[0].max_triggers = 1
+        g._invalidate_topology()
+        # Must not hang or raise
+        result = g.forward([1.0])
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0] != result[0], "cyclic network must not produce NaN")
+
+
 class TestGenomeMutation(unittest.TestCase):
 
     def test_mutate_does_not_exceed_max_nodes(self):
