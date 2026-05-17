@@ -63,7 +63,7 @@ def _make_discrete_action_eval(
             done = False
             total = 0.0
             while not done:
-                out = genome.forward(list(state))
+                out = genome.forward(state)
                 action = int(np.argmax(out))
                 state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
@@ -99,7 +99,7 @@ def _make_continuous_action_eval(
             total = 0.0
             done = False
             while not done:
-                raw = genome.forward(list(state))
+                raw = genome.forward(state)
                 action = [r * 2.0 - 1.0 for r in raw[:n_outputs]]
                 state, reward, terminated, truncated, _ = env.step(action)
                 total += reward
@@ -184,7 +184,7 @@ def _make_acrobot_eval(max_steps: int = 500):
             solved = False
             done = False
             while not done:
-                out = genome.forward(list(state))
+                out = genome.forward(state)
                 action = int(np.argmax(out))
                 state, reward, terminated, truncated, _ = env.step(action)
                 # tip height = -cos(θ1) - cos(θ1+θ2) ∈ [-2, 2]
@@ -223,7 +223,7 @@ def _make_mountaincar_discrete_eval(max_train_steps: int = 200):
             max_pos = state[0]
             solved = False
             for _ in range(200):
-                out = genome.forward(list(state))
+                out = genome.forward(state)
                 action = int(np.argmax(out))
                 state, reward, terminated, truncated, _ = env.step(action)
                 pos = state[0]
@@ -256,7 +256,7 @@ def _make_pendulum_eval(max_train_steps: int = 500):
             total = 0.0
             episode_cap = 200 if demo else max_train_steps
             for _ in range(episode_cap):
-                raw = genome.forward(list(state))
+                raw = genome.forward(state)
                 # sigmoid output [0,1] → action in [-2, 2]
                 action = [raw[0] * 4.0 - 2.0]
                 state, reward, terminated, truncated, _ = env.step(action)
@@ -285,7 +285,7 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
             solved = False
             episode_cap = 100_000 if demo else max_train_steps
             for _ in range(episode_cap):
-                raw = genome.forward(list(state))
+                raw = genome.forward(state)
                 # sigmoid [0,1] → action in [-1, 1] so genome can push both ways
                 action = [raw[0] * 2.0 - 1.0]
                 state, reward, terminated, truncated, _ = env.step(action)
