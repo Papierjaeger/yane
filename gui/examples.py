@@ -18,6 +18,7 @@ _XOR_DATA = [
 
 
 def _xor_eval(genome: Genome) -> float:
+    genome.reset()
     fitness = 0.0
     for inputs, target in _XOR_DATA:
         out = genome.forward(inputs)
@@ -83,7 +84,7 @@ def _make_discrete_action_eval(
         _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
-            state, _ = env.reset()
+            state, _ = env.reset(); genome.reset()
             done = False
             total = 0.0
             while not done:
@@ -120,7 +121,7 @@ def _make_continuous_action_eval(
         _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
-            state, _ = env.reset()
+            state, _ = env.reset(); genome.reset()
             total = 0.0
             done = False
             while not done:
@@ -158,7 +159,7 @@ def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
         _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
-            obs, _ = env.reset()
+            obs, _ = env.reset(); genome.reset()
             total = 0.0
             done = False
             steps = 0
@@ -206,7 +207,7 @@ def _make_acrobot_eval(max_steps: int = 500):
         _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
-            state, _ = env.reset()
+            state, _ = env.reset(); genome.reset()
             max_tip = -2.0
             solved = False
             done = False
@@ -247,7 +248,7 @@ def _make_mountaincar_discrete_eval(max_train_steps: int = 200):
         _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
-            state, _ = env.reset()
+            state, _ = env.reset(); genome.reset()
             max_pos = state[0]
             solved = False
             for _ in range(200):
@@ -281,7 +282,7 @@ def _make_pendulum_eval(max_train_steps: int = 500):
         _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
-            state, _ = env.reset()
+            state, _ = env.reset(); genome.reset()
             total = 0.0
             episode_cap = 200 if demo else max_train_steps
             for _ in range(episode_cap):
@@ -310,7 +311,7 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
         _hooks = _make_step_hooks(step_callback, render_callback)
 
         def evaluate(genome: Genome) -> float:
-            state, _ = env.reset()
+            state, _ = env.reset(); genome.reset()
             max_pos = state[0]
             solved = False
             episode_cap = 100_000 if demo else max_train_steps

@@ -106,10 +106,15 @@ class Genome:
         return [node.value for node in self.output_nodes]
 
     def reset(self) -> None:
+        """Reset all node values for a new episode — clears persistent memory too.
+
+        Call this after env.reset() so hidden memory nodes start fresh.
+        Between steps within an episode, use forward() which preserves
+        persistent hidden node values across calls.
+        """
         self._triggered.clear()
         for node in self.nodes:
-            if not node.persist_value:
-                node.value = 0.0
+            node.value = 0.0
 
     # -------------------------------------------------------------------------
     # Forward mode (full pass with cycle protection)
@@ -118,15 +123,18 @@ class Genome:
     def _compile_forward(self):
         """Build a closure that captures node lists so forward() makes zero attribute lookups.
 
-        Input nodes that are trivial (LINEAR activation, zero bias, non-persistent)
-        are inlined: their value is pushed directly to targets without going through
-        fire_simple(), saving a function call per input per step.
+        Between-step reset strategy:
+        - Output nodes: zeroed every step (fresh accumulation).
+        - Non-persistent hidden nodes: zeroed by fire_simple() after firing.
+        - Persistent hidden nodes (memory nodes): NOT zeroed — they carry their
+          activated value to the next step, enabling recurrent memory.
+        - Input nodes: overwritten by data, never need explicit reset.
+
+        Call genome.reset() at episode start to clear ALL values including memory.
         """
         from yane.util.activation import ActivationType
-        reset_nodes = [
-            n for n in self.nodes
-            if n.persist_value and n not in self.input_nodes
-        ]
+        from yane.core.node import NodeType as _NT
+        reset_nodes = [n for n in self.output_nodes]   # only output nodes reset per step
         self._reset_nodes = reset_nodes
         exec_order = self._exec_order
         output_nodes = self.output_nodes
@@ -217,10 +225,20 @@ class Genome:
         return order
 
     def _bfs_forward(self, data: list[float]) -> list[float]:
-        """Slow path: BFS with cycle protection for recurrent networks."""
+        """Slow path: BFS with cycle protection for recurrent networks.
+
+        Only output nodes are zeroed per step; persistent hidden nodes
+        keep their value from the previous call (memory).
+        """
+        from yane.core.node import NodeType as _NT
         self._triggered.clear()
         for node in self.nodes:
-            node.value = 0.0
+            # Persistent hidden nodes keep value (memory between steps).
+            # Output nodes reset (fresh accumulation). Non-persistent nodes
+            # are zeroed by fire() after firing, but we zero them here too
+            # in case they receive no signal this step.
+            if not (node.persist_value and node.type == _NT.HIDDEN):
+                node.value = 0.0
         self.set_inputs(data)
 
         trigger_counts: dict[Node, int] = {}
