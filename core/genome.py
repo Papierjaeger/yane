@@ -63,7 +63,8 @@ class Genome:
         # population discovers good values without any external tuning.
 
         # Probability this genome reproduces via crossover (vs. pure mutation)
-        self.crossover_prob: float = 0.3
+        # Original NEAT uses 0.75; higher crossover combines good features faster.
+        self.crossover_prob: float = 0.6
         self.mutation_crossover = Mutation()
 
         # Relative reproduction drive; higher → more likely to be selected

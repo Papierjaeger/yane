@@ -106,8 +106,15 @@ def add_connection(genome, tracker=None) -> None:
     fan_in = sum(1 for n in genome.nodes for c in n.connections if c.target is target)
     fan_in = max(fan_in, 1)
     std = math.sqrt(2.0 / (fan_in + 1))  # Xavier/He init
+    # Sample weight from a bimodal distribution: either clearly positive or
+    # clearly negative (uniform sign, abs value from half-normal). This avoids
+    # near-zero weights that add noise without contributing signal, and gives
+    # equal probability to both helpful directions.
+    magnitude = abs(random.gauss(0.0, std))
+    weight = magnitude if random.random() < 0.5 else -magnitude
+
     conn = Connection(target, innovation=innov)
-    conn.weight = random.gauss(0.0, std)
+    conn.weight = weight
     source.connections.append(conn)
     genome._invalidate_topology()
 

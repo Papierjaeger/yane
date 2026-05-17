@@ -11,12 +11,12 @@ class Mutation:
     MIN_RATE = 0.001
 
     def __init__(self) -> None:
-        self.shift_rate = 0.1
+        self.shift_rate = 0.5    # higher than original 0.1; self-adaptive rates adjust over time
         self.custom_rate = 0.1
         self.bool_rate = 0.1
         self.int_rate = 0.1
-        self.rate_mutation_rate = 0.1
-        self.value_delta = 0.1
+        self.rate_mutation_rate = 0.3   # faster self-adaptation (was 0.1)
+        self.value_delta = 0.3   # moderate step size; fine-tunes via self-adaptation
 
     def mutate_value(self, value: float, sigma: float = 1.0) -> float:
         if random.random() < self.shift_rate:

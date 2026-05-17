@@ -107,14 +107,15 @@ class Population:
 
         # Stagnation tracking — threshold scales automatically with population size.
         self._best_fitness_seen: float = float('-inf')
+        self._last_improvement_connections: int = 0   # connections when fitness last improved
         self._stagnation_count: int = 0   # resets ONLY on fitness improvement
         self._since_last_injection: int = 0  # separate counter for injection pacing
 
         # Adaptive global species threshold (replaces per-genome thresholds).
-        # After each speciation round the threshold is adjusted ±0.05 to push
-        # species count toward target_species.
+        # Step size 0.005 is small relative to the actual δ distribution
+        # ([0, ~0.15] for bootstrap genomes) to avoid oscillation.
         self._target_species: int = target_species
-        self._compat_threshold: float = 0.3
+        self._compat_threshold: float = 0.2
 
         # Novelty search — probe inputs are fixed (seed 42) so behavior descriptors
         # are comparable across the lifetime of the population. No user config needed.
@@ -165,6 +166,7 @@ class Population:
             self._best_fitness_seen = fitness
             self._stagnation_count = 0
             self._since_last_injection = 0
+            self._last_improvement_connections = genome.connection_count
         else:
             self._stagnation_count += 1
             self._since_last_injection += 1
@@ -203,7 +205,7 @@ class Population:
     @property
     def stagnation_threshold(self) -> int:
         """Evaluations without improvement before diversity injection triggers."""
-        return 2 * self.max_size
+        return self.max_size
 
     @property
     def novelty_weight(self) -> float:
@@ -302,24 +304,25 @@ class Population:
             sp.representative = sp.best()
 
         # Adapt threshold so species count converges to target_species.
+        # Step 0.005 keeps adaptation smooth relative to δ range [0, ~0.15].
         n = len(self._species)
         if n > self._target_species:
-            self._compat_threshold = min(1.5, self._compat_threshold + 0.05)
+            self._compat_threshold = min(1.5, self._compat_threshold + 0.005)
         elif n < self._target_species:
-            self._compat_threshold = max(0.05, self._compat_threshold - 0.05)
+            self._compat_threshold = max(0.01, self._compat_threshold - 0.005)
 
     def _compute_shared_fitness(self) -> None:
-        # Parsimony pressure: tiny penalty per node/connection so evolution
-        # prefers compact networks that achieve the same fitness.
-        # Must be small enough not to dominate fitness ranges — for envs like
-        # Acrobot (range [-2, 2]) 0.001 × 18 conns = 0.018 already overwhelms
-        # the fitness signal.
-        _PARSIMONY = 0.0001
+        # No parsimony penalty: even a tiny coefficient causes evolution to
+        # converge to empty/minimal genomes when the fitness signal is weak
+        # (e.g. CartPole baseline fitness ~11 for always-push-left; 0.0001 ×
+        # 4 connections = 0.0004 disadvantage makes connected genomes lose
+        # tournaments against the empty baseline). Compact networks emerge
+        # naturally through remove_connection/remove_node mutations when they
+        # don't improve fitness.
         for sp in self._species:
             n = len(sp.members)
             for genome in sp.members:
-                complexity = len(genome.nodes) + genome.connection_count
-                genome.shared_fitness = (genome.fitness / n) - _PARSIMONY * complexity
+                genome.shared_fitness = genome.fitness / n
 
     # ------------------------------------------------------------------
     # Offspring spawning
@@ -328,32 +331,48 @@ class Population:
     def _inject_fresh_genome(self) -> None:
         """Escape stagnation by injecting a diverse genome.
 
-        Uses three strategies with equal probability:
-        - Heavily mutated best genome (exploit known-good structure + weights)
-        - Template copy with re-randomised weights (same topology, fresh weights)
-        - Heavily mutated template (structural + weight exploration)
-        Fresh weights are critical: mutating from the same initial weights can
-        keep the population in the same attractor basin indefinitely.
+        Four strategies (equal probability):
+        0 - Best genome + forced structural expansion: add 1-3 new connections
+            to the best topology so evolution can explore larger neighbourhoods.
+        1 - Best genome + weight-only mutations (exploit, don't explore structure)
+        2 - Template copy with random connections and re-randomised weights
+        3 - Heavily mutated template (structural + weight exploration)
         """
-        strategy = random.randint(0, 2)
+        from yane.evolution import smart_mutation
+        strategy = random.randint(0, 3)
+
         if strategy == 0 and self._evaluated:
+            # Force-add connections to the best topology to escape structural plateaus.
             base = self.get_best().copy()
-            for _ in range(random.randint(2, 5)):
+            n_add = random.randint(1, 3)
+            for _ in range(n_add):
+                smart_mutation.add_connection(base, self._tracker)
+            for _ in range(random.randint(1, 3)):
                 base.mutate(self._tracker)
+
+        elif strategy == 1 and self._evaluated:
+            # Weight-only exploration of the current best topology.
+            base = self.get_best().copy()
+            sigma = base.sigma_global
+            for node in base.nodes:
+                for conn in node.connections:
+                    conn.weight += random.gauss(0, sigma)
+
+        elif strategy == 2:
+            base = self._template.copy()
+            n_in = len(base.input_nodes)
+            n_out = len(base.output_nodes)
+            for _ in range(random.randint(n_out, min(n_in * n_out, 50))):
+                smart_mutation.add_connection(base, self._tracker)
+            for node in base.nodes:
+                for conn in node.connections:
+                    conn.weight = random.gauss(0, 1.0)
+
         else:
             base = self._template.copy()
-            if strategy == 1:
-                from yane.evolution import smart_mutation
-                n_in = len(base.input_nodes)
-                n_out = len(base.output_nodes)
-                for _ in range(random.randint(n_out, min(n_in * n_out, 50))):
-                    smart_mutation.add_connection(base, self._tracker)
-                for node in base.nodes:
-                    for conn in node.connections:
-                        conn.weight = random.uniform(-1.0, 1.0)
-            else:
-                for _ in range(random.randint(2, 5)):
-                    base.mutate(self._tracker)
+            for _ in range(random.randint(3, 8)):
+                base.mutate(self._tracker)
+
         base.fitness = 0.0
         base.shared_fitness = 0.0
         self._unevaluated.append(base)
