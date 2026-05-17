@@ -75,6 +75,8 @@ class Species:
     def __init__(self, representative: Genome) -> None:
         self.representative = representative
         self.members: list[Genome] = []
+        self.best_fitness_seen: float = float('-inf')
+        self.stagnation_count: int = 0   # spawn-cycles without fitness improvement
 
     def add(self, genome: Genome) -> None:
         self.members.append(genome)
@@ -86,6 +88,17 @@ class Species:
         if not self.members:
             return 0.0
         return sum(g.shared_fitness for g in self.members) / len(self.members)
+
+    def update_stagnation(self) -> None:
+        """Update stagnation counter based on the current best member's fitness."""
+        if not self.members:
+            return
+        current_best = self.best().fitness
+        if current_best > self.best_fitness_seen:
+            self.best_fitness_seen = current_best
+            self.stagnation_count = 0
+        else:
+            self.stagnation_count += 1
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +354,7 @@ class Population:
         self._species = [sp for sp in self._species if sp.members]
         for sp in self._species:
             sp.representative = sp.best()
+            sp.update_stagnation()   # track per-species fitness progress
 
         # Adapt threshold so species count converges to target_species.
         # Step 0.005 keeps adaptation smooth relative to δ range [0, ~0.15].
@@ -508,6 +522,40 @@ class Population:
         novelty = self._novelty_cache
         nw = self.novelty_weight
 
+        # ── Species health: penalise species that lag behind improving others ─
+        # Health is only applied when there is meaningful fitness spread across
+        # species (some are improving, others are not).  When all species are
+        # stuck at the same fitness level (spread < 0.5), no penalty applies —
+        # that would unfairly eliminate structurally diverse intermediate species
+        # that simply need more time (e.g. XOR / binary-increment problems).
+        #
+        # When spread is large:
+        #   health = 0.4 × relative_position + 0.6 × stagnation_score
+        # where relative_position = 0 for worst species, 1 for best
+        # and stagnation_score = 1 - stagnation_count / (3 × average_stagnation)
+        # Best species always health=1.0 (never penalised).
+        _genome_health: dict[int, float] = {}
+        if len(self._species) > 1:
+            best_sp   = max(self._species, key=lambda s: s.best_fitness_seen)
+            all_best  = [sp.best_fitness_seen for sp in self._species]
+            sp_max    = max(all_best)
+            sp_min    = min(all_best)
+            spread    = sp_max - sp_min
+
+            if spread >= 0.5:
+                # Meaningful progress difference → apply health weighting
+                avg_stag = sum(sp.stagnation_count for sp in self._species) / len(self._species)
+                for sp in self._species:
+                    if sp is best_sp:
+                        h = 1.0
+                    else:
+                        rel_pos  = (sp.best_fitness_seen - sp_min) / spread   # [0, 1]
+                        stag_sc  = max(0.0, 1.0 - sp.stagnation_count / max(avg_stag * 3, 1))
+                        h = 0.4 * rel_pos + 0.6 * stag_sc
+                    for g in sp.members:
+                        _genome_health[id(g)] = h
+            # else: spread < 0.5 → all species at similar fitness → no health penalty
+
         # Tournament selection (k=3): pick k random candidates, keep the best.
         # Shift fitness to be non-negative before multiplying by offspring_factor
         # and novelty — multiplying a negative shared_fitness by offspring_factor
@@ -522,6 +570,7 @@ class Population:
                 max(0.0, g.shared_fitness - min_fit + 1e-6)
                 * g.offspring_factor
                 * (1.0 + nw * novelty.get(id(g), 0.0))
+                * _genome_health.get(id(g), 1.0)
             ),
         )
 
