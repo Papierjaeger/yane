@@ -1243,8 +1243,9 @@ class InspectTab(QWidget):
         self.btn_reset_mem = QPushButton("↺  Gedächtnis zurücksetzen")
         self.btn_reset_mem.setEnabled(False)
         self.btn_reset_mem.setToolTip(
-            "Setzt den internen Gedächtniszustand zurück (genome.reset())\n"
-            "Nützlich für Gym-Umgebungen, um das Netz frisch zu testen."
+            "Setzt den internen Zustand zurück (genome.reset()).\n"
+            "Der Forward Pass setzt die aktuelle Sequenz fort — bei\n"
+            "sequenziellen Netzen hier zurücksetzen um neu zu starten."
         )
         self.btn_reset_mem.clicked.connect(self._reset_memory)
         self.btn_run = QPushButton("▶  Forward Pass")
@@ -1331,8 +1332,6 @@ class InspectTab(QWidget):
             example.n_outputs if example else 0,
         )
         self._rebuild_sequence_table()
-        stateful = example.stateful if example else True
-        self.btn_reset_mem.setVisible(stateful)
 
     def reset_genome(self) -> None:
         if self._genome is not None:
@@ -1359,8 +1358,8 @@ class InspectTab(QWidget):
             self._genome._clear()
         self._genome = genome
         self.btn_run.setEnabled(bool(self._input_widgets))
+        self.btn_reset_mem.setEnabled(True)
         stateful = self._example.stateful if self._example else True
-        self.btn_reset_mem.setEnabled(stateful)
         if not stateful and self._test_rows:
             genome.reset()
         for row in self._test_rows:
@@ -1465,9 +1464,7 @@ class InspectTab(QWidget):
             self._memory_labels.append(val_lbl)
 
         n = len(mem_nodes)
-        stateful = self._example.stateful if self._example else True
-        suffix = "" if stateful else "  ·  Auto-Reset"
-        self._memory_group.setTitle(f"Gedächtniszustand  ({n} Knoten){suffix}")
+        self._memory_group.setTitle(f"Gedächtniszustand  ({n} Knoten)")
 
     def _update_memory_display(self) -> None:
         if self._genome is None:
@@ -1592,9 +1589,6 @@ class InspectTab(QWidget):
             return
         inputs = [w.value() for w in self._input_widgets]
         try:
-            stateful = self._example.stateful if self._example else True
-            if not stateful:
-                self._genome.reset()
             outputs = self._genome.forward(inputs)
             for i, lbl in enumerate(self._output_labels):
                 lbl.setText(f"{outputs[i]:.5f}" if i < len(outputs) else "—")
