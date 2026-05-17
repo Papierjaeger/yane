@@ -360,6 +360,8 @@ class NeuroEvolution:
         # the genome, so well-adapted genomes automatically search at the right scale.
         # _lamarck_sigma acts as a multiplier (default 1.0 → pure sigma_global).
         sigma = genome.sigma_global * self._lamarck_sigma
+        if not (0.0 < sigma < 1e6):  # defensive: skip if sigma is inf/nan/zero
+            return
         best_fitness = fitness_fn(genome)
 
         for _ in range(self._lamarck_steps):

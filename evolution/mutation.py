@@ -1,3 +1,4 @@
+import math
 import random
 from functools import lru_cache
 
@@ -9,6 +10,7 @@ def _enum_choices(enum_class) -> list:
 
 class Mutation:
     MIN_RATE = 0.001
+    MAX_DELTA = 100.0  # value_delta cap: prevents multiplicative drift to inf over many generations
 
     def __init__(self) -> None:
         self.shift_rate = 0.5    # higher than original 0.1; self-adaptive rates adjust over time
@@ -20,7 +22,11 @@ class Mutation:
 
     def mutate_value(self, value: float, sigma: float = 1.0) -> float:
         if random.random() < self.shift_rate:
-            return value + random.gauss(0, self.value_delta * sigma)
+            step = self.value_delta * sigma
+            # Guard against inf/nan sigma (e.g. from sigma_global drift or overflow)
+            if not math.isfinite(step) or step <= 0.0:
+                return value
+            return value + random.gauss(0, step)
         return value
 
     def mutate_bool(self, value: bool) -> bool:
@@ -49,7 +55,8 @@ class Mutation:
             self.rate_mutation_rate = max(lo, min(0.999, self.rate_mutation_rate * scale))
 
         if random.random() < self.shift_rate:
-            self.value_delta = max(1e-6, self.value_delta * random.uniform(0.9, 1.1))
+            self.value_delta = max(1e-6, min(self.MAX_DELTA,
+                                             self.value_delta * random.uniform(0.9, 1.1)))
 
     def copy(self) -> 'Mutation':
         m = Mutation()

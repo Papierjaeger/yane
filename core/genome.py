@@ -23,7 +23,7 @@ _STRATEGY_MUTATION_SPECS = (
     ('bypass_connection_prob', 'mutation_bypass',    0.0,  1.0),
     ('crossover_prob',         'mutation_crossover', 0.0,  1.0),
     ('offspring_factor',       'mutation_offspring',  0.01, None),
-    ('sigma_global',           'mutation_sigma',      0.01, None),
+    ('sigma_global',           'mutation_sigma',      0.01, 20.0),
 )
 
 
@@ -88,7 +88,7 @@ class Genome:
         n = len(data)
         for node in self.input_nodes:
             if node.input_index < n:
-                node.value = data[node.input_index]
+                node.value = data[node.input_index] * node.input_scale
                 self._triggered.add(node)
 
     def tick(self) -> None:
@@ -153,12 +153,15 @@ class Genome:
                     node.value = 0.0
                 n = len(data)
                 for node, conns in trivial_inputs:
-                    val = data[node.input_index] if node.input_index < n else 0.0
+                    # node.input_scale is read live (not captured) so mutations take effect
+                    val = (data[node.input_index] * node.input_scale
+                           if node.input_index < n else 0.0)
                     for conn in conns:
                         conn.target.value += conn.weight * val
                     node.value = 0.0   # mirror fire_simple: non-persistent → zero after push
                 for node in general_inputs:
-                    node.value = data[node.input_index] if node.input_index < n else 0.0
+                    node.value = (data[node.input_index] * node.input_scale
+                                  if node.input_index < n else 0.0)
                     node.fire_simple()
                 for node in exec_order:
                     node.fire_simple()
@@ -169,7 +172,8 @@ class Genome:
                     node.value = 0.0
                 n = len(data)
                 for node, conns in trivial_inputs:
-                    val = data[node.input_index] if node.input_index < n else 0.0
+                    val = (data[node.input_index] * node.input_scale
+                           if node.input_index < n else 0.0)
                     for conn in conns:
                         conn.target.value += conn.weight * val
                     node.value = 0.0   # non-persistent → zero after push

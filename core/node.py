@@ -15,11 +15,14 @@ class NodeType(Enum):
 class Node:
     __slots__ = (
         'type', 'value', 'bias', '_activation', '_activate_fn',
-        'persist_value', 'max_triggers', 'input_index', 'connections',
+        'persist_value', 'max_triggers', 'input_index', 'input_scale', 'connections',
         'mutation_bias', 'mutation_activation', 'mutation_persist',
-        'mutation_max_triggers', 'mutation_input_index',
+        'mutation_max_triggers', 'mutation_input_index', 'mutation_input_scale',
         'innovation',
     )
+
+    # Slot-level defaults for __setstate__ (handles genomes serialised before input_scale existed).
+    _SLOT_DEFAULTS: dict = {'innovation': -1, 'input_scale': 1.0}
 
     def __init__(self, node_type: NodeType = NodeType.HIDDEN, innovation: int = -1) -> None:
         self.type = node_type
@@ -31,6 +34,7 @@ class Node:
         self.persist_value: bool = False
         self.max_triggers: int = 3
         self.input_index: int = 0
+        self.input_scale: float = 1.0   # per-input scaling gene — evolves to normalise raw inputs
 
         self.connections: list[Connection] = []
 
@@ -39,13 +43,19 @@ class Node:
         self.mutation_persist = Mutation()
         self.mutation_max_triggers = Mutation()
         self.mutation_input_index = Mutation()
+        self.mutation_input_scale = Mutation()
 
     def __getstate__(self):
         return {slot: getattr(self, slot) for slot in self.__slots__}
 
     def __setstate__(self, state):
         for slot in self.__slots__:
-            object.__setattr__(self, slot, state.get(slot, -1 if slot == 'innovation' else None))
+            default = self._SLOT_DEFAULTS.get(slot)
+            val = state.get(slot, default)
+            # Reconstruct missing Mutation objects (e.g. genomes serialised before this gene existed)
+            if val is None and slot.startswith('mutation_'):
+                val = Mutation()
+            object.__setattr__(self, slot, val)
 
     @property
     def activation(self) -> ActivationType:
@@ -78,6 +88,12 @@ class Node:
 
         if self.type == NodeType.INPUT:
             self.input_index = self.mutation_input_index.mutate_int(self.input_index, 0, 255)
+            # input_scale: multiplicative gene, kept strictly positive.
+            # Allows the network to self-normalise raw input magnitudes without
+            # requiring the user to pre-scale their data.
+            new_scale = self.mutation_input_scale.mutate_value(self.input_scale, sigma)
+            self.input_scale = max(1e-6, new_scale)
+            self.mutation_input_scale.mutate_rates()
 
         for conn in self.connections:
             conn.mutate(sigma)
@@ -95,9 +111,11 @@ class Node:
         n.persist_value = self.persist_value
         n.max_triggers = self.max_triggers
         n.input_index = self.input_index
+        n.input_scale = self.input_scale
         n.mutation_bias = self.mutation_bias.copy()
         n.mutation_activation = self.mutation_activation.copy()
         n.mutation_persist = self.mutation_persist.copy()
         n.mutation_max_triggers = self.mutation_max_triggers.copy()
         n.mutation_input_index = self.mutation_input_index.copy()
+        n.mutation_input_scale = self.mutation_input_scale.copy()
         return n

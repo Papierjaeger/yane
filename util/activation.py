@@ -30,9 +30,21 @@ def _linear(v: float) -> float:     return v
 def _relu(v: float) -> float:       return v if v > 0.0 else 0.0
 def _binary(v: float) -> float:     return 1.0 if v >= 0.5 else 0.0
 def _leaky_relu(v: float) -> float: return v if v > 0.0 else 0.01 * v
-def _abs(v: float) -> float:        return v if v >= 0.0 else -v
-def _square(v: float) -> float:     return v * v
-def _cube(v: float) -> float:       return v * v * v
+_SQUARE_CLIP = 1e4   # input clip for SQUARE: max output = 1e8, prevents inf cascade
+_CUBE_CLIP   = 1e3   # input clip for CUBE:   max output = 1e9
+
+def _abs(v: float) -> float:
+    return v if v >= 0.0 else -v
+
+def _square(v: float) -> float:
+    if v > _SQUARE_CLIP:  return _SQUARE_CLIP * _SQUARE_CLIP
+    if v < -_SQUARE_CLIP: return _SQUARE_CLIP * _SQUARE_CLIP
+    return v * v
+
+def _cube(v: float) -> float:
+    if v > _CUBE_CLIP:  return _CUBE_CLIP * _CUBE_CLIP * _CUBE_CLIP
+    if v < -_CUBE_CLIP: return -(_CUBE_CLIP * _CUBE_CLIP * _CUBE_CLIP)
+    return v * v * v
 
 
 def _gaussian(v: float) -> float:
