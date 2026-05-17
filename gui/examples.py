@@ -18,9 +18,11 @@ _XOR_DATA = [
 
 
 def _xor_eval(genome: Genome) -> float:
-    genome.reset()
+    # Reset before EVERY forward pass so memory nodes can't cheat by
+    # memorising the input sequence instead of learning XOR.
     fitness = 0.0
     for inputs, target in _XOR_DATA:
+        genome.reset()
         out = genome.forward(inputs)
         fitness -= abs(out[0] - target[0])
     return fitness
@@ -353,6 +355,7 @@ class ExampleConfig:
         n_initial_hidden: int = 0,
         supports_render: bool = False,
         test_cases: list[tuple[list[float], list[float]]] | None = None,
+        stateful: bool = True,
     ) -> None:
         self.name = name
         self.description = description
@@ -365,6 +368,12 @@ class ExampleConfig:
         self.n_initial_hidden = n_initial_hidden
         self.supports_render = supports_render
         self.test_cases = test_cases
+        # stateful=True  → memory persists between steps within an episode
+        #                  (genome.reset() only called at episode start)
+        # stateful=False → memory cleared before every forward pass;
+        #                  prevents memorising input sequences instead of
+        #                  learning the actual mapping (e.g. XOR)
+        self.stateful = stateful
 
 
 def load_examples() -> list[ExampleConfig]:
@@ -378,6 +387,7 @@ def load_examples() -> list[ExampleConfig]:
             make_eval=lambda cb=None, step_cb=None, demo=False: _xor_eval,
             target_fitness=-0.1,
             supports_render=False,
+            stateful=False,
             test_cases=[
                 ([0.0, 0.0], [0.0]),
                 ([0.0, 1.0], [1.0]),

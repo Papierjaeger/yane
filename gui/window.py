@@ -504,7 +504,8 @@ class TrainingTab(QWidget):
         self.spin_nodes.setValue(ex.max_nodes)
         self.spin_conns.setValue(ex.max_connections)
         self.dspin_target.setValue(ex.target_fitness)
-        self.desc_label.setText(ex.description)
+        mem_note = "" if ex.stateful else "  ·  Memory disabled (stateless task)"
+        self.desc_label.setText(ex.description + mem_note)
         self.btn_render.setVisible(ex.supports_render)
         self.btn_run_best.setVisible(ex.supports_render)
         if not ex.supports_render:
