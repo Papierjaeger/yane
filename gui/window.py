@@ -5,7 +5,7 @@ import time as _time
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTabWidget,
     QLabel, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
-    QGroupBox, QFormLayout, QProgressBar, QStatusBar, QSizePolicy,
+    QCheckBox, QGroupBox, QFormLayout, QProgressBar, QStatusBar, QSizePolicy,
     QFrame, QScrollArea, QMessageBox,
 )
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
@@ -600,12 +600,23 @@ class TrainingTab(QWidget):
             "3–5 = gut für Regression/Supervised Learning\n"
             "0 = empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!)")
 
+        self.chk_normalize = QCheckBox("aktiv")
+        self.chk_normalize.setChecked(True)
+        self.chk_normalize.setVisible(False)   # shown only for examples that support it
+        self.chk_normalize.setToolTip(
+            "Inputs und Outputs vor dem Training auf [0, 1] normalisieren.\n"
+            "Empfohlen: Normalisierung verbessert die Fitness-Landschaft erheblich\n"
+            "und verhindert dass das Netz gegen die rohe Skala kämpft statt gegen\n"
+            "die eigentliche Aufgabe.\n\n"
+            "Deaktivieren um das Verhalten ohne Normalisierung zu vergleichen.")
+
         cfg_form.addRow("Inputs:",         self.spin_inputs)
         cfg_form.addRow("Outputs:",        self.spin_outputs)
         cfg_form.addRow("Max nodes:",      self.spin_nodes)
         cfg_form.addRow("Max connections:", self.spin_conns)
         cfg_form.addRow("Population:",     self.spin_pop)
         cfg_form.addRow("Lamarck steps:",  self.spin_lamarck)
+        cfg_form.addRow("Normalisierung:", self.chk_normalize)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
         layout.addWidget(cfg)
@@ -723,6 +734,9 @@ class TrainingTab(QWidget):
         self.btn_run_best.setVisible(ex.supports_render)
         if not ex.supports_render:
             self.btn_render.setChecked(False)
+        self.chk_normalize.setVisible(ex.supports_normalization)
+        if ex.supports_normalization:
+            self.chk_normalize.setChecked(True)   # default on when switching examples
             self._render_group.setVisible(False)
         self._best_genome = None
         self.btn_run_best.setEnabled(False)
@@ -761,7 +775,11 @@ class TrainingTab(QWidget):
             if ex.supports_render and self.btn_render.isChecked():
                 render_cb = self.render_frame.emit
 
-            make_eval_fn = ex.make_eval   # factory — called on worker thread, not here
+            if ex.supports_normalization and not self.chk_normalize.isChecked():
+                import functools
+                make_eval_fn = functools.partial(ex.make_eval, normalize=False)
+            else:
+                make_eval_fn = ex.make_eval
         except Exception as e:
             QMessageBox.critical(self, "Setup Error", str(e))
             return

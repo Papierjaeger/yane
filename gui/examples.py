@@ -370,10 +370,11 @@ class ExampleConfig:
         n_outputs: int,
         max_nodes: int,
         max_connections: int,
-        make_eval: Callable,   # (render_callback=None, step_callback=None, demo=False) -> eval_fn
+        make_eval: Callable,
         target_fitness: float,
         n_initial_hidden: int = 0,
         supports_render: bool = False,
+        supports_normalization: bool = False,
         test_cases: list[tuple[list[float], list[float]]] | None = None,
         stateful: bool = True,
     ) -> None:
@@ -387,12 +388,8 @@ class ExampleConfig:
         self.target_fitness = target_fitness
         self.n_initial_hidden = n_initial_hidden
         self.supports_render = supports_render
+        self.supports_normalization = supports_normalization
         self.test_cases = test_cases
-        # stateful=True  → memory persists between steps within an episode
-        #                  (genome.reset() only called at episode start)
-        # stateful=False → memory cleared before every forward pass;
-        #                  prevents memorising input sequences instead of
-        #                  learning the actual mapping (e.g. XOR)
         self.stateful = stateful
 
 
@@ -420,6 +417,7 @@ def load_examples() -> list[ExampleConfig]:
             max_nodes=30, max_connections=100,
             make_eval=_mult_make_eval,
             target_fitness=_MULT_FIT,
+            supports_normalization=True,
             stateful=False,
         ),
         ExampleConfig(
@@ -447,6 +445,7 @@ def load_examples() -> list[ExampleConfig]:
             max_nodes=20, max_connections=60,
             make_eval=_pi_make_eval,
             target_fitness=_PI_FIT,
+            supports_normalization=True,
             stateful=True,
         ),
     ]

@@ -1,10 +1,8 @@
 """Sequence recall PI — predicts the next digit of pi.
 
-Input:  current digit (0–9), normalised to [0, 1].
-Output: next digit (0–9), normalised to [0, 1].
-
-The network must use memory nodes to learn the sequence because the same
-digit can have different successors depending on position in pi.
+Input:  current digit (0–9), normalised to [0, 1] by default.
+Output: next digit (0–9), normalised to [0, 1] by default.
+Pass normalize=False to train on raw digit values 0–9 instead.
 """
 import json
 import os
@@ -16,8 +14,8 @@ _here = os.path.dirname(__file__)
 with open(os.path.join(_here, "dataset_PI.json")) as f:
     _raw = json.load(f)
 
-DECIMAL_PLACES = 10   # number of pi digits to learn
-_SCALE         = 9.0  # digits 0–9 → /9 → [0, 1]
+DECIMAL_PLACES = 10
+_SCALE         = 9.0
 
 dataset = [
     {"input": [s["input"][0] / _SCALE], "output": [s["output"][0] / _SCALE]}
@@ -26,14 +24,18 @@ dataset = [
 
 N_INPUTS       = 1
 N_OUTPUTS      = 1
-TARGET_FITNESS = -float(DECIMAL_PLACES)   # perfect = 0; worst = -DECIMAL_PLACES
+TARGET_FITNESS = -float(DECIMAL_PLACES)
 
 
-def make_eval(render_callback=None, step_callback=None, demo=False):
-    samples = dataset[:DECIMAL_PLACES]
+def make_eval(render_callback=None, step_callback=None, demo=False, normalize=True):
+    data = dataset if normalize else [
+        {"input": [s["input"][0]], "output": [s["output"][0]]}
+        for s in _raw
+    ]
+    samples = data[:DECIMAL_PLACES]
 
     def evaluate(genome):
-        genome.reset()  # stateful: reset once, memory persists across the sequence
+        genome.reset()
         fitness = 0.0
         for sample in samples:
             outputs = genome.forward(sample["input"])

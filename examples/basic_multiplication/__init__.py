@@ -1,7 +1,8 @@
 """Basic multiplication example — learns to multiply two numbers.
 
-Inputs 0–9 and outputs 0–81 are normalised to [0, 1] so activation functions
-operate in a useful range and the fitness landscape is scale-independent.
+Inputs 0–9 and outputs 0–81 are normalised to [0, 1] by default so activation
+functions operate in a useful range and the fitness landscape is scale-independent.
+Pass normalize=False to make_eval() to train on raw values instead.
 """
 import json
 import os
@@ -29,10 +30,12 @@ N_OUTPUTS      = 1
 TARGET_FITNESS = -0.5   # total |error| ≤ 0.5 across 100 normalised samples
 
 
-def make_eval(render_callback=None, step_callback=None, demo=False):
+def make_eval(render_callback=None, step_callback=None, demo=False, normalize=True):
+    data = dataset if normalize else _raw
+
     def evaluate(genome):
         fitness = 0.0
-        for sample in dataset:
+        for sample in data:
             genome.reset()  # stateless: reset before each sample
             outputs = genome.forward(sample["input"])
             for i, target in enumerate(sample["output"]):
@@ -54,7 +57,7 @@ def main():
 
     for s_raw, s_norm in zip(_raw, dataset):
         best.reset()
-        outputs  = best.forward(s_norm["input"])
+        outputs   = best.forward(s_norm["input"])
         predicted = outputs[0] * _OUT_MAX
         expected  = s_raw["output"][0]
         print(f"  {s_raw['input']} -> {predicted:.2f}  (expected {expected})")
