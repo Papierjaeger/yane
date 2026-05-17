@@ -11,6 +11,7 @@ from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPainterPath
 _C_BG       = QColor("#1e1e2e")
 _C_INPUT    = QColor("#4a90d9")
 _C_HIDDEN   = QColor("#7c7c9c")
+_C_MEMORY   = QColor("#c97bdb")   # persistent hidden (memory) node — warm violet
 _C_OUTPUT   = QColor("#5ba85a")
 _C_BORDER   = QColor("#2d2d4e")
 _C_POS_CONN = QColor("#4a90d9")
@@ -18,6 +19,7 @@ _C_NEG_CONN = QColor("#d94a4a")
 _C_TEXT     = QColor("#cccccc")
 _C_GRID     = QColor("#2a2a3e")
 _C_CHART    = QColor("#4CAF50")
+_C_MEM_RING = QColor("#f0c0ff")   # outer ring on memory nodes
 _NODE_R     = 13
 
 
@@ -289,13 +291,26 @@ class NetworkCanvas(QWidget):
                 if p is None:
                     continue
 
+                is_memory = (node.type == NodeType.HIDDEN and node.persist_value)
                 color = (_C_INPUT  if node.type == NodeType.INPUT  else
                          _C_OUTPUT if node.type == NodeType.OUTPUT else
+                         _C_MEMORY if is_memory else
                          _C_HIDDEN)
+
+                # Memory nodes: dashed outer ring to signal persistence
+                if is_memory:
+                    ring_pen = QPen(_C_MEM_RING, 1.5, Qt.PenStyle.DashLine)
+                    painter.setPen(ring_pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    r_ring = _NODE_R + 5
+                    painter.drawEllipse(
+                        QRectF(p.x() - r_ring, p.y() - r_ring,
+                               r_ring * 2, r_ring * 2)
+                    )
 
                 # Glow: faint larger circle underneath
                 glow = QColor(color)
-                glow.setAlpha(40)
+                glow.setAlpha(45)
                 painter.setBrush(QBrush(glow))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawEllipse(
@@ -304,14 +319,15 @@ class NetworkCanvas(QWidget):
                 )
 
                 # Main circle
+                border_color = _C_MEM_RING if is_memory else _C_BORDER
                 painter.setBrush(QBrush(color))
-                painter.setPen(QPen(_C_BORDER, 1.5))
+                painter.setPen(QPen(border_color, 2.0 if is_memory else 1.5))
                 painter.drawEllipse(
                     QRectF(p.x() - _NODE_R, p.y() - _NODE_R,
                            _NODE_R * 2, _NODE_R * 2)
                 )
 
-                # Activation label
+                # Activation label; memory nodes show "M" superscript dot
                 label = node.activation.value[0].upper()
                 painter.setPen(_C_BG)
                 painter.drawText(
@@ -320,6 +336,17 @@ class NetworkCanvas(QWidget):
                     Qt.AlignmentFlag.AlignCenter,
                     label,
                 )
+
+                # Memory indicator: small filled dot in top-right of node
+                if is_memory:
+                    dot_r = 3.5
+                    painter.setBrush(QBrush(_C_MEM_RING))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(
+                        QRectF(p.x() + _NODE_R - dot_r * 1.8,
+                               p.y() - _NODE_R - dot_r * 0.5,
+                               dot_r * 2, dot_r * 2)
+                    )
 
         finally:
             painter.end()
