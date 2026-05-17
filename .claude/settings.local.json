@@ -72,7 +72,17 @@
       "Bash(python -m pytest yane/tests/ -q --count=3)",
       "Bash(python -m pytest yane/tests/test_crossover_and_speciation.py -v -k \"test_topology_cache\")",
       "Bash(python -m pytest yane/tests/)",
-      "Bash(python -m pytest yane/tests/ -x)"
+      "Bash(python -m pytest yane/tests/ -x)",
+      "Bash(python -m cProfile -o /tmp/yane_profile.prof -c ' *)",
+      "Bash(python -m cProfile -o /tmp/yane_profile.prof /tmp/bench_yane.py)",
+      "Bash(python -c \"import yane; print\\('ok'\\)\")",
+      "Bash(python -m cProfile -o /tmp/yane_profile2.prof /tmp/bench_yane.py)",
+      "Bash(python -m cProfile -o /tmp/yane_profile3.prof /tmp/bench_yane.py)",
+      "Bash(python /tmp/bench_timing.py)",
+      "Bash(python -m pytest yane/tests/test_bugs_and_coverage.py yane/tests/test_crossover_and_speciation.py -v)",
+      "Bash(python -m pytest yane/tests/test_bugs_and_coverage.py yane/tests/test_crossover_and_speciation.py -v --timeout=30)",
+      "Bash(python /tmp/run_tests.py)",
+      "Bash(python -m pytest yane/tests/ -q --tb=short)"
     ],
     "additionalDirectories": [
       "/tmp"
