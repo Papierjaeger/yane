@@ -220,14 +220,22 @@ class TrainingWorker(QThread):
             self.error_occurred.emit(f"Multiprocessing Pool konnte nicht erstellt werden: {exc}")
             return
 
+        # Evaluate a full generation per round so workers stay busy.
+        # With n_workers=16 and batch=100: each worker gets ~6 genomes,
+        # amortising the IPC/pickle overhead over many evaluations.
+        # Without this, each worker gets 1 genome and is idle 99% of the time.
+        batch_size = max(n_workers * 4, self._yane._population.max_size)
+
         try:
             while self._running:
                 while self._paused and self._running:
                     time.sleep(0.05)
 
                 try:
-                    genomes = self._yane.next_genome_batch(n_workers)
-                    fitnesses = pool.map(_mp_evaluate, genomes)
+                    genomes   = self._yane.next_genome_batch(batch_size)
+                    # chunksize: how many genomes each worker gets per IPC round-trip
+                    chunksize = max(1, len(genomes) // n_workers)
+                    fitnesses = pool.map(_mp_evaluate, genomes, chunksize=chunksize)
                     results   = list(zip(genomes, fitnesses))
                     self._yane.submit_fitness_batch(results)
                     self._iteration += len(results)
@@ -237,13 +245,13 @@ class TrainingWorker(QThread):
                     if self._yane.min_fitness is not None and best_fitness >= self._yane.min_fitness:
                         self._running = False
 
-                    if self._iteration % _MEMORY_CHECK_EVERY < n_workers:
+                    if self._iteration % _MEMORY_CHECK_EVERY < batch_size:
                         self._yane._enforce_memory_limit()
                         guard = self._yane._resource_guard
                         while self._running and not guard.system_ok():
                             time.sleep(0.5)
 
-                    if self._iteration % _GC_EVERY < n_workers and self._running:
+                    if self._iteration % _GC_EVERY < batch_size and self._running:
                         gc.collect()
                         _return_memory_to_os()
 
