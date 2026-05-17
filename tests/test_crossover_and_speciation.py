@@ -86,8 +86,10 @@ class TestCrossover(unittest.TestCase):
         p1, p2 = self._parents()
         child = p1.crossover(p2)
         inputs = [0.5, 0.3]
-        out1 = child.forward(inputs)
-        out2 = child.forward(inputs)
+        # Reset before each call: memory nodes (persist_value=True) can appear
+        # after random mutations and carry state between forward() calls.
+        child.reset(); out1 = child.forward(inputs)
+        child.reset(); out2 = child.forward(inputs)
         self.assertEqual(out1, out2)
 
     def test_crossover_strategy_genes_from_parents(self):

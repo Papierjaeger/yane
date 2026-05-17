@@ -1,4 +1,8 @@
-"""Continuous 2-input 2-output regression example."""
+"""Basic multiplication example — learns to multiply two numbers.
+
+Inputs 0–9 and outputs 0–81 are normalised to [0, 1] so activation functions
+operate in a useful range and the fitness landscape is scale-independent.
+"""
 import json
 import os
 
@@ -6,12 +10,23 @@ from yane import NeuroEvolution
 
 _here = os.path.dirname(__file__)
 
-with open(os.path.join(_here, "dataset_2_2.json")) as f:
-    dataset = json.load(f)
+with open(os.path.join(_here, "multiplication_table.json")) as f:
+    _raw = json.load(f)
+
+_IN_MAX  = 9.0
+_OUT_MAX = 81.0
+
+dataset = [
+    {
+        "input":  [x / _IN_MAX  for x in s["input"]],
+        "output": [y / _OUT_MAX for y in s["output"]],
+    }
+    for s in _raw
+]
 
 N_INPUTS       = 2
-N_OUTPUTS      = 2
-TARGET_FITNESS = -0.1
+N_OUTPUTS      = 1
+TARGET_FITNESS = -0.5   # total |error| ≤ 0.5 across 100 normalised samples
 
 
 def make_eval(render_callback=None, step_callback=None, demo=False):
@@ -29,7 +44,7 @@ def make_eval(render_callback=None, step_callback=None, demo=False):
 def main():
     yane = NeuroEvolution()
     yane.configure(n_inputs=N_INPUTS, n_outputs=N_OUTPUTS,
-                   max_nodes=20, max_connections=60)
+                   max_nodes=30, max_connections=100)
     yane.set_resource_limits(max_process_gb=2.0)
     yane.set_min_fitness(TARGET_FITNESS)
 
@@ -37,10 +52,12 @@ def main():
     best = yane.get_best()
     print(f"Done in {n} iterations. Fitness: {best.fitness:.4f}")
 
-    for sample in dataset:
+    for s_raw, s_norm in zip(_raw, dataset):
         best.reset()
-        outputs = best.forward(sample["input"])
-        print(f"  {sample['input']} -> {[f'{v:.3f}' for v in outputs]}  (expected {sample['output']})")
+        outputs  = best.forward(s_norm["input"])
+        predicted = outputs[0] * _OUT_MAX
+        expected  = s_raw["output"][0]
+        print(f"  {s_raw['input']} -> {predicted:.2f}  (expected {expected})")
 
 
 if __name__ == "__main__":

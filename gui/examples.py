@@ -1,94 +1,32 @@
 """Built-in example configurations for the GUI."""
 from __future__ import annotations
-import json
-import os
 import time
 from typing import Callable
 
 from yane.core.genome import Genome
 
-# Base directory of the examples/ package (sibling of gui/)
-_EXAMPLES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "examples")
-
-
-def _load_dataset(rel_path: str) -> list[dict]:
-    """Load a JSON dataset file relative to the examples/ directory."""
-    with open(os.path.join(_EXAMPLES_DIR, rel_path), encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _make_dataset_eval(
-    rel_path: str,
-    stateful: bool = False,
-    n_samples: int | None = None,
-    input_scale: float | None = None,
-    output_scale: float | None = None,
-):
-    """Generic eval factory for JSON datasets with {input, output} samples.
-
-    stateful=False  → genome.reset() before every forward pass (stateless).
-    stateful=True   → reset only once at episode start (memory persists).
-    n_samples       → use only the first N samples.
-    input_scale     → divide all input values by this before forwarding.
-    output_scale    → divide all target values by this before comparing.
-                      Normalising inputs and outputs to [0, 1] is critical:
-                      without it, the network fights the raw scale instead of
-                      the actual function, and fitness values are misleading.
-    """
-    raw = _load_dataset(rel_path)
-    if n_samples is not None:
-        raw = raw[:n_samples]
-
-    if input_scale is not None or output_scale is not None:
-        isc = input_scale  or 1.0
-        osc = output_scale or 1.0
-        dataset = [
-            {
-                "input":  [v / isc for v in s["input"]],
-                "output": [v / osc for v in s["output"]],
-            }
-            for s in raw
-        ]
-    else:
-        dataset = raw
-
-    def make(render_callback=None, step_callback=None, demo=False):
-        def evaluate(genome: Genome) -> float:
-            fitness = 0.0
-            if stateful:
-                genome.reset()
-            for sample in dataset:
-                if not stateful:
-                    genome.reset()
-                out = genome.forward(sample["input"])
-                for o, t in zip(out, sample["output"]):
-                    fitness -= abs(o - t)
-            return fitness
-        return evaluate
-    return make
-
-
-# ---------------------------------------------------------------------------
-# XOR — always available
-# ---------------------------------------------------------------------------
-
-_XOR_DATA = [
-    ([0.0, 0.0], [0.0]),
-    ([0.0, 1.0], [1.0]),
-    ([1.0, 0.0], [1.0]),
-    ([1.0, 1.0], [0.0]),
-]
-
-
-def _xor_eval(genome: Genome) -> float:
-    # Reset before EVERY forward pass so memory nodes can't cheat by
-    # memorising the input sequence instead of learning XOR.
-    fitness = 0.0
-    for inputs, target in _XOR_DATA:
-        genome.reset()
-        out = genome.forward(inputs)
-        fitness -= abs(out[0] - target[0])
-    return fitness
+# Dataset examples — import make_eval and metadata directly from each example
+# package so there is exactly one implementation (no duplication).
+from yane.examples.XOR import (
+    make_eval as _xor_make_eval, TEST_CASES as _XOR_TEST_CASES,
+    N_INPUTS as _XOR_NI, N_OUTPUTS as _XOR_NO, TARGET_FITNESS as _XOR_FIT,
+)
+from yane.examples.basic_multiplication import (
+    make_eval as _mult_make_eval,
+    N_INPUTS as _MULT_NI, N_OUTPUTS as _MULT_NO, TARGET_FITNESS as _MULT_FIT,
+)
+from yane.examples.simple_2_2_continuous import (
+    make_eval as _reg22_make_eval,
+    N_INPUTS as _REG22_NI, N_OUTPUTS as _REG22_NO, TARGET_FITNESS as _REG22_FIT,
+)
+from yane.examples.simple_3_3_continuous import (
+    make_eval as _reg33_make_eval,
+    N_INPUTS as _REG33_NI, N_OUTPUTS as _REG33_NO, TARGET_FITNESS as _REG33_FIT,
+)
+from yane.examples.sequence_recall_PI import (
+    make_eval as _pi_make_eval,
+    N_INPUTS as _PI_NI, N_OUTPUTS as _PI_NO, TARGET_FITNESS as _PI_FIT,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -463,67 +401,52 @@ def load_examples() -> list[ExampleConfig]:
         ExampleConfig(
             name="XOR",
             description="Learn the XOR function (2 inputs, 1 output).",
-            n_inputs=2, n_outputs=1,
+            n_inputs=_XOR_NI, n_outputs=_XOR_NO,
             max_nodes=20, max_connections=50,
             n_initial_hidden=2,
-            make_eval=lambda cb=None, step_cb=None, demo=False: _xor_eval,
-            target_fitness=-0.1,
+            make_eval=_xor_make_eval,
+            target_fitness=_XOR_FIT,
             supports_render=False,
             stateful=False,
-            test_cases=[
-                ([0.0, 0.0], [0.0]),
-                ([0.0, 1.0], [1.0]),
-                ([1.0, 0.0], [1.0]),
-                ([1.0, 1.0], [0.0]),
-            ],
+            test_cases=_XOR_TEST_CASES,
         ),
         ExampleConfig(
             name="Multiplication",
             description=(
                 "Lernt die Multiplikationstabelle (2 Inputs, 1 Output, 100 Samples).\n"
-                "Inputs 0–9 → /9 → [0,1],  Outputs 0–81 → /81 → [0,1]."
+                "Inputs 0–9 und Outputs 0–81 werden intern auf [0,1] normalisiert."
             ),
-            n_inputs=2, n_outputs=1,
+            n_inputs=_MULT_NI, n_outputs=_MULT_NO,
             max_nodes=30, max_connections=100,
-            make_eval=_make_dataset_eval(
-                "basic multiplication/multiplication_table.json",
-                input_scale=9.0,
-                output_scale=81.0,
-            ),
-            target_fitness=-0.5,   # total |error| ≤ 0.5 across 100 normalised samples
+            make_eval=_mult_make_eval,
+            target_fitness=_MULT_FIT,
             stateful=False,
         ),
         ExampleConfig(
             name="Regression 2→2",
             description="Lernt eine kontinuierliche 2→2 Abbildung (4 Samples).",
-            n_inputs=2, n_outputs=2,
+            n_inputs=_REG22_NI, n_outputs=_REG22_NO,
             max_nodes=20, max_connections=60,
-            make_eval=_make_dataset_eval("simple_2_2_continuous/dataset_2_2.json"),
-            target_fitness=-0.1,
+            make_eval=_reg22_make_eval,
+            target_fitness=_REG22_FIT,
             stateful=False,
         ),
         ExampleConfig(
             name="Regression 3→3",
             description="Lernt eine kontinuierliche 3→3 Abbildung (8 Samples).",
-            n_inputs=3, n_outputs=3,
+            n_inputs=_REG33_NI, n_outputs=_REG33_NO,
             max_nodes=20, max_connections=80,
-            make_eval=_make_dataset_eval("simple_3_3_continuous/dataset_3_3.json"),
-            target_fitness=-0.1,
+            make_eval=_reg33_make_eval,
+            target_fitness=_REG33_FIT,
             stateful=False,
         ),
         ExampleConfig(
             name="Sequence: Pi-Ziffern",
-            description="Sagt die nächste Ziffer von Pi voraus — braucht Gedächtnis (1 Input, 1 Output, 50 Samples). Digit /9 → [0,1].",
-            n_inputs=1, n_outputs=1,
+            description="Sagt die nächste Ziffer von Pi voraus — braucht Gedächtnis (1 Input, 1 Output, 10 Samples). Digit /9 → [0,1].",
+            n_inputs=_PI_NI, n_outputs=_PI_NO,
             max_nodes=20, max_connections=60,
-            make_eval=_make_dataset_eval(
-                "sequence_recall_PI/dataset_PI.json",
-                stateful=True,
-                n_samples=50,
-                input_scale=9.0,
-                output_scale=9.0,
-            ),
-            target_fitness=-10.0,
+            make_eval=_pi_make_eval,
+            target_fitness=_PI_FIT,
             stateful=True,
         ),
     ]
