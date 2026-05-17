@@ -1,5 +1,6 @@
 from __future__ import annotations
 import gc
+import random
 import time
 from typing import Callable
 
@@ -30,6 +31,8 @@ class NeuroEvolution:
         self._resource_check_interval: int = 50  # check psutil every N iters (was 1 = ~5% overhead)
         self._population_size: int = 100
         self._n_workers: int = 1
+        self._lamarck_steps: int = 0      # 0 = disabled; >0 = hill-climbing steps per genome
+        self._lamarck_sigma: float = 0.1  # std-dev of Gaussian weight perturbation
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -146,6 +149,27 @@ class NeuroEvolution:
     def set_efficiency_penalty(self, max_ms: float, penalty_per_ms: float) -> None:
         self._efficiency_penalty = EfficiencyPenalty(max_ms, penalty_per_ms)
 
+    def set_lamarck(self, n_steps: int = 5, sigma: float = 0.1) -> None:
+        """Enable Lamarckian weight refinement after each NEAT mutation.
+
+        Before a genome is evaluated, its weights and biases are hill-climbed
+        for `n_steps` attempts.  Each attempt perturbs all weights and biases
+        with Gaussian noise (std = sigma) and keeps the perturbation only if
+        it improves fitness.
+
+        Cost: n_steps extra fitness-function calls per genome per generation.
+        Benefit: weights converge much faster for the topology found by NEAT,
+        especially on regression and continuous-output tasks.
+
+        Args:
+            n_steps: hill-climbing attempts per genome (default 5).
+                     0 disables Lamarck entirely.
+            sigma:   std-dev of the Gaussian weight perturbation (default 0.1).
+                     Smaller = finer search; larger = wider jumps.
+        """
+        self._lamarck_steps = max(0, n_steps)
+        self._lamarck_sigma = sigma
+
     # -------------------------------------------------------------------------
     # Training (automatic loop)
     # -------------------------------------------------------------------------
@@ -160,9 +184,14 @@ class NeuroEvolution:
         """
         self._ensure_configured()
 
+        lamarck = self._lamarck_steps > 0
+
         iterations = 0
         while True:
             genome = self._population.select_for_evaluation()
+
+            if lamarck:
+                self._lamarck_refine(genome, fitness_fn)
 
             start = time.perf_counter()
             fitness = fitness_fn(genome)
@@ -302,6 +331,46 @@ class NeuroEvolution:
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
+
+    def _lamarck_refine(self, genome: Genome, fitness_fn: Callable[[Genome], float]) -> None:
+        """Hill-climb weights and biases for `_lamarck_steps` attempts.
+
+        Only weights and biases are touched — topology (connections, nodes) is
+        unchanged, so the compiled forward pass stays valid without rebuilding
+        the execution order.  Each step:
+          1. Perturb all weights + biases with Gaussian noise (σ = _lamarck_sigma).
+          2. Evaluate fitness.
+          3. Keep the perturbation if fitness improved; otherwise revert.
+
+        The improved weights are stored back on the genome object and inherited
+        by the population on submit() — this is the Lamarckian part.
+        """
+        conns = [conn for node in genome.nodes for conn in node.connections]
+        nodes = genome.nodes
+        if not conns and not nodes:
+            return
+
+        sigma = self._lamarck_sigma
+        best_fitness = fitness_fn(genome)
+
+        for _ in range(self._lamarck_steps):
+            saved_weights = [c.weight for c in conns]
+            saved_biases  = [n.bias   for n in nodes]
+
+            for c in conns:
+                c.weight += random.gauss(0.0, sigma)
+            for n in nodes:
+                n.bias += random.gauss(0.0, sigma)
+
+            new_fitness = fitness_fn(genome)
+
+            if new_fitness > best_fitness:
+                best_fitness = new_fitness
+            else:
+                for c, w in zip(conns, saved_weights):
+                    c.weight = w
+                for n, b in zip(nodes, saved_biases):
+                    n.bias = b
 
     def _enforce_memory_limit(self) -> None:
         if not self._resource_guard.process_over_limit():

@@ -177,13 +177,26 @@ class TestCrossover(unittest.TestCase):
 
     def test_topology_cache_invalidated_after_crossover(self):
         """Child's exec_order must be recomputed, not inherited from parents."""
-        p1, p2 = self._parents()
-        # Ensure p1 has a cached exec_order
+        from yane.core.connection import Connection as Conn
+        yane = _make_yane(2, 1)
+        p1 = yane.next_genome()
+        p2 = yane.next_genome()
+        # Add a deterministic acyclic connection (input[0] → output[0]) so
+        # exec_order is guaranteed to be cached after forward().
+        innov = yane._tracker.get_connection(
+            p1.input_nodes[0].innovation, p1.output_nodes[0].innovation)
+        c1 = Conn(p1.output_nodes[0], innovation=innov); c1.weight = 0.5
+        c2 = Conn(p2.output_nodes[0], innovation=innov); c2.weight = 0.3
+        p1.input_nodes[0].connections.append(c1); p1._invalidate_topology()
+        p2.input_nodes[0].connections.append(c2); p2._invalidate_topology()
+        p1.fitness = 1.0
+        p2.fitness = 0.5
+
         p1.forward([0.5, 0.5])
-        self.assertIsNotNone(p1._exec_order)
+        self.assertIsNotNone(p1._exec_order,
+            "forward() must build exec_order for acyclic network")
 
         child = p1.crossover(p2)
-        # Child must start with None — computed fresh on first forward
         self.assertIsNone(child._exec_order,
             "Crossover child must not inherit parent's topology cache")
 
