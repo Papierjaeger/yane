@@ -162,6 +162,188 @@ def _make_continuous_action_eval(
     return make
 
 
+def _make_blackjack_eval(n_episodes: int = 500):
+    """Blackjack-v1: hit (1) oder stick (0) entscheiden.
+
+    Obs-Tuple (player_sum, dealer_card, usable_ace) → normalisiert auf [0,1].
+    Fitness = mittlere Belohnung über n_episodes (+1 gewonnen, -1 verloren, 0 unentschieden).
+    Viele Episoden nötig wegen der hohen Varianz pro Runde.
+    """
+    def make(render_callback=None, step_callback=None, demo=False):
+        import numpy as np
+        import gymnasium as gym
+        env = gym.make("Blackjack-v1",
+                       render_mode="rgb_array" if render_callback else None)
+        _hooks = _make_step_hooks(step_callback, render_callback)
+        eps = 20 if demo else n_episodes
+
+        def evaluate(genome: Genome) -> float:
+            total = 0.0
+            for _ in range(eps):
+                obs, _ = env.reset()
+                genome.reset()
+                done = False
+                while not done:
+                    inputs = [obs[0] / 31.0, obs[1] / 10.0, float(obs[2])]
+                    out = genome.forward(inputs)
+                    action = int(np.argmax(out))   # 0=stick, 1=hit
+                    obs, reward, terminated, truncated, _ = env.step(action)
+                    done = terminated or truncated
+                    total += reward
+                    if _hooks: _hooks(total, env)
+            return total / eps
+
+        evaluate._env = env
+        return evaluate
+    return make
+
+
+def _make_cliffwalking_eval(max_steps: int = 200):
+    """CliffWalking-v1: navigiere über ein 4×12-Gitter ohne in die Klippe zu fallen.
+
+    Obs = integer 0–47 (Zeile × 12 + Spalte).
+    Inputs: [Zeile/3, Spalte/11]. Belohnung: -1/Schritt, -100 Klippe.
+    Reward-Shaping: Bonus für Annäherung an das Ziel (Zeile=3, Spalte=11).
+    """
+    def make(render_callback=None, step_callback=None, demo=False):
+        import numpy as np
+        import gymnasium as gym
+        env = gym.make("CliffWalking-v1",
+                       render_mode="rgb_array" if render_callback else None)
+        _hooks = _make_step_hooks(step_callback, render_callback)
+        cap = 10_000 if demo else max_steps
+        goal_row, goal_col = 3, 11
+
+        def evaluate(genome: Genome) -> float:
+            obs, _ = env.reset()
+            genome.reset()
+            total = 0.0
+            done = False
+            steps = 0
+            prev_dist = abs(obs // 12 - goal_row) + abs(obs % 12 - goal_col)
+            while not done and steps < cap:
+                row, col = obs // 12, obs % 12
+                inputs = [row / 3.0, col / 11.0]
+                out = genome.forward(inputs)
+                action = int(np.argmax(out))
+                obs, reward, terminated, truncated, _ = env.step(action)
+                new_dist = abs(obs // 12 - goal_row) + abs(obs % 12 - goal_col)
+                # Shaping: +0.5 when moving toward goal, -0.5 away
+                total += reward + 0.5 * (prev_dist - new_dist)
+                prev_dist = new_dist
+                done = terminated or truncated
+                steps += 1
+                if _hooks: _hooks(total, env)
+            return total
+
+        evaluate._env = env
+        return evaluate
+    return make
+
+
+def _make_frozenlake_eval(n_episodes: int = 20):
+    """FrozenLake-v1 (nicht-rutschig): Erreiche das Ziel ohne in Löcher zu fallen.
+
+    Obs = integer 0–15 (Zeile × 4 + Spalte). Ziel: (3, 3).
+    Inputs: [Zeile/3, Spalte/3].
+    Reward-Shaping: Bonus für Annäherung an das Ziel pro Schritt.
+    Fitness = mittlere Belohnung über n_episodes.
+    """
+    def make(render_callback=None, step_callback=None, demo=False):
+        import numpy as np
+        import gymnasium as gym
+        env = gym.make("FrozenLake-v1", is_slippery=False,
+                       render_mode="rgb_array" if render_callback else None)
+        _hooks = _make_step_hooks(step_callback, render_callback)
+        eps = 5 if demo else n_episodes
+        goal_row, goal_col = 3, 3
+
+        def evaluate(genome: Genome) -> float:
+            total = 0.0
+            for _ in range(eps):
+                obs, _ = env.reset()
+                genome.reset()
+                done = False
+                prev_dist = abs(obs // 4 - goal_row) + abs(obs % 4 - goal_col)
+                while not done:
+                    row, col = obs // 4, obs % 4
+                    inputs = [row / 3.0, col / 3.0]
+                    out = genome.forward(inputs)
+                    action = int(np.argmax(out))
+                    obs, reward, terminated, truncated, _ = env.step(action)
+                    new_dist = abs(obs // 4 - goal_row) + abs(obs % 4 - goal_col)
+                    # Shaping: 0.1 pro Schritt näher am Ziel
+                    total += reward + 0.1 * (prev_dist - new_dist)
+                    prev_dist = new_dist
+                    done = terminated or truncated
+                    if _hooks: _hooks(total, env)
+            return total / eps
+
+        evaluate._env = env
+        return evaluate
+    return make
+
+
+def _make_taxi_eval(max_steps: int = 500):
+    """Taxi-v4: Fahrgast aufnehmen und zum Ziel bringen (5×5-Gitter).
+
+    Obs = integer 0–499, kodiert (row, col, passenger_loc, dest).
+    Inputs: [Zeile/4, Spalte/4, Fahrgast/4, Ziel/3].
+    Reward-Shaping: Bonus für Annäherung an Fahrgast oder Zielort.
+    Belohnung: +20 Abgabe, -10 illegale Aktion, -1/Schritt.
+    """
+    def make(render_callback=None, step_callback=None, demo=False):
+        import numpy as np
+        import gymnasium as gym
+        env = gym.make("Taxi-v4",
+                       render_mode="rgb_array" if render_callback else None)
+        _hooks = _make_step_hooks(step_callback, render_callback)
+        cap = 10_000 if demo else max_steps
+        # Fixed pickup/dropoff locations (R, G, Y, B) in the 5×5 grid
+        _locs = [(0, 0), (0, 4), (4, 0), (4, 3)]
+
+        def _decode(obs):
+            dest     = obs % 4
+            pass_loc = (obs // 4) % 5
+            col      = (obs // 20) % 5
+            row      = obs // 100
+            return row, col, pass_loc, dest
+
+        def evaluate(genome: Genome) -> float:
+            obs, _ = env.reset()
+            genome.reset()
+            total = 0.0
+            done = False
+            steps = 0
+            while not done and steps < cap:
+                row, col, pass_loc, dest = _decode(obs)
+                inputs = [row / 4.0, col / 4.0, pass_loc / 4.0, dest / 3.0]
+                out = genome.forward(inputs)
+                action = int(np.argmax(out))
+                prev_row, prev_col = row, col
+                obs, reward, terminated, truncated, _ = env.step(action)
+                row, col, pass_loc_new, dest_new = _decode(obs)
+
+                # Reward shaping: encourage moving toward passenger or destination
+                if pass_loc < 4:   # passenger not yet in taxi
+                    pr, pc = _locs[pass_loc]
+                    prev_d = abs(prev_row - pr) + abs(prev_col - pc)
+                    new_d  = abs(row - pr) + abs(col - pc)
+                else:              # passenger in taxi → head for destination
+                    dr, dc = _locs[dest]
+                    prev_d = abs(prev_row - dr) + abs(prev_col - dc)
+                    new_d  = abs(row - dr) + abs(col - dc)
+                total += reward + 0.5 * (prev_d - new_d)
+                done = terminated or truncated
+                steps += 1
+                if _hooks: _hooks(total, env)
+            return total
+
+        evaluate._env = env
+        return evaluate
+    return make
+
+
 def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
     """Returns make(render_callback, step_callback, demo) → eval_fn.
 
@@ -523,6 +705,59 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=80, max_connections=500,
                 make_eval=_make_carracing_eval(grid=12, max_steps=500),
                 target_fitness=800,
+                supports_render=True,
+            ),
+            # ── Toy Text ──────────────────────────────────────────────────
+            ExampleConfig(
+                name="Blackjack",
+                description=(
+                    "Lerne Blackjack zu spielen (hit/stick).\n"
+                    "Inputs: Kartensumme/31, Dealerkarte/10, Ass nutzbar.\n"
+                    "Fitness: Durchschnitt über 500 Runden (max=1.0, min=-1.0)."
+                ),
+                n_inputs=3, n_outputs=2,
+                max_nodes=20, max_connections=60,
+                make_eval=_make_blackjack_eval(n_episodes=500),
+                target_fitness=-0.05,
+                supports_render=True,
+            ),
+            ExampleConfig(
+                name="Cliff Walking",
+                description=(
+                    "Navigiere über ein 4×12-Gitter ohne in die Klippe zu fallen.\n"
+                    "Inputs: Zeile/3, Spalte/11. Strafe: -1/Schritt, -100 Klippe.\n"
+                    "Ziel: Fitness ≥ -50 (optimal: -37)."
+                ),
+                n_inputs=2, n_outputs=4,
+                max_nodes=20, max_connections=60,
+                make_eval=_make_cliffwalking_eval(max_steps=200),
+                target_fitness=-50.0,
+                supports_render=True,
+            ),
+            ExampleConfig(
+                name="Frozen Lake",
+                description=(
+                    "Gleite über ein vereistes 4×4-Gitter zum Ziel ohne ins Loch zu fallen.\n"
+                    "Inputs: Zeile/3, Spalte/3. Belohnung: +1 Ziel, 0 sonst.\n"
+                    "Nicht-rutschig. Fitness = Erfolgsrate über 20 Episoden."
+                ),
+                n_inputs=2, n_outputs=4,
+                max_nodes=20, max_connections=60,
+                make_eval=_make_frozenlake_eval(n_episodes=20),
+                target_fitness=0.8,
+                supports_render=True,
+            ),
+            ExampleConfig(
+                name="Taxi",
+                description=(
+                    "Fahre einen Taxi-Fahrgast zum Zielort (5×5-Gitter).\n"
+                    "Inputs: Zeile/4, Spalte/4, Fahrgast/4, Ziel/3.\n"
+                    "Belohnung: +20 Abgabe, -10 illegale Aktion, -1/Schritt."
+                ),
+                n_inputs=4, n_outputs=6,
+                max_nodes=30, max_connections=100,
+                make_eval=_make_taxi_eval(max_steps=500),
+                target_fitness=5.0,
                 supports_render=True,
             ),
         ]
