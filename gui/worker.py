@@ -195,6 +195,19 @@ class TrainingWorker(QThread):
         import multiprocessing as mp
 
         ctx = mp.get_context('fork')
+
+        # Bootstrap: evaluate the seed genome once sequentially so that
+        # next_genome_batch() has at least one evaluated genome to spawn from.
+        try:
+            seed_fn = self._make_eval_fn(None)
+            seed_g  = self._yane.next_genome()
+            self._yane.submit_fitness(seed_fn(seed_g))
+            self._iteration += 1
+            _close_env(seed_fn)
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
+            return
+
         # Worker processes inherit make_eval_fn via fork; initializer creates
         # the actual evaluator (e.g. opens a gym environment) once per process.
         try:
