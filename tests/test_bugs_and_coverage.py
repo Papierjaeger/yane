@@ -363,5 +363,100 @@ class TestTopologicalSort(unittest.TestCase):
             msg="Rebuilding topology must not change forward() output")
 
 
+# ---------------------------------------------------------------------------
+# Genome pickle (multiprocessing support)
+# ---------------------------------------------------------------------------
+
+class TestGenomePickle(unittest.TestCase):
+    """Genome must survive pickle/unpickle and produce identical forward() output.
+
+    This is required for multiprocessing: genomes are sent to worker processes
+    via IPC, which uses pickle.  _compiled_forward and _forward_dispatch are
+    closures that can't be pickled; __getstate__ strips them so they are
+    rebuilt transparently on the first forward() call in the subprocess.
+    """
+
+    def _genome_with_connections(self, n_conns=5):
+        yane = _make_yane(2, 1)
+        g = yane.next_genome()
+        for _ in range(n_conns):
+            smart_mutation.add_connection(g, yane._tracker)
+        return g
+
+    def test_pickle_before_forward(self):
+        import pickle
+        g = self._genome_with_connections()
+        data = pickle.dumps(g)
+        g2   = pickle.loads(data)
+        self.assertEqual(g.forward([0.4, 0.6]), g2.forward([0.4, 0.6]),
+                         "Unpickled genome must produce same output (before first forward)")
+
+    def test_pickle_after_forward_acyclic(self):
+        """Acyclic network uses compiled closure — must be stripped and rebuilt."""
+        import pickle
+        g = self._genome_with_connections()
+        g.forward([0.5, 0.5])   # builds _compiled_forward closure
+        self.assertIsNotNone(g._forward_dispatch)
+
+        data = pickle.dumps(g)  # __getstate__ strips closures
+        g2   = pickle.loads(data)
+        self.assertIsNone(g2._forward_dispatch, "Dispatch must be None after unpickling")
+
+        out1 = g.forward([0.3, 0.7])
+        g2.reset(); out2 = g2.forward([0.3, 0.7])
+        self.assertAlmostEqual(out1[0], out2[0], places=10,
+                               msg="Unpickled genome must produce same output after closure rebuild")
+
+    def test_pickle_after_forward_cyclic(self):
+        """Cyclic network uses _bfs_forward (bound method) — also must survive pickle."""
+        import pickle
+        from yane.core.connection import Connection as Conn
+        yane = _make_yane(1, 1)
+        g = yane.next_genome()
+        smart_mutation.add_connection(g, yane._tracker)
+        # Add self-loop to create cycle
+        back = Conn(g.input_nodes[0]); back.weight = 0.1
+        g.output_nodes[0].connections.append(back)
+        g._invalidate_topology()
+
+        g.forward([1.0])   # builds _bfs_forward dispatch
+        data = pickle.dumps(g)
+        g2   = pickle.loads(data)
+        g.reset();  out1 = g.forward([1.0])
+        g2.reset(); out2 = g2.forward([1.0])
+        self.assertAlmostEqual(out1[0], out2[0], places=10,
+                               msg="Cyclic genome must produce same output after unpickling")
+
+    def test_pickle_preserves_weights(self):
+        """Unpickling must restore all connection weights exactly."""
+        import pickle
+        g = self._genome_with_connections()
+        weights_before = [c.weight for n in g.nodes for c in n.connections]
+        g2 = pickle.loads(pickle.dumps(g))
+        weights_after  = [c.weight for n in g2.nodes for c in n.connections]
+        self.assertEqual(weights_before, weights_after,
+                         "All weights must be identical after pickle/unpickle")
+
+    def test_mp_evaluate_function(self):
+        """_mp_evaluate must produce the same result as direct evaluation."""
+        from yane.gui.worker import _mp_initializer, _mp_evaluate
+        from yane.examples.simple_2_2_continuous import make_eval, N_INPUTS, N_OUTPUTS
+
+        _mp_initializer(make_eval, None)   # set up global eval fn
+
+        yane = _make_yane(N_INPUTS, N_OUTPUTS)
+        g    = yane.next_genome()
+        for _ in range(4):
+            smart_mutation.add_connection(g, yane._tracker)
+
+        ev = make_eval()
+        direct = ev(g)
+        g.reset()
+        via_mp = _mp_evaluate(g)
+
+        self.assertAlmostEqual(direct, via_mp, places=10,
+                               msg="_mp_evaluate must match direct evaluation")
+
+
 if __name__ == '__main__':
     unittest.main()
