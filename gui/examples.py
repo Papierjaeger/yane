@@ -100,7 +100,7 @@ def _make_discrete_action_eval(
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make(env_id,
+        env = gym.make(env_id, disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=max_steps)
         _hooks = _make_step_hooks(step_callback, render_callback)
@@ -111,7 +111,7 @@ def _make_discrete_action_eval(
             total = 0.0
             while not done:
                 out = genome.forward(state)
-                action = int(np.argmax(out))
+                action = out.index(max(out))
                 state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 total += reward
@@ -137,7 +137,7 @@ def _make_continuous_action_eval(
     """
     def make(render_callback=None, step_callback=None, demo=False):
         import gymnasium as gym
-        env = gym.make(env_id,
+        env = gym.make(env_id, disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=max_steps if not demo else None)
         _hooks = _make_step_hooks(step_callback, render_callback)
@@ -172,7 +172,7 @@ def _make_blackjack_eval(n_episodes: int = 500):
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make("Blackjack-v1",
+        env = gym.make("Blackjack-v1", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None)
         _hooks = _make_step_hooks(step_callback, render_callback)
         eps = 20 if demo else n_episodes
@@ -186,7 +186,7 @@ def _make_blackjack_eval(n_episodes: int = 500):
                 while not done:
                     inputs = [obs[0] / 31.0, obs[1] / 10.0, float(obs[2])]
                     out = genome.forward(inputs)
-                    action = int(np.argmax(out))   # 0=stick, 1=hit
+                    action = out.index(max(out))   # 0=stick, 1=hit
                     obs, reward, terminated, truncated, _ = env.step(action)
                     done = terminated or truncated
                     total += reward
@@ -208,7 +208,7 @@ def _make_cliffwalking_eval(max_steps: int = 200):
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make("CliffWalking-v1",
+        env = gym.make("CliffWalking-v1", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None)
         _hooks = _make_step_hooks(step_callback, render_callback)
         cap = 10_000 if demo else max_steps
@@ -225,7 +225,7 @@ def _make_cliffwalking_eval(max_steps: int = 200):
                 row, col = obs // 12, obs % 12
                 inputs = [row / 3.0, col / 11.0]
                 out = genome.forward(inputs)
-                action = int(np.argmax(out))
+                action = out.index(max(out))
                 obs, reward, terminated, truncated, _ = env.step(action)
                 new_dist = abs(obs // 12 - goal_row) + abs(obs % 12 - goal_col)
                 # Shaping: +0.5 when moving toward goal, -0.5 away
@@ -252,7 +252,7 @@ def _make_frozenlake_eval(n_episodes: int = 20):
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make("FrozenLake-v1", is_slippery=False,
+        env = gym.make("FrozenLake-v1", disable_env_checker=True, is_slippery=False,
                        render_mode="rgb_array" if render_callback else None)
         _hooks = _make_step_hooks(step_callback, render_callback)
         eps = 5 if demo else n_episodes
@@ -269,7 +269,7 @@ def _make_frozenlake_eval(n_episodes: int = 20):
                     row, col = obs // 4, obs % 4
                     inputs = [row / 3.0, col / 3.0]
                     out = genome.forward(inputs)
-                    action = int(np.argmax(out))
+                    action = out.index(max(out))
                     obs, reward, terminated, truncated, _ = env.step(action)
                     new_dist = abs(obs // 4 - goal_row) + abs(obs % 4 - goal_col)
                     # Shaping: 0.1 pro Schritt näher am Ziel
@@ -295,7 +295,7 @@ def _make_taxi_eval(max_steps: int = 500):
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make("Taxi-v4",
+        env = gym.make("Taxi-v4", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None)
         _hooks = _make_step_hooks(step_callback, render_callback)
         cap = 10_000 if demo else max_steps
@@ -319,7 +319,7 @@ def _make_taxi_eval(max_steps: int = 500):
                 row, col, pass_loc, dest = _decode(obs)
                 inputs = [row / 4.0, col / 4.0, pass_loc / 4.0, dest / 3.0]
                 out = genome.forward(inputs)
-                action = int(np.argmax(out))
+                action = out.index(max(out))
                 prev_row, prev_col = row, col
                 obs, reward, terminated, truncated, _ = env.step(action)
                 row, col, pass_loc_new, dest_new = _decode(obs)
@@ -357,7 +357,7 @@ def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make("CarRacing-v3",
+        env = gym.make("CarRacing-v3", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None,
                        continuous=True)
         _hooks = _make_step_hooks(step_callback, render_callback)
@@ -405,7 +405,7 @@ def _make_acrobot_eval(max_steps: int = 500):
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make("Acrobot-v1",
+        env = gym.make("Acrobot-v1", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=max_steps)
         _hooks = _make_step_hooks(step_callback, render_callback)
@@ -417,7 +417,7 @@ def _make_acrobot_eval(max_steps: int = 500):
             done = False
             while not done:
                 out = genome.forward(state)
-                action = int(np.argmax(out))
+                action = out.index(max(out))
                 state, reward, terminated, truncated, _ = env.step(action)
                 # tip height = -cos(θ1) - cos(θ1+θ2) ∈ [-2, 2]
                 tip = -state[0] - (state[0] * state[2] - state[1] * state[3])
@@ -446,7 +446,7 @@ def _make_mountaincar_discrete_eval(max_train_steps: int = 200):
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
-        env = gym.make("MountainCar-v0",
+        env = gym.make("MountainCar-v0", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=200)
         _hooks = _make_step_hooks(step_callback, render_callback)
@@ -457,7 +457,7 @@ def _make_mountaincar_discrete_eval(max_train_steps: int = 200):
             solved = False
             for _ in range(200):
                 out = genome.forward(state)
-                action = int(np.argmax(out))
+                action = out.index(max(out))
                 state, reward, terminated, truncated, _ = env.step(action)
                 pos = state[0]
                 if pos > max_pos: max_pos = pos
@@ -480,7 +480,7 @@ def _make_pendulum_eval(max_train_steps: int = 500):
     """
     def make(render_callback=None, step_callback=None, demo=False):
         import gymnasium as gym
-        env = gym.make("Pendulum-v1",
+        env = gym.make("Pendulum-v1", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=200)
         _hooks = _make_step_hooks(step_callback, render_callback)
@@ -509,7 +509,7 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
     """Returns make(render_callback, step_callback, demo) → eval_fn."""
     def make(render_callback=None, step_callback=None, demo=False):
         import gymnasium as gym
-        env = gym.make("MountainCarContinuous-v0",
+        env = gym.make("MountainCarContinuous-v0", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=100_000)
         _hooks = _make_step_hooks(step_callback, render_callback)

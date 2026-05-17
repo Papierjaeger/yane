@@ -29,7 +29,7 @@ def main():
             label = int(row[0])
             pixels = (row[1:] / 255.0).tolist()
             outputs = genome.forward(pixels)
-            if int(np.argmax(outputs)) == label:
+            if outputs.index(max(outputs)) == label:
                 correct += 1
         return correct
 
