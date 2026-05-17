@@ -855,6 +855,7 @@ class TrainingTab(QWidget):
                 max_nodes=self.spin_nodes.value() or None,
                 max_connections=self.spin_conns.value() or None,
                 n_initial_hidden=ex.n_initial_hidden,
+                stateful=ex.stateful,
             )
             self._yane.set_population_size(self.spin_pop.value())
             # 0 = Auto (worker determines optimal count at runtime)

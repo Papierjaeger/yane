@@ -59,6 +59,7 @@ class NeuroEvolution:
         max_nodes: int | None = None,
         max_connections: int | None = None,
         n_initial_hidden: int = 0,
+        stateful: bool = True,
     ) -> None:
         """Set up the input/output topology and initialise the population.
 
@@ -75,6 +76,7 @@ class NeuroEvolution:
         initial = Genome()
         initial.max_nodes = max_nodes
         initial.max_connections = max_connections
+        initial.allow_output_memory = stateful
 
         for i in range(n_inputs):
             node = Node(NodeType.INPUT, innovation=tracker.next())
@@ -85,7 +87,7 @@ class NeuroEvolution:
             initial.input_nodes.append(node)
         for _ in range(n_outputs):
             node = Node(NodeType.OUTPUT, innovation=tracker.next())
-            node.persist_value = True
+            node.persist_value = stateful
             initial.nodes.append(node)
             initial.output_nodes.append(node)
 
