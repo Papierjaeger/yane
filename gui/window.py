@@ -175,14 +175,16 @@ class LeftPanel(QWidget):
         self.lbl_species     = _label("—", "statValue")
         self.lbl_avg_nodes   = _label("—", "statValue")
         self.lbl_avg_conns   = _label("—", "statValue")
-        self.lbl_stagnation    = _label("—", "statValue")
-        self.lbl_novelty_weight = _label("—", "statValue")
-        pop_layout.addRow("Genomes:",        self.lbl_population)
-        pop_layout.addRow("Species:",        self.lbl_species)
-        pop_layout.addRow("Avg nodes:",      self.lbl_avg_nodes)
-        pop_layout.addRow("Avg conns:",      self.lbl_avg_conns)
-        pop_layout.addRow("Stagnation:",     self.lbl_stagnation)
-        pop_layout.addRow("Novelty weight:", self.lbl_novelty_weight)
+        self.lbl_stagnation      = _label("—", "statValue")
+        self.lbl_next_injection  = _label("—", "statValue")
+        self.lbl_novelty_weight  = _label("—", "statValue")
+        pop_layout.addRow("Genomes:",           self.lbl_population)
+        pop_layout.addRow("Species:",           self.lbl_species)
+        pop_layout.addRow("Avg nodes:",         self.lbl_avg_nodes)
+        pop_layout.addRow("Avg conns:",         self.lbl_avg_conns)
+        pop_layout.addRow("Stagn. (gesamt):",   self.lbl_stagnation)
+        pop_layout.addRow("Nächste Injection:", self.lbl_next_injection)
+        pop_layout.addRow("Novelty weight:",    self.lbl_novelty_weight)
         layout.addWidget(pop)
 
         # ── Structure mutations (best genome) ─────────────────────────────
@@ -253,10 +255,14 @@ class LeftPanel(QWidget):
         avg_c = mem.get("avg_connections_per_genome")
         self.lbl_avg_nodes.setText(f"{avg_n:.1f}" if avg_n is not None else "—")
         self.lbl_avg_conns.setText(f"{avg_c:.1f}" if avg_c is not None else "—")
-        stag = mem.get("stagnation_count")
-        thr  = mem.get("stagnation_threshold")
-        if stag is not None and thr is not None:
-            self.lbl_stagnation.setText(f"{stag} / {thr}")
+        stag  = mem.get("stagnation_count")
+        thr   = mem.get("stagnation_threshold")
+        since = mem.get("since_last_injection")
+        if stag is not None:
+            self.lbl_stagnation.setText(str(stag))
+        if since is not None and thr is not None:
+            remaining = max(0, thr - since)
+            self.lbl_next_injection.setText(f"{since} / {thr}  (noch {remaining})")
         nw = mem.get("novelty_weight")
         if nw is not None:
             self.lbl_novelty_weight.setText(f"{nw:.3f}")

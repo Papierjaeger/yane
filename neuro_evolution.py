@@ -230,10 +230,11 @@ class NeuroEvolution:
             "avg_connections_per_genome": total_connections / len(all_genomes),
             "largest_genome_nodes": max_nodes,
             "largest_genome_connections": max_connections,
-            "species_count":        self._population.species_count,
-            "stagnation_count":     self._population.stagnation_count,
-            "stagnation_threshold": self._population.stagnation_threshold,
-            "novelty_weight":       self._population.novelty_weight,
+            "species_count":           self._population.species_count,
+            "stagnation_count":        self._population.stagnation_count,
+            "stagnation_threshold":    self._population.stagnation_threshold,
+            "since_last_injection":    self._population._since_last_injection,
+            "novelty_weight":          self._population.novelty_weight,
         }
 
     def set_n_workers(self, n: int) -> None:
