@@ -554,6 +554,7 @@ class ExampleConfig:
         max_connections: int,
         make_eval: Callable,
         target_fitness: float,
+        category: str = "Sonstiges",
         n_initial_hidden: int = 0,
         supports_render: bool = False,
         supports_normalization: bool = False,
@@ -568,6 +569,7 @@ class ExampleConfig:
         self.max_connections = max_connections
         self.make_eval = make_eval
         self.target_fitness = target_fitness
+        self.category = category
         self.n_initial_hidden = n_initial_hidden
         self.supports_render = supports_render
         self.supports_normalization = supports_normalization
@@ -585,6 +587,7 @@ def load_examples() -> list[ExampleConfig]:
             n_initial_hidden=2,
             make_eval=_xor_make_eval,
             target_fitness=_XOR_FIT,
+            category="Dataset",
             supports_render=False,
             stateful=False,
             test_cases=_XOR_TEST_CASES,
@@ -599,6 +602,7 @@ def load_examples() -> list[ExampleConfig]:
             max_nodes=30, max_connections=100,
             make_eval=_mult_make_eval,
             target_fitness=_MULT_FIT,
+            category="Dataset",
             supports_normalization=True,
             stateful=False,
         ),
@@ -609,6 +613,7 @@ def load_examples() -> list[ExampleConfig]:
             max_nodes=20, max_connections=60,
             make_eval=_reg22_make_eval,
             target_fitness=_REG22_FIT,
+            category="Dataset",
             stateful=False,
         ),
         ExampleConfig(
@@ -618,6 +623,7 @@ def load_examples() -> list[ExampleConfig]:
             max_nodes=20, max_connections=80,
             make_eval=_reg33_make_eval,
             target_fitness=_REG33_FIT,
+            category="Dataset",
             stateful=False,
         ),
         ExampleConfig(
@@ -627,6 +633,7 @@ def load_examples() -> list[ExampleConfig]:
             max_nodes=20, max_connections=60,
             make_eval=_pi_make_eval,
             target_fitness=_PI_FIT,
+            category="Dataset",
             supports_normalization=True,
             stateful=True,
         ),
@@ -642,6 +649,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=30, max_connections=100,
                 make_eval=_make_discrete_action_eval("CartPole-v1", max_steps=100_000),
                 target_fitness=1000,
+                category="Classic Control",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -651,6 +659,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=30, max_connections=100,
                 make_eval=_make_acrobot_eval(max_steps=500),
                 target_fitness=0,
+                category="Classic Control",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -660,6 +669,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=20, max_connections=60,
                 make_eval=_make_mountaincar_eval(max_train_steps=1000),
                 target_fitness=10.0,
+                category="Classic Control",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -669,6 +679,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=20, max_connections=60,
                 make_eval=_make_mountaincar_discrete_eval(max_train_steps=200),
                 target_fitness=10.0,
+                category="Classic Control",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -678,6 +689,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=20, max_connections=60,
                 make_eval=_make_pendulum_eval(max_train_steps=200),
                 target_fitness=-300,
+                category="Classic Control",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -687,6 +699,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=40, max_connections=150,
                 make_eval=_make_discrete_action_eval("LunarLander-v3", early_stop=-200, max_steps=1000),
                 target_fitness=200,
+                category="Box2D",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -696,6 +709,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=60, max_connections=300,
                 make_eval=_make_continuous_action_eval("BipedalWalker-v3", n_outputs=4, early_stop=-50, max_steps=1000),
                 target_fitness=200,
+                category="Box2D",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -705,9 +719,9 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=80, max_connections=500,
                 make_eval=_make_carracing_eval(grid=12, max_steps=500),
                 target_fitness=800,
+                category="Pixel",
                 supports_render=True,
             ),
-            # ── Toy Text ──────────────────────────────────────────────────
             ExampleConfig(
                 name="Blackjack",
                 description=(
@@ -719,6 +733,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=20, max_connections=60,
                 make_eval=_make_blackjack_eval(n_episodes=500),
                 target_fitness=-0.05,
+                category="Toy Text",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -732,6 +747,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=20, max_connections=60,
                 make_eval=_make_cliffwalking_eval(max_steps=200),
                 target_fitness=-50.0,
+                category="Toy Text",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -745,6 +761,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=20, max_connections=60,
                 make_eval=_make_frozenlake_eval(n_episodes=20),
                 target_fitness=0.8,
+                category="Toy Text",
                 supports_render=True,
             ),
             ExampleConfig(
@@ -758,6 +775,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=30, max_connections=100,
                 make_eval=_make_taxi_eval(max_steps=500),
                 target_fitness=5.0,
+                category="Toy Text",
                 supports_render=True,
             ),
         ]

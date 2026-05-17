@@ -537,8 +537,8 @@ class TrainingTab(QWidget):
         cfg_form.setSpacing(6)
 
         self.example_combo = QComboBox()
-        for ex in self._examples:
-            self.example_combo.addItem(ex.name)
+        self._combo_index_map: dict[int, object] = {}  # combo idx → ExampleConfig
+        self._build_example_combo()
         self.example_combo.currentIndexChanged.connect(self._on_example_changed)
         cfg_form.addRow("Example:", self.example_combo)
 
@@ -713,15 +713,62 @@ class TrainingTab(QWidget):
         self._ram_timer.timeout.connect(self._refresh_ram)
         self._ram_timer.start(1000)
 
+    # Category display order
+    _CATEGORY_ORDER = ["Dataset", "Toy Text", "Classic Control", "Box2D", "Pixel", "Sonstiges"]
+
+    def _build_example_combo(self) -> None:
+        """Populate the combo box with group headers and indented example names."""
+        from PySide6.QtGui import QStandardItemModel, QStandardItem, QFont, QColor
+        model = QStandardItemModel()
+        self._combo_index_map.clear()
+
+        # Group examples by category, preserving category order
+        groups: dict[str, list] = {}
+        for ex in self._examples:
+            groups.setdefault(ex.category, []).append(ex)
+
+        header_font = QFont()
+        header_font.setBold(True)
+        header_color = QColor("#a6adc8")
+
+        combo_idx = 0
+        first_example_combo_idx = None
+
+        for cat in self._CATEGORY_ORDER:
+            if cat not in groups:
+                continue
+            # Group header — not selectable
+            header = QStandardItem(f"  {cat}")
+            header.setEnabled(False)
+            header.setFont(header_font)
+            header.setForeground(header_color)
+            model.appendRow(header)
+            combo_idx += 1
+
+            for ex in groups[cat]:
+                item = QStandardItem(f"    {ex.name}")
+                model.appendRow(item)
+                self._combo_index_map[combo_idx] = ex
+                if first_example_combo_idx is None:
+                    first_example_combo_idx = combo_idx
+                combo_idx += 1
+
+        self.example_combo.setModel(model)
+        if first_example_combo_idx is not None:
+            self.example_combo.setCurrentIndex(first_example_combo_idx)
+
     def _current_example(self):
-        idx = self.example_combo.currentIndex()
-        if 0 <= idx < len(self._examples):
-            return self._examples[idx]
-        return None
+        return self._combo_index_map.get(self.example_combo.currentIndex())
 
     def _on_example_changed(self, idx: int) -> None:
         ex = self._current_example()
         if ex is None:
+            # User clicked a group header — jump to the next real example
+            next_idx = idx + 1
+            while next_idx not in self._combo_index_map and next_idx < self.example_combo.count():
+                next_idx += 1
+            if next_idx in self._combo_index_map:
+                self.example_combo.setCurrentIndex(next_idx)
             return
         self.spin_inputs.setValue(ex.n_inputs)
         self.spin_outputs.setValue(ex.n_outputs)
