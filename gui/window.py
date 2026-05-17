@@ -745,13 +745,15 @@ class _TestCaseRow:
 
         layout.addWidget(row)
 
-    def update(self, genome) -> None:
+    def update(self, genome, stateful: bool = True) -> None:
         if genome is None:
             self._out_lbl.setText("—")
             self._tick.setText("?")
             self._tick.setStyleSheet("color: #585b70; font-size: 16px; font-weight: bold;")
             return
         try:
+            if not stateful:
+                genome.reset()
             outputs = genome.forward(self._inputs)
         except Exception:
             self._out_lbl.setText("err")
@@ -839,8 +841,9 @@ class InspectTab(QWidget):
             self._genome._clear()
         self._genome = genome
         self.btn_run.setEnabled(bool(self._input_widgets))
+        stateful = self._example.stateful if self._example else True
         for row in self._test_rows:
-            row.update(genome)
+            row.update(genome, stateful=stateful)
 
     # ------------------------------------------------------------------
 
@@ -905,6 +908,9 @@ class InspectTab(QWidget):
             return
         inputs = [w.value() for w in self._input_widgets]
         try:
+            stateful = self._example.stateful if self._example else True
+            if not stateful:
+                self._genome.reset()
             outputs = self._genome.forward(inputs)
             for i, lbl in enumerate(self._output_labels):
                 lbl.setText(f"{outputs[i]:.5f}" if i < len(outputs) else "—")
