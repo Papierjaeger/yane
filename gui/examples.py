@@ -83,25 +83,44 @@ def _step_hooks(total: float, env, step_callback, render_callback) -> None:
             render_callback(frame)
 
 
+_RENDER_INTERVAL = 1.0 / 30  # at most 30 fps for env.render() — the expensive part
+
+
 def _make_step_hooks(step_callback, render_callback):
     """Return a per-step hook callable, or None if no callbacks are active.
 
     Callers check `if _hooks:` once per step instead of calling _step_hooks
     unconditionally — eliminates 600k+ function calls per training run.
+
+    Critical: env.render() is only called when a frame will actually be
+    displayed (rate-limited to 30 fps).  Calling render() on every step
+    regardless costs several ms each time (pygame → RGB numpy), which
+    adds up to ~1 s of pure render overhead per 500-step Acrobot episode
+    even though only ~10 frames are ever shown.
     """
     if step_callback is None and render_callback is None:
         return None
     sc, rc = step_callback, render_callback
 
-    def _hooks(total, env):
-        if sc is not None:
+    if rc is not None:
+        _last_render = [0.0]
+
+        def _hooks(total, env):
+            if sc is not None:
+                delay = sc(total)
+                if delay > 0:
+                    time.sleep(delay)
+            now = time.perf_counter()
+            if now - _last_render[0] >= _RENDER_INTERVAL:
+                _last_render[0] = now
+                frame = env.render()
+                if frame is not None:
+                    rc(frame)
+    else:
+        def _hooks(total, env):
             delay = sc(total)
             if delay > 0:
                 time.sleep(delay)
-        if rc is not None:
-            frame = env.render()
-            if frame is not None:
-                rc(frame)
 
     return _hooks
 

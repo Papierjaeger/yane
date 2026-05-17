@@ -623,15 +623,9 @@ class TrainingTab(QWidget):
                 self._yane.set_min_fitness(target)
             render_cb = None
             if ex.supports_render and self.btn_render.isChecked():
-                last_render = 0.0
-                _emit = self.render_frame.emit
-                def render_cb(frame):
-                    nonlocal last_render
-                    now = _time.perf_counter()
-                    if now - last_render < 1 / 30:
-                        return
-                    last_render = now
-                    _emit(frame)
+                # Rate limiting is now done in _make_step_hooks (before env.render()),
+                # so here we just forward every frame that arrives.
+                render_cb = self.render_frame.emit
 
             make_eval_fn = None
             evaluate_fn = ex.make_eval(render_cb)
