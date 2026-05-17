@@ -32,7 +32,7 @@ class NeuroEvolution:
         self._population_size: int = 100
         self._n_workers: int = 1
         self._lamarck_steps: int = 0      # 0 = disabled; >0 = hill-climbing steps per genome
-        self._lamarck_sigma: float = 0.1  # std-dev of Gaussian weight perturbation
+        self._lamarck_sigma: float = 1.0  # multiplier on genome.sigma_global (1.0 = unscaled)
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -149,13 +149,19 @@ class NeuroEvolution:
     def set_efficiency_penalty(self, max_ms: float, penalty_per_ms: float) -> None:
         self._efficiency_penalty = EfficiencyPenalty(max_ms, penalty_per_ms)
 
-    def set_lamarck(self, n_steps: int = 5, sigma: float = 0.1) -> None:
+    def set_lamarck(self, n_steps: int = 5, sigma: float = 1.0) -> None:
         """Enable Lamarckian weight refinement after each NEAT mutation.
 
         Before a genome is evaluated, its weights and biases are hill-climbed
         for `n_steps` attempts.  Each attempt perturbs all weights and biases
-        with Gaussian noise (std = sigma) and keeps the perturbation only if
-        it improves fitness.
+        with Gaussian noise and keeps the perturbation only if it improves fitness.
+
+        The perturbation std-dev is  genome.sigma_global * sigma.  Because
+        sigma_global is a self-adaptive strategy gene that evolves with each
+        genome, the search step size automatically tunes itself — genomes that
+        prefer large mutations search broadly, those that have converged search
+        finely.  The sigma parameter here is just a global scale factor on top
+        of that (default 1.0 = use sigma_global as-is).
 
         Cost: n_steps extra fitness-function calls per genome per generation.
         Benefit: weights converge much faster for the topology found by NEAT,
@@ -164,8 +170,8 @@ class NeuroEvolution:
         Args:
             n_steps: hill-climbing attempts per genome (default 5).
                      0 disables Lamarck entirely.
-            sigma:   std-dev of the Gaussian weight perturbation (default 0.1).
-                     Smaller = finer search; larger = wider jumps.
+            sigma:   multiplier on genome.sigma_global (default 1.0).
+                     < 1.0 for finer search, > 1.0 for wider jumps.
         """
         self._lamarck_steps = max(0, n_steps)
         self._lamarck_sigma = sigma
@@ -350,7 +356,10 @@ class NeuroEvolution:
         if not conns and not nodes:
             return
 
-        sigma = self._lamarck_sigma
+        # Use the genome's own sigma_global as step size — it evolves along with
+        # the genome, so well-adapted genomes automatically search at the right scale.
+        # _lamarck_sigma acts as a multiplier (default 1.0 → pure sigma_global).
+        sigma = genome.sigma_global * self._lamarck_sigma
         best_fitness = fitness_fn(genome)
 
         for _ in range(self._lamarck_steps):
