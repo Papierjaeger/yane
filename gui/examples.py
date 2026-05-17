@@ -1,9 +1,48 @@
 """Built-in example configurations for the GUI."""
 from __future__ import annotations
+import json
+import os
 import time
 from typing import Callable
 
 from yane.core.genome import Genome
+
+# Base directory of the examples/ package (sibling of gui/)
+_EXAMPLES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "examples")
+
+
+def _load_dataset(rel_path: str) -> list[dict]:
+    """Load a JSON dataset file relative to the examples/ directory."""
+    with open(os.path.join(_EXAMPLES_DIR, rel_path), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _make_dataset_eval(rel_path: str, stateful: bool = False, n_samples: int | None = None):
+    """Generic eval factory for JSON datasets with {input, output} samples.
+
+    stateful=False → genome.reset() before every forward pass (stateless mapping).
+    stateful=True  → reset only once at the start; memory persists across samples.
+    n_samples      → use only the first N samples (useful for large datasets).
+    """
+    dataset = _load_dataset(rel_path)
+    if n_samples is not None:
+        dataset = dataset[:n_samples]
+
+    def make(render_callback=None, step_callback=None, demo=False):
+        def evaluate(genome: Genome) -> float:
+            fitness = 0.0
+            if stateful:
+                genome.reset()
+            for sample in dataset:
+                if not stateful:
+                    genome.reset()
+                out = genome.forward(sample["input"])
+                for o, t in zip(out, sample["output"]):
+                    fitness -= abs(o - t)
+            return fitness
+        return evaluate
+    return make
+
 
 # ---------------------------------------------------------------------------
 # XOR — always available
@@ -394,6 +433,42 @@ def load_examples() -> list[ExampleConfig]:
                 ([1.0, 0.0], [1.0]),
                 ([1.0, 1.0], [0.0]),
             ],
+        ),
+        ExampleConfig(
+            name="Multiplication",
+            description="Lernt die Multiplikationstabelle (2 Inputs, 1 Output, 100 Samples).",
+            n_inputs=2, n_outputs=1,
+            max_nodes=30, max_connections=100,
+            make_eval=_make_dataset_eval("basic multiplication/multiplication_table.json"),
+            target_fitness=-0.5,
+            stateful=False,
+        ),
+        ExampleConfig(
+            name="Regression 2→2",
+            description="Lernt eine kontinuierliche 2→2 Abbildung (4 Samples).",
+            n_inputs=2, n_outputs=2,
+            max_nodes=20, max_connections=60,
+            make_eval=_make_dataset_eval("simple_2_2_continuous/dataset_2_2.json"),
+            target_fitness=-0.1,
+            stateful=False,
+        ),
+        ExampleConfig(
+            name="Regression 3→3",
+            description="Lernt eine kontinuierliche 3→3 Abbildung (8 Samples).",
+            n_inputs=3, n_outputs=3,
+            max_nodes=20, max_connections=80,
+            make_eval=_make_dataset_eval("simple_3_3_continuous/dataset_3_3.json"),
+            target_fitness=-0.1,
+            stateful=False,
+        ),
+        ExampleConfig(
+            name="Sequence: Pi-Ziffern",
+            description="Sagt die nächste Ziffer von Pi voraus — braucht Gedächtnis (1 Input, 1 Output, 50 Samples).",
+            n_inputs=1, n_outputs=1,
+            max_nodes=20, max_connections=60,
+            make_eval=_make_dataset_eval("sequence_recall_PI/dataset_PI.json", stateful=True, n_samples=50),
+            target_fitness=-10.0,
+            stateful=True,
         ),
     ]
 
