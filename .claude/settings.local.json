@@ -66,7 +66,13 @@
       "Bash(python -c \"from yane.gui.canvas import NetworkCanvas; print\\('Canvas OK'\\)\")",
       "Bash(grep -A2 \"def.*pass$\" /var/home/sresch/pCloudDrive/Projekte/Programmieren/yane/gui/worker.py)",
       "Bash(python3 -c \"import sys; sys.path.insert\\(0, '/var/home/sresch/pCloudDrive/Projekte/Programmieren'\\); from yane.examples.gym.CartPole import main; print\\('CartPole imports ok'\\)\")",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(python -c \"from yane.gui.canvas import FitnessChart; c = FitnessChart\\(\\); [c.add_point\\(v\\) for v in [10, 9, 8, -1000, 11, 10, 9]]; print\\('OK, lo visible:', round\\(c._percentile\\(sorted\\([10,9,8,-1000,11,10,9]\\), 0.05\\), 2\\)\\)\")",
+      "Bash(python -m pytest yane/tests/test_crossover_and_speciation.py::TestCrossover::test_topology_cache_invalidated_after_crossover -v)",
+      "Bash(python -m pytest yane/tests/ -q --count=3)",
+      "Bash(python -m pytest yane/tests/test_crossover_and_speciation.py -v -k \"test_topology_cache\")",
+      "Bash(python -m pytest yane/tests/)",
+      "Bash(python -m pytest yane/tests/ -x)"
     ],
     "additionalDirectories": [
       "/tmp"
