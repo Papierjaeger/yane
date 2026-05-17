@@ -5,25 +5,40 @@ from typing import Callable
 
 
 class ActivationType(Enum):
-    LINEAR   = "linear"
-    SIGMOID  = "sigmoid"
-    TANH     = "tanh"
-    RELU     = "relu"
-    BINARY   = "binary"
+    LINEAR     = "linear"
+    SIGMOID    = "sigmoid"
+    TANH       = "tanh"
+    RELU       = "relu"
+    BINARY     = "binary"
     LEAKY_RELU = "leaky_relu"   # solves dying-ReLU; negative slope = 0.01
-    ELU      = "elu"            # smooth negative region: α(e^x - 1) for x < 0
-    SWISH    = "swish"          # x * sigmoid(x) — smooth, often beats ReLU
-    SOFTPLUS = "softplus"       # log(1 + e^x) — smooth ReLU approximation
-    SINE     = "sine"           # sin(x) — useful for periodic/oscillatory tasks
+    ELU        = "elu"          # smooth negative region: α(e^x - 1) for x < 0
+    SWISH      = "swish"        # x * sigmoid(x) — smooth, often beats ReLU
+    SOFTPLUS   = "softplus"     # log(1 + e^x) — smooth ReLU approximation
+    SINE       = "sine"         # sin(x) — periodic/oscillatory tasks
+    SQUARE     = "square"       # x² — enables polynomial computation (e.g. x*y via (x+y)²)
+    ABS        = "abs"          # |x| — piecewise linear, symmetric around 0
+    GAUSSIAN   = "gaussian"     # exp(-x²) — radial basis; peaks at 0, decays symmetrically
+    CUBE       = "cube"         # x³ — odd polynomial; can flip sign with input
+    COSINE     = "cosine"       # cos(x) — phase-shifted periodic (complements SINE)
 
 
 _CLIP = 500.0  # prevent overflow in exp-based functions
+_GAUSS_CLIP = 26.0  # exp(-26²) underflows to 0; no need to compute
 
 
 def _linear(v: float) -> float:     return v
 def _relu(v: float) -> float:       return v if v > 0.0 else 0.0
 def _binary(v: float) -> float:     return 1.0 if v >= 0.5 else 0.0
 def _leaky_relu(v: float) -> float: return v if v > 0.0 else 0.01 * v
+def _abs(v: float) -> float:        return v if v >= 0.0 else -v
+def _square(v: float) -> float:     return v * v
+def _cube(v: float) -> float:       return v * v * v
+
+
+def _gaussian(v: float) -> float:
+    if v > _GAUSS_CLIP or v < -_GAUSS_CLIP:
+        return 0.0
+    return math.exp(-(v * v))
 
 
 def _sigmoid(v: float) -> float:
@@ -68,6 +83,11 @@ ACTIVATION_FNS: dict[ActivationType, Callable[[float], float]] = {
     ActivationType.SWISH:      _swish,
     ActivationType.SOFTPLUS:   _softplus,
     ActivationType.SINE:       math.sin,
+    ActivationType.SQUARE:     _square,
+    ActivationType.ABS:        _abs,
+    ActivationType.GAUSSIAN:   _gaussian,
+    ActivationType.CUBE:       _cube,
+    ActivationType.COSINE:     math.cos,
 }
 
 
