@@ -226,29 +226,27 @@ class TestStrategyGenes(unittest.TestCase):
 
     def test_strategy_genes_present_after_init(self):
         g = Genome()
-        for attr in ('crossover_prob', 'offspring_factor', 'species_threshold', 'sigma_global'):
+        for attr in ('crossover_prob', 'offspring_factor', 'sigma_global'):
             self.assertTrue(hasattr(g, attr), f"Missing attribute: {attr}")
 
     def test_strategy_genes_copied(self):
         g = Genome()
         g.crossover_prob = 0.77
         g.offspring_factor = 3.14
-        g.species_threshold = 0.42
         g.sigma_global = 1.23
         c = g.copy()
-        self.assertAlmostEqual(c.crossover_prob,    0.77)
-        self.assertAlmostEqual(c.offspring_factor,  3.14)
-        self.assertAlmostEqual(c.species_threshold, 0.42)
-        self.assertAlmostEqual(c.sigma_global,      1.23)
+        self.assertAlmostEqual(c.crossover_prob,   0.77)
+        self.assertAlmostEqual(c.offspring_factor, 3.14)
+        self.assertAlmostEqual(c.sigma_global,     1.23)
 
     def test_strategy_genes_mutate(self):
         random.seed(0)
         g = Genome()
-        original = (g.crossover_prob, g.offspring_factor, g.species_threshold, g.sigma_global)
+        original = (g.crossover_prob, g.offspring_factor, g.sigma_global)
         changed = False
         for _ in range(200):
             g.mutate()
-            current = (g.crossover_prob, g.offspring_factor, g.species_threshold, g.sigma_global)
+            current = (g.crossover_prob, g.offspring_factor, g.sigma_global)
             if current != original:
                 changed = True
                 break
@@ -283,12 +281,10 @@ class TestStrategyGenes(unittest.TestCase):
         g = Genome()
         for _ in range(500):
             g.mutate()
-        self.assertGreaterEqual(g.crossover_prob,    0.0)
-        self.assertLessEqual(g.crossover_prob,       1.0)
-        self.assertGreaterEqual(g.offspring_factor,  0.01)
-        self.assertGreaterEqual(g.species_threshold, 0.01)
-        self.assertLessEqual(g.species_threshold,    1.0)
-        self.assertGreaterEqual(g.sigma_global,      0.01)
+        self.assertGreaterEqual(g.crossover_prob,   0.0)
+        self.assertLessEqual(g.crossover_prob,      1.0)
+        self.assertGreaterEqual(g.offspring_factor, 0.01)
+        self.assertGreaterEqual(g.sigma_global,     0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -312,19 +308,22 @@ class TestCompatibility(unittest.TestCase):
         self.assertAlmostEqual(_compatibility(g1, g2), _compatibility(g2, g1), places=10)
 
     def test_distance_in_range(self):
+        # Formula: excess/N + disjoint/N + 0.4*W_bar.
+        # Max theoretical: ~2.8 (all excess + large weight diff). Docs say "roughly [0, 2]".
         g1 = _evolved_genome(n_mutations=30)
         g2 = _evolved_genome(n_mutations=30)
         d = _compatibility(g1, g2)
         self.assertGreaterEqual(d, 0.0)
-        self.assertLessEqual(d, 1.0)
+        self.assertLessEqual(d, 3.0)
 
     def test_different_structure_nonzero_distance(self):
         from yane.evolution import smart_mutation
-        g1 = _evolved_genome(n_mutations=0)
+        yane = _make_yane(2, 1, max_nodes=30, max_connections=100)
+        g1 = yane.next_genome()
         g2 = g1.copy()  # identical start
-        # Force structural divergence by adding hidden nodes to g1 only
+        # Force structural divergence by adding connections to g1 only
         for _ in range(10):
-            smart_mutation.add_node(g1)
+            smart_mutation.add_connection(g1, yane._tracker)
         self.assertGreater(_compatibility(g1, g2), 0.0)
 
     def test_excess_vs_disjoint_classification(self):
@@ -432,18 +431,19 @@ class TestSpeciation(unittest.TestCase):
                          "Structurally identical genomes should be in the same species")
 
     def test_very_different_genomes_different_species(self):
-        """Structurally diverged genomes with low species_threshold → multiple species."""
+        """Structurally diverged genomes with low compat threshold → multiple species."""
         from yane.evolution import smart_mutation
-        pop = Population(max_size=50)
+        yane = _make_yane(2, 1, max_connections=100)
+        pop = yane._population
         g1 = pop.select_for_evaluation()
         pop.submit(g1, 1.0)
 
-        # Create a very different genome
+        # g2 gets many extra tracked connections; with a near-zero threshold
+        # even one disjoint gene forces a new species.
         g2 = g1.copy()
-        g2.species_threshold = 0.001  # very strict → almost any difference → new species
-        g1.species_threshold = 0.001
+        pop._compat_threshold = 0.001
         for _ in range(15):
-            smart_mutation.add_node(g2)
+            smart_mutation.add_connection(g2, yane._tracker)
         g2.fitness = 0.0
         pop._evaluated.append(g2)
         pop._assign_species()

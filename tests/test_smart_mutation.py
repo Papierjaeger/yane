@@ -14,6 +14,7 @@ class TestAddNode(unittest.TestCase):
 
     def test_add_node_increases_node_count(self):
         g = _make_genome()
+        smart_mutation.add_connection(g)  # add_node requires an existing connection to split
         before = len(g.nodes)
         smart_mutation.add_node(g)
         self.assertEqual(len(g.nodes), before + 1)
@@ -31,14 +32,14 @@ class TestAddNode(unittest.TestCase):
         smart_mutation.add_node(g)
         self.assertEqual(len(g.nodes), 3, "add_node must respect max_nodes cap")
 
-    def test_add_node_without_connections(self):
+    def test_add_node_without_connections_is_noop(self):
         from yane.core.genome import Genome
         g = Genome()
         # Add a bare input and output without connecting them
         inp = Node(NodeType.INPUT); g.nodes.append(inp); g.input_nodes.append(inp)
         out = Node(NodeType.OUTPUT); g.nodes.append(out); g.output_nodes.append(out)
-        smart_mutation.add_node(g)  # no connections → adds bare hidden node
-        self.assertEqual(len(g.nodes), 3)
+        smart_mutation.add_node(g)  # no connections → no-op (nothing to split)
+        self.assertEqual(len(g.nodes), 2, "add_node without connections must be a no-op")
 
 
 class TestRemoveNodeSelfLoop(unittest.TestCase):

@@ -20,12 +20,13 @@ def _compatibility(g1: Genome, g2: Genome) -> float:
 
     Coefficients tuned to keep δ in roughly [0, 2]:
       c1 = 1.0 (excess)   c2 = 1.0 (disjoint)   c3 = 0.4 (weight diff)
+
+    Hot path: both dicts are cached per genome (invalidated on topology change),
+    so repeated comparisons against stable species representatives cost nothing
+    beyond a dict lookup.
     """
-    # Collect connection innovations
-    g1_innov = {conn.innovation: conn for src in g1.nodes for conn in src.connections
-                if conn.innovation >= 0}
-    g2_innov = {conn.innovation: conn for src in g2.nodes for conn in src.connections
-                if conn.innovation >= 0}
+    g1_innov, max_innov_g1 = g1._get_innov_cache()
+    g2_innov, max_innov_g2 = g2._get_innov_cache()
 
     if not g1_innov and not g2_innov:
         # Legacy fallback: simple topology distance
@@ -35,22 +36,26 @@ def _compatibility(g1: Genome, g2: Genome) -> float:
         conn_diff = abs(c1 - c2) / max(c1, c2, 1)
         return (node_diff + conn_diff) / 2.0
 
-    all_innovs  = g1_innov.keys() | g2_innov.keys()
-    max_innov_g1 = max(g1_innov, default=-1)
-    max_innov_g2 = max(g2_innov, default=-1)
-    smaller_max  = min(max_innov_g1, max_innov_g2)
+    smaller_max = min(max_innov_g1, max_innov_g2)
     N = max(len(g1_innov), len(g2_innov), 1)
 
     excess = disjoint = matching = 0
     weight_diff_sum = 0.0
 
-    for innov in all_innovs:
-        in_g1 = innov in g1_innov
-        in_g2 = innov in g2_innov
-        if in_g1 and in_g2:
+    # Iterate g1's genes; classify each as matching, disjoint, or excess.
+    for innov, conn1 in g1_innov.items():
+        conn2 = g2_innov.get(innov)
+        if conn2 is not None:
             matching += 1
-            weight_diff_sum += abs(g1_innov[innov].weight - g2_innov[innov].weight)
+            weight_diff_sum += abs(conn1.weight - conn2.weight)
+        elif innov > smaller_max:
+            excess += 1
         else:
+            disjoint += 1
+
+    # Count g2-exclusive genes (g1 already handled matching ones above).
+    for innov in g2_innov:
+        if innov not in g1_innov:
             if innov > smaller_max:
                 excess += 1
             else:
@@ -157,9 +162,9 @@ class Population:
         # Compute behavior descriptor immediately after evaluation — the genome's
         # weights are still intact and forward() is deterministic.
         if self._probe_inputs:
-            # Store as float32 array — avoids list→ndarray conversion in _compute_novelty.
+            # float64: float32 overflows when networks produce large outputs (e.g. SINE).
             rows = [genome.forward(inp) for inp in self._probe_inputs]
-            self._behaviors[id(genome)] = np.array(rows, dtype=np.float32).ravel()
+            self._behaviors[id(genome)] = np.array(rows, dtype=np.float64).ravel()
         self._novelty_evals_since_recompute += 1
 
         if fitness > self._best_fitness_seen:
@@ -286,18 +291,34 @@ class Population:
             sp.members = []
 
         threshold = self._compat_threshold
+        # Map id(species) → species for O(1) fast-path lookup.
+        species_by_id: dict[int, Species] = {id(sp): sp for sp in self._species}
 
         for genome in self._evaluated:
             placed = False
-            for sp in self._species:
-                if _compatibility(genome, sp.representative) < threshold:
+
+            # Fast path: try last-known species first — avoids full search for
+            # stable genomes that haven't drifted away from their cluster.
+            last_sp_id = getattr(genome, '_last_species_id', None)
+            if last_sp_id is not None:
+                sp = species_by_id.get(last_sp_id)
+                if sp is not None and _compatibility(genome, sp.representative) < threshold:
                     sp.add(genome)
                     placed = True
-                    break
+
+            if not placed:
+                for sp in self._species:
+                    if _compatibility(genome, sp.representative) < threshold:
+                        sp.add(genome)
+                        genome._last_species_id = id(sp)
+                        placed = True
+                        break
             if not placed:
                 new_sp = Species(genome)
                 new_sp.add(genome)
                 self._species.append(new_sp)
+                species_by_id[id(new_sp)] = new_sp
+                genome._last_species_id = id(new_sp)
 
         self._species = [sp for sp in self._species if sp.members]
         for sp in self._species:
@@ -461,19 +482,24 @@ class Population:
     # ------------------------------------------------------------------
 
     def _prune(self) -> None:
+        if not (self._evaluated and len(self._evaluated) + len(self._unevaluated) > self.max_size):
+            return
+
+        # Compute the protected set once — we only ever remove non-protected genomes,
+        # so the global best and species champions never change during this prune pass.
+        # Only protect species champions of multi-member species.
+        # Single-genome species don't represent "protected innovation" —
+        # they're just isolated genomes that happened to form their own
+        # cluster. Protecting all single-genome champions would block
+        # pruning entirely when every genome is in its own species.
+        protected: set[int] = {id(self.get_best())}
+        for sp in self._species:
+            if len(sp.members) > 1:
+                protected.add(id(sp.best()))
+
         while self._evaluated and len(self._evaluated) + len(self._unevaluated) > self.max_size:
             if len(self._evaluated) <= 1:
                 break
-
-            protected: set[int] = {id(self.get_best())}
-            # Only protect species champions of multi-member species.
-            # Single-genome species don't represent "protected innovation" —
-            # they're just isolated genomes that happened to form their own
-            # cluster. Protecting all single-genome champions would block
-            # pruning entirely when every genome is in its own species.
-            for sp in self._species:
-                if len(sp.members) > 1:
-                    protected.add(id(sp.best()))
 
             candidates = [g for g in self._evaluated if id(g) not in protected]
             if not candidates:

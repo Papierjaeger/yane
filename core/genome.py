@@ -1,5 +1,6 @@
 from __future__ import annotations
 import random
+from collections import deque
 
 from yane.core.connection import Connection
 from yane.core.node import Node, NodeType
@@ -8,22 +9,21 @@ from yane.evolution.mutation import Mutation
 # Attributes shared between copy() and crossover() — scalars and Mutation objects.
 _SCALAR_GENES = (
     'bypass_connection_prob', 'crossover_prob', 'offspring_factor',
-    'species_threshold', 'sigma_global',
+    'sigma_global',
 )
 _MUTATION_GENES = (
     'mutation_bypass', 'mutation_add_node', 'mutation_remove_node',
     'mutation_add_connection', 'mutation_remove_connection',
-    'mutation_crossover', 'mutation_offspring', 'mutation_species_threshold',
+    'mutation_crossover', 'mutation_offspring',
     'mutation_sigma',
 )
 
 # Strategy-gene mutation specs: (attr, mutation_attr, min_val, max_val | None)
 _STRATEGY_MUTATION_SPECS = (
-    ('bypass_connection_prob', 'mutation_bypass',             0.0,  1.0),
-    ('crossover_prob',         'mutation_crossover',          0.0,  1.0),
-    ('offspring_factor',       'mutation_offspring',           0.01, None),
-    ('species_threshold',      'mutation_species_threshold',   0.01, 1.0),
-    ('sigma_global',           'mutation_sigma',               0.01, None),
+    ('bypass_connection_prob', 'mutation_bypass',    0.0,  1.0),
+    ('crossover_prob',         'mutation_crossover', 0.0,  1.0),
+    ('offspring_factor',       'mutation_offspring',  0.01, None),
+    ('sigma_global',           'mutation_sigma',      0.01, None),
 )
 
 
@@ -45,6 +45,7 @@ class Genome:
         self._reset_nodes: list | None = None # nodes that need explicit reset before forward
         self._compiled_forward = None         # cached closure; avoids attribute lookup in hot loop
         self._forward_dispatch = None         # set after first forward(); direct call from then on
+        self._innov_cache: tuple | None = None  # (innov_dict, max_innov); cleared by _invalidate_topology
 
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
@@ -71,10 +72,6 @@ class Genome:
         # as a parent. Balanced by selection pressure over time.
         self.offspring_factor: float = 1.0
         self.mutation_offspring = Mutation()
-
-        # Compatibility-distance threshold for same-species membership
-        self.species_threshold: float = 0.3
-        self.mutation_species_threshold = Mutation()
 
         # Global step-size scale for weight/bias mutations (CMA-ES style)
         self.sigma_global: float = 1.0
@@ -199,7 +196,7 @@ class Genome:
                     in_degree[conn.target] += 1
 
         # Input nodes are "pre-processed" — decrement their targets immediately.
-        queue: list[Node] = []
+        queue: deque[Node] = deque()
         for inp in self.input_nodes:
             for conn in inp.connections:
                 if conn.target in in_degree:
@@ -207,13 +204,14 @@ class Genome:
                     if in_degree[conn.target] == 0:
                         queue.append(conn.target)
         # Nodes with no incoming connections at all (isolated hidden nodes).
+        queued = set(queue)
         for node, deg in in_degree.items():
-            if deg == 0 and node not in queue:
+            if deg == 0 and node not in queued:
                 queue.append(node)
 
         order: list[Node] = []
         while queue:
-            node = queue.pop(0)
+            node = queue.popleft()  # O(1) vs list.pop(0) O(n)
             order.append(node)
             for conn in node.connections:
                 t = conn.target
@@ -508,10 +506,26 @@ class Genome:
         self._compiled_forward = None
         self._forward_dispatch = None
         self._reset_nodes = None
+        self._innov_cache = None
 
     def all_connections(self) -> list[tuple[Node, Connection]]:
         """All (source, connection) pairs in the network."""
         return [(node, conn) for node in self.nodes for conn in node.connections]
+
+    def _get_innov_cache(self) -> tuple[dict, int]:
+        """Return (innovation→connection dict, max_innovation) for this genome.
+
+        Built once on first call after any structural change, then reused.
+        Calling _assign_species with a stable representative re-uses the same
+        dict across all O(population_size) comparisons per generation.
+        """
+        if self._innov_cache is None:
+            d = {conn.innovation: conn
+                 for src in self.nodes
+                 for conn in src.connections
+                 if conn.innovation >= 0}
+            self._innov_cache = (d, max(d, default=-1))
+        return self._innov_cache
 
     def _invalidate_topology(self) -> None:
         self._connection_count = sum(len(n.connections) for n in self.nodes)
@@ -520,6 +534,7 @@ class Genome:
         self._reset_nodes = None
         self._compiled_forward = None
         self._forward_dispatch = None
+        self._innov_cache = None
 
     @property
     def connection_count(self) -> int:

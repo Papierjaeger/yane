@@ -211,11 +211,11 @@ class LeftPanel(QWidget):
         strat_layout.setSpacing(3)
         self.lbl_crossover_prob   = _label("—", "mutRate")
         self.lbl_offspring_factor = _label("—", "mutRate")
-        self.lbl_species_thresh   = _label("—", "mutRate")
+        self.lbl_compat_thresh    = _label("—", "mutRate")
         self.lbl_sigma_global     = _label("—", "mutRate")
         strat_layout.addRow("Crossover prob:",   self.lbl_crossover_prob)
         strat_layout.addRow("Offspring factor:", self.lbl_offspring_factor)
-        strat_layout.addRow("Species threshold:", self.lbl_species_thresh)
+        strat_layout.addRow("Compat threshold:", self.lbl_compat_thresh)
         strat_layout.addRow("Sigma global:",     self.lbl_sigma_global)
         layout.addWidget(strat)
 
@@ -277,7 +277,8 @@ class LeftPanel(QWidget):
         # Strategy genes
         self.lbl_crossover_prob.setText(f"{genome.crossover_prob:.4f}")
         self.lbl_offspring_factor.setText(f"{genome.offspring_factor:.4f}")
-        self.lbl_species_thresh.setText(f"{genome.species_threshold:.4f}")
+        ct = mem.get("compat_threshold")
+        self.lbl_compat_thresh.setText(f"{ct:.4f}" if ct is not None else "—")
         self.lbl_sigma_global.setText(f"{genome.sigma_global:.4f}")
 
         # Weight / Node rates (averaged over all nodes/connections)

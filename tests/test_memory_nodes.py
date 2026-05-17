@@ -44,7 +44,8 @@ class TestPersistentHiddenNode(unittest.TestCase):
         yane = NeuroEvolution()
         yane.configure(2, 1)
         g = yane.next_genome()
-        smart_mutation.add_node(g)
+        smart_mutation.add_connection(g, yane._tracker)  # need a connection to split
+        smart_mutation.add_node(g, yane._tracker)
         hidden = [n for n in g.nodes if n.type == NodeType.HIDDEN]
         self.assertTrue(len(hidden) > 0)
         # Default hidden nodes should not be persistent (no memory)

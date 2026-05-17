@@ -41,11 +41,12 @@ class Mutation:
     def mutate_rates(self) -> None:
         if random.random() < self.rate_mutation_rate:
             scale = random.uniform(0.9, 1.1)
-            self.shift_rate = self._clamp(self.shift_rate * scale)
-            self.custom_rate = self._clamp(self.custom_rate * scale)
-            self.bool_rate = self._clamp(self.bool_rate * scale)
-            self.int_rate = self._clamp(self.int_rate * scale)
-            self.rate_mutation_rate = self._clamp(self.rate_mutation_rate * scale)
+            lo = self.MIN_RATE
+            self.shift_rate = max(lo, min(0.999, self.shift_rate * scale))
+            self.custom_rate = max(lo, min(0.999, self.custom_rate * scale))
+            self.bool_rate = max(lo, min(0.999, self.bool_rate * scale))
+            self.int_rate = max(lo, min(0.999, self.int_rate * scale))
+            self.rate_mutation_rate = max(lo, min(0.999, self.rate_mutation_rate * scale))
 
         if random.random() < self.shift_rate:
             self.value_delta = max(1e-6, self.value_delta * random.uniform(0.9, 1.1))

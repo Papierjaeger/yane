@@ -27,7 +27,7 @@ class NeuroEvolution:
         self._current_genome: Genome | None = None
         self._efficiency_penalty: EfficiencyPenalty | None = None
         self._resource_guard = ResourceGuard()
-        self._resource_check_interval: int = 1
+        self._resource_check_interval: int = 50  # check psutil every N iters (was 1 = ~5% overhead)
         self._population_size: int = 100
         self._n_workers: int = 1
         from yane.evolution.innovation import InnovationTracker
@@ -231,6 +231,7 @@ class NeuroEvolution:
             "largest_genome_nodes": max_nodes,
             "largest_genome_connections": max_connections,
             "species_count":           self._population.species_count,
+            "compat_threshold":        self._population._compat_threshold,
             "stagnation_count":        self._population.stagnation_count,
             "stagnation_threshold":    self._population.stagnation_threshold,
             "since_last_injection":    self._population._since_last_injection,
@@ -258,8 +259,17 @@ class NeuroEvolution:
         self._current_genome = None
 
     def next_genome_batch(self, n: int) -> list[Genome]:
-        """Select n distinct genomes for parallel evaluation."""
+        """Select n distinct genomes for parallel evaluation.
+
+        At least one genome must have been evaluated before calling this method;
+        spawn requires an evaluated population to generate offspring from.
+        """
         self._ensure_configured()
+        if not self._population._evaluated:
+            raise RuntimeError(
+                "next_genome_batch() requires at least one evaluated genome. "
+                "Call next_genome() + submit_fitness() once before using the batch API."
+            )
         while len(self._population._unevaluated) < n:
             self._population._spawn_offspring()
         return list(self._population._unevaluated[:n])

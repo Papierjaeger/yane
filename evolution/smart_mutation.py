@@ -14,35 +14,34 @@ def add_node(genome, tracker=None) -> None:
     A → B (weight w)  becomes  A → N → B
     A→N keeps weight w; N→B gets weight 1.0 with LINEAR activation.
     Net output stays identical at the moment of insertion.
-    Skips silently if genome.max_nodes is set and already reached.
+    Skips silently if genome.max_nodes is set and already reached,
+    or if the genome has no connections to split.
     """
     if genome.max_nodes is not None and len(genome.nodes) >= genome.max_nodes:
         return
 
     connections = genome.all_connections()
+    if not connections:
+        return  # nothing to split; adding an isolated node has no effect
 
-    if connections:
-        source, conn = random.choice(connections)
-        old_target = conn.target
+    source, conn = random.choice(connections)
+    old_target = conn.target
 
-        if tracker is not None:
-            node_innov, conn_in_innov, conn_out_innov = tracker.get_split(conn.innovation)
-        else:
-            node_innov = conn_in_innov = conn_out_innov = -1
-
-        new_node = Node(NodeType.HIDDEN, innovation=node_innov)
-        new_node.activation = ActivationType.LINEAR
-        new_node.bias = 0.0
-
-        conn.target = new_node
-        conn.innovation = conn_in_innov if tracker is not None else conn.innovation
-
-        bypass = Connection(old_target, innovation=conn_out_innov)
-        bypass.weight = 1.0
-        new_node.connections.append(bypass)
+    if tracker is not None:
+        node_innov, conn_in_innov, conn_out_innov = tracker.get_split(conn.innovation)
     else:
-        new_node = Node(NodeType.HIDDEN,
-                        innovation=tracker.next() if tracker is not None else -1)
+        node_innov = conn_in_innov = conn_out_innov = -1
+
+    new_node = Node(NodeType.HIDDEN, innovation=node_innov)
+    new_node.activation = ActivationType.LINEAR
+    new_node.bias = 0.0
+
+    conn.target = new_node
+    conn.innovation = conn_in_innov if tracker is not None else conn.innovation
+
+    bypass = Connection(old_target, innovation=conn_out_innov)
+    bypass.weight = 1.0
+    new_node.connections.append(bypass)
 
     genome.nodes.append(new_node)
     genome._invalidate_topology()
