@@ -363,8 +363,9 @@ class LeftPanel(QWidget):
         scroll.setWidget(inner)
         outer.addWidget(scroll)
 
-    def update_genome(self, genome, mem: dict) -> None:
-        self.canvas.set_genome(genome)
+    def update_genome(self, genome, mem: dict, do_heavy: bool = True) -> None:
+        if do_heavy:
+            self.canvas.set_genome(genome)
 
         # Best genome
         self.lbl_nodes.setText(str(len(genome.nodes)))
@@ -442,8 +443,9 @@ class LeftPanel(QWidget):
                 f"{sum(c.mutation.shift_rate for c in conns) / len(conns):.4f}")
             self.lbl_weight_delta.setText(
                 f"{sum(c.mutation.value_delta for c in conns) / len(conns):.4f}")
-            self.weight_hist.set_weights([c.weight for c in conns])
-        else:
+            if do_heavy:
+                self.weight_hist.set_weights([c.weight for c in conns])
+        elif do_heavy:
             self.weight_hist.set_weights([])
 
 
@@ -502,7 +504,7 @@ class GymRenderWidget(QLabel):
 # ---------------------------------------------------------------------------
 
 class TrainingTab(QWidget):
-    genome_updated = Signal(object, dict)   # → LeftPanel + InspectTab
+    genome_updated = Signal(object, dict, bool)  # genome, mem, do_heavy → LeftPanel + InspectTab
     example_changed = Signal(object)        # → InspectTab.set_example
     training_started = Signal()             # → InspectTab.reset_genome
     render_frame = Signal(object)           # numpy array, emitted from worker thread
@@ -518,6 +520,7 @@ class TrainingTab(QWidget):
         self._last_ram_color = ""
         self._run_id = 0
         self._start_time: float = 0.0
+        self._last_heavy_update: float = 0.0  # throttle for slow widgets
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -792,6 +795,7 @@ class TrainingTab(QWidget):
         self.chart.clear()
         self.species_chart.clear()
         self._start_time = _time.perf_counter()
+        self._last_heavy_update = 0.0
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
         self.btn_stop.setEnabled(True)
@@ -829,8 +833,17 @@ class TrainingTab(QWidget):
         self.lbl_fitness.setText(f"Aktuell: {fitness:.4f}   Beste: {best_genome.fitness:.4f}")
         self.lbl_speed.setText(f"Speed: {iter_s:.1f} iter/s   Laufzeit: {elapsed_str}")
         self.chart.add_point(fitness)
-        self.species_chart.add_point(mem.get("species_count", 0))
-        self.genome_updated.emit(best_genome, mem)
+
+        # Heavy widgets (species chart, weight histogram, network canvas) are
+        # throttled to 1 Hz — they involve non-trivial paint work and don't
+        # need to update as often as the fitness chart or labels.
+        now = _time.perf_counter()
+        do_heavy = now - self._last_heavy_update >= 1.0
+        if do_heavy:
+            self._last_heavy_update = now
+            self.species_chart.add_point(mem.get("species_count", 0))
+
+        self.genome_updated.emit(best_genome, mem, do_heavy)
         self._update_ram_bar()
         self.btn_run_best.setEnabled(self.btn_run_best.isVisible())
 
@@ -901,7 +914,7 @@ class TrainingTab(QWidget):
                     self._best_genome._clear()
                 self._best_genome = best
                 self.btn_run_best.setEnabled(True)
-                self.genome_updated.emit(best, mem)
+                self.genome_updated.emit(best, mem, True)  # full update on finish
             except Exception:
                 pass
         self._worker = None
@@ -1244,7 +1257,8 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._server_tab,   "  API Server  ")
 
         self._training_tab.genome_updated.connect(self._left.update_genome)
-        self._training_tab.genome_updated.connect(self._inspect_tab.update_genome)
+        self._training_tab.genome_updated.connect(
+            lambda g, m, h: self._inspect_tab.update_genome(g, m))
         self._training_tab.example_changed.connect(self._inspect_tab.set_example)
         self._training_tab.training_started.connect(self._inspect_tab.reset_genome)
         root.addWidget(tabs, stretch=1)

@@ -11,7 +11,7 @@ from PySide6.QtCore import QThread, Signal
 from yane.core.genome import Genome
 from yane.neuro_evolution import _return_memory_to_os
 
-_EMIT_INTERVAL_S    = 0.2    # emit UI update at most every 200 ms
+_EMIT_INTERVAL_S    = 0.5    # emit UI update at most every 500 ms
 _MEMORY_CHECK_EVERY = 500    # check resource limits every N iterations
 _GC_EVERY           = 5000   # force gc.collect() + malloc_trim every N iterations
 
@@ -96,6 +96,11 @@ class TrainingWorker(QThread):
                     self._running = False
 
                 self._maybe_maintain(genome, fitness)
+
+                # Yield the GIL so the main thread's Qt event loop can process
+                # pending events (paint, input, signals). Without this, the worker
+                # can monopolise the GIL for many ms during tight training loops.
+                time.sleep(0)
 
                 now = time.perf_counter()
                 if now - last_emit >= _EMIT_INTERVAL_S:
