@@ -94,7 +94,10 @@ class Node:
     def mutate(self, sigma: float = 1.0) -> None:
         self.bias = self.mutation_bias.mutate_value(self.bias, sigma)
         self.activation = self.mutation_activation.mutate_enum(self.activation, ActivationType)
-        self.persist_value = self.mutation_persist.mutate_bool(self.persist_value)
+        if self.type == NodeType.HIDDEN:
+            self.persist_value = self.mutation_persist.mutate_bool(self.persist_value)
+        else:
+            self.persist_value = False  # only hidden nodes may act as memory cells
         self.max_triggers = self.mutation_max_triggers.mutate_int(self.max_triggers, 1, 10)
 
         if self.type == NodeType.INPUT:
