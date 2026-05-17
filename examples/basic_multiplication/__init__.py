@@ -29,6 +29,12 @@ N_INPUTS       = 2
 N_OUTPUTS      = 1
 TARGET_FITNESS = -0.5   # total |error| ≤ 0.5 across 100 normalised samples
 
+# Normalised test cases: inputs a/9, b/9 → output a*b/81
+TEST_CASES = [
+    ([a / _IN_MAX, b / _IN_MAX], [a * b / _OUT_MAX])
+    for a, b in [(0, 0), (2, 3), (5, 5), (7, 4), (9, 9), (1, 9)]
+]
+
 
 def make_eval(render_callback=None, step_callback=None, demo=False, normalize=True):
     data = dataset if normalize else _raw

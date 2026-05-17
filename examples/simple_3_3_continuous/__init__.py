@@ -13,6 +13,11 @@ N_INPUTS       = 3
 N_OUTPUTS      = 3
 TARGET_FITNESS = -0.1
 
+TEST_CASES = [
+    (list(map(float, s["input"])), list(map(float, s["output"])))
+    for s in dataset
+]
+
 
 def make_eval(render_callback=None, step_callback=None, demo=False):
     def evaluate(genome):

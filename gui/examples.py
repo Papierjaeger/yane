@@ -14,14 +14,17 @@ from yane.examples.XOR import (
 from yane.examples.basic_multiplication import (
     make_eval as _mult_make_eval,
     N_INPUTS as _MULT_NI, N_OUTPUTS as _MULT_NO, TARGET_FITNESS as _MULT_FIT,
+    TEST_CASES as _MULT_TEST_CASES,
 )
 from yane.examples.simple_2_2_continuous import (
     make_eval as _reg22_make_eval,
     N_INPUTS as _REG22_NI, N_OUTPUTS as _REG22_NO, TARGET_FITNESS as _REG22_FIT,
+    TEST_CASES as _REG22_TEST_CASES,
 )
 from yane.examples.simple_3_3_continuous import (
     make_eval as _reg33_make_eval,
     N_INPUTS as _REG33_NI, N_OUTPUTS as _REG33_NO, TARGET_FITNESS as _REG33_FIT,
+    TEST_CASES as _REG33_TEST_CASES,
 )
 from yane.examples.sequence_recall_PI import (
     make_eval as _pi_make_eval,
@@ -608,6 +611,7 @@ def load_examples() -> list[ExampleConfig]:
             category="Dataset",
             supports_normalization=True,
             stateful=False,
+            test_cases=_MULT_TEST_CASES,
         ),
         ExampleConfig(
             name="Regression 2→2",
@@ -618,6 +622,7 @@ def load_examples() -> list[ExampleConfig]:
             target_fitness=_REG22_FIT,
             category="Dataset",
             stateful=False,
+            test_cases=_REG22_TEST_CASES,
         ),
         ExampleConfig(
             name="Regression 3→3",
@@ -628,6 +633,7 @@ def load_examples() -> list[ExampleConfig]:
             target_fitness=_REG33_FIT,
             category="Dataset",
             stateful=False,
+            test_cases=_REG33_TEST_CASES,
         ),
         ExampleConfig(
             name="Sequence: Pi-Ziffern",
