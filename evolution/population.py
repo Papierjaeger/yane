@@ -522,39 +522,13 @@ class Population:
         novelty = self._novelty_cache
         nw = self.novelty_weight
 
-        # ── Species health: penalise species that lag behind improving others ─
-        # Health is only applied when there is meaningful fitness spread across
-        # species (some are improving, others are not).  When all species are
-        # stuck at the same fitness level (spread < 0.5), no penalty applies —
-        # that would unfairly eliminate structurally diverse intermediate species
-        # that simply need more time (e.g. XOR / binary-increment problems).
-        #
-        # When spread is large:
-        #   health = 0.4 × relative_position + 0.6 × stagnation_score
-        # where relative_position = 0 for worst species, 1 for best
-        # and stagnation_score = 1 - stagnation_count / (3 × average_stagnation)
-        # Best species always health=1.0 (never penalised).
+        # Species-health placeholder — disabled after benchmarking showed it
+        # consistently hurts performance for discrete/XOR-type tasks.
+        # When all species stagnate at the same fitness level (spread ≈ 0),
+        # any differential penalty eliminates useful structural variants before
+        # they can tune their weights.  The stagnation_count field is kept on
+        # Species for diagnostics and future use.
         _genome_health: dict[int, float] = {}
-        if len(self._species) > 1:
-            best_sp   = max(self._species, key=lambda s: s.best_fitness_seen)
-            all_best  = [sp.best_fitness_seen for sp in self._species]
-            sp_max    = max(all_best)
-            sp_min    = min(all_best)
-            spread    = sp_max - sp_min
-
-            if spread >= 0.5:
-                # Meaningful progress difference → apply health weighting
-                avg_stag = sum(sp.stagnation_count for sp in self._species) / len(self._species)
-                for sp in self._species:
-                    if sp is best_sp:
-                        h = 1.0
-                    else:
-                        rel_pos  = (sp.best_fitness_seen - sp_min) / spread   # [0, 1]
-                        stag_sc  = max(0.0, 1.0 - sp.stagnation_count / max(avg_stag * 3, 1))
-                        h = 0.4 * rel_pos + 0.6 * stag_sc
-                    for g in sp.members:
-                        _genome_health[id(g)] = h
-            # else: spread < 0.5 → all species at similar fitness → no health penalty
 
         # Tournament selection (k=3): pick k random candidates, keep the best.
         # Shift fitness to be non-negative before multiplying by offspring_factor
