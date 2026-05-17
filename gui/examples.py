@@ -17,16 +17,40 @@ def _load_dataset(rel_path: str) -> list[dict]:
         return json.load(f)
 
 
-def _make_dataset_eval(rel_path: str, stateful: bool = False, n_samples: int | None = None):
+def _make_dataset_eval(
+    rel_path: str,
+    stateful: bool = False,
+    n_samples: int | None = None,
+    input_scale: float | None = None,
+    output_scale: float | None = None,
+):
     """Generic eval factory for JSON datasets with {input, output} samples.
 
-    stateful=False → genome.reset() before every forward pass (stateless mapping).
-    stateful=True  → reset only once at the start; memory persists across samples.
-    n_samples      → use only the first N samples (useful for large datasets).
+    stateful=False  → genome.reset() before every forward pass (stateless).
+    stateful=True   → reset only once at episode start (memory persists).
+    n_samples       → use only the first N samples.
+    input_scale     → divide all input values by this before forwarding.
+    output_scale    → divide all target values by this before comparing.
+                      Normalising inputs and outputs to [0, 1] is critical:
+                      without it, the network fights the raw scale instead of
+                      the actual function, and fitness values are misleading.
     """
-    dataset = _load_dataset(rel_path)
+    raw = _load_dataset(rel_path)
     if n_samples is not None:
-        dataset = dataset[:n_samples]
+        raw = raw[:n_samples]
+
+    if input_scale is not None or output_scale is not None:
+        isc = input_scale  or 1.0
+        osc = output_scale or 1.0
+        dataset = [
+            {
+                "input":  [v / isc for v in s["input"]],
+                "output": [v / osc for v in s["output"]],
+            }
+            for s in raw
+        ]
+    else:
+        dataset = raw
 
     def make(render_callback=None, step_callback=None, demo=False):
         def evaluate(genome: Genome) -> float:
@@ -455,11 +479,18 @@ def load_examples() -> list[ExampleConfig]:
         ),
         ExampleConfig(
             name="Multiplication",
-            description="Lernt die Multiplikationstabelle (2 Inputs, 1 Output, 100 Samples).",
+            description=(
+                "Lernt die Multiplikationstabelle (2 Inputs, 1 Output, 100 Samples).\n"
+                "Inputs 0–9 → /9 → [0,1],  Outputs 0–81 → /81 → [0,1]."
+            ),
             n_inputs=2, n_outputs=1,
             max_nodes=30, max_connections=100,
-            make_eval=_make_dataset_eval("basic multiplication/multiplication_table.json"),
-            target_fitness=-0.5,
+            make_eval=_make_dataset_eval(
+                "basic multiplication/multiplication_table.json",
+                input_scale=9.0,
+                output_scale=81.0,
+            ),
+            target_fitness=-0.5,   # total |error| ≤ 0.5 across 100 normalised samples
             stateful=False,
         ),
         ExampleConfig(
@@ -482,10 +513,16 @@ def load_examples() -> list[ExampleConfig]:
         ),
         ExampleConfig(
             name="Sequence: Pi-Ziffern",
-            description="Sagt die nächste Ziffer von Pi voraus — braucht Gedächtnis (1 Input, 1 Output, 50 Samples).",
+            description="Sagt die nächste Ziffer von Pi voraus — braucht Gedächtnis (1 Input, 1 Output, 50 Samples). Digit /9 → [0,1].",
             n_inputs=1, n_outputs=1,
             max_nodes=20, max_connections=60,
-            make_eval=_make_dataset_eval("sequence_recall_PI/dataset_PI.json", stateful=True, n_samples=50),
+            make_eval=_make_dataset_eval(
+                "sequence_recall_PI/dataset_PI.json",
+                stateful=True,
+                n_samples=50,
+                input_scale=9.0,
+                output_scale=9.0,
+            ),
             target_fitness=-10.0,
             stateful=True,
         ),
