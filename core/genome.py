@@ -44,6 +44,7 @@ class Genome:
         self._has_cycles: bool = False        # True = skip topo sort, use BFS
         self._reset_nodes: list | None = None # nodes that need explicit reset before forward
         self._compiled_forward = None         # cached closure; avoids attribute lookup in hot loop
+        self._forward_dispatch = None         # set after first forward(); direct call from then on
 
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
@@ -114,25 +115,59 @@ class Genome:
     # -------------------------------------------------------------------------
 
     def _compile_forward(self):
-        """Build a closure that captures node lists so forward() makes zero attribute lookups."""
+        """Build a closure that captures node lists so forward() makes zero attribute lookups.
+
+        Input nodes that are trivial (LINEAR activation, zero bias, non-persistent)
+        are inlined: their value is pushed directly to targets without going through
+        fire_simple(), saving a function call per input per step.
+        """
+        from yane.util.activation import ActivationType
         reset_nodes = [
             n for n in self.nodes
             if n.persist_value and n not in self.input_nodes
         ]
         self._reset_nodes = reset_nodes
-        input_nodes = self.input_nodes
         exec_order = self._exec_order
         output_nodes = self.output_nodes
-        def _forward(data: list[float]) -> list[float]:
-            for node in reset_nodes:
-                node.value = 0.0
-            n = len(data)
-            for node in input_nodes:
-                node.value = data[node.input_index] if node.input_index < n else 0.0
-                node.fire_simple()
-            for node in exec_order:
-                node.fire_simple()
-            return [node.value for node in output_nodes]
+
+        # Split input nodes: trivial (LINEAR + bias=0 + non-persistent) vs general.
+        trivial_inputs = []   # (node, connections_list) for direct propagation
+        general_inputs = []   # full fire_simple path
+        for node in self.input_nodes:
+            if (node._activation is ActivationType.LINEAR
+                    and node.bias == 0.0
+                    and not node.persist_value):
+                trivial_inputs.append((node, node.connections))
+            else:
+                general_inputs.append(node)
+
+        if general_inputs:
+            def _forward(data: list[float]) -> list[float]:
+                for node in reset_nodes:
+                    node.value = 0.0
+                n = len(data)
+                for node, conns in trivial_inputs:
+                    val = data[node.input_index] if node.input_index < n else 0.0
+                    for conn in conns:
+                        conn.target.value += conn.weight * val
+                for node in general_inputs:
+                    node.value = data[node.input_index] if node.input_index < n else 0.0
+                    node.fire_simple()
+                for node in exec_order:
+                    node.fire_simple()
+                return [node.value for node in output_nodes]
+        else:
+            def _forward(data: list[float]) -> list[float]:
+                for node in reset_nodes:
+                    node.value = 0.0
+                n = len(data)
+                for node, conns in trivial_inputs:
+                    val = data[node.input_index] if node.input_index < n else 0.0
+                    for conn in conns:
+                        conn.target.value += conn.weight * val
+                for node in exec_order:
+                    node.fire_simple()
+                return [node.value for node in output_nodes]
 
         return _forward
 
@@ -180,21 +215,8 @@ class Genome:
             return None  # cycle detected → fall back to BFS
         return order
 
-    def forward(self, data: list[float]) -> list[float]:
-        # Use cached topological order for acyclic networks (no BFS overhead).
-        if self._exec_order is None and not self._has_cycles:
-            result = self._build_exec_order()
-            if result is not None:
-                self._exec_order = result
-            else:
-                self._has_cycles = True
-
-        if self._exec_order is not None:
-            if self._compiled_forward is None:
-                self._compiled_forward = self._compile_forward()
-            return self._compiled_forward(data)
-
-        # Slow path: BFS with cycle protection (recurrent networks).
+    def _bfs_forward(self, data: list[float]) -> list[float]:
+        """Slow path: BFS with cycle protection for recurrent networks."""
         self._triggered.clear()
         for node in self.nodes:
             node.value = 0.0
@@ -215,6 +237,28 @@ class Genome:
             pending = [n for n in self.nodes if n in next_pending]
 
         return self.get_outputs()
+
+    def forward(self, data: list[float]) -> list[float]:
+        # _forward_dispatch is set once after topology is resolved:
+        # either to the compiled fast-path closure or to _bfs_forward.
+        # After the first call, this is a direct 1-attribute-read + 1-call.
+        fn = self._forward_dispatch
+        if fn is not None:
+            return fn(data)
+
+        # First call: resolve topology and install the dispatch function.
+        if not self._has_cycles:
+            exec_order = self._build_exec_order()
+            if exec_order is not None:
+                self._exec_order = exec_order
+                compiled = self._compile_forward()
+                self._compiled_forward = compiled
+                self._forward_dispatch = compiled
+                return compiled(data)
+            self._has_cycles = True
+
+        self._forward_dispatch = self._bfs_forward
+        return self._bfs_forward(data)
 
     # -------------------------------------------------------------------------
     # Mutation
@@ -380,6 +424,7 @@ class Genome:
         genome._exec_order = None
         genome._reset_nodes = None
         genome._compiled_forward = None
+        genome._forward_dispatch = None
         genome._has_cycles = self._has_cycles
         return genome
 
@@ -412,6 +457,7 @@ class Genome:
         self._has_cycles = False
         self._reset_nodes = None
         self._compiled_forward = None
+        self._forward_dispatch = None
 
     @property
     def connection_count(self) -> int:
