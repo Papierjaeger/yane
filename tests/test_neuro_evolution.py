@@ -27,11 +27,37 @@ class TestNeuroEvolutionConfig(unittest.TestCase):
             "Initial genome must have no connections — topology grows via mutation")
 
     def test_output_nodes_have_persist_value(self):
-        yane = self._make(n_inputs=2, n_outputs=1)
+        yane = self._make(n_inputs=2, n_outputs=1, stateful=True)
         g = yane.next_genome()
         for n in g.output_nodes:
             self.assertTrue(n.persist_value,
-                "Output nodes must have persist_value=True so forward() returns correct values")
+                "Output nodes must have persist_value=True for stateful tasks")
+
+    def test_stateful_false_output_nodes_no_persist(self):
+        yane = self._make(n_inputs=2, n_outputs=1, stateful=False)
+        g = yane.next_genome()
+        self.assertFalse(g.allow_output_memory)
+        for n in g.output_nodes:
+            self.assertFalse(n.persist_value,
+                "Output nodes must not persist for stateless dataset tasks")
+
+    def test_stateful_false_mutation_cannot_enable_output_persist(self):
+        yane = self._make(n_inputs=2, n_outputs=1, stateful=False)
+        g = yane.next_genome()
+        for n in g.output_nodes:
+            n.persist_value = True  # manually force it on
+        g.mutate()
+        for n in g.output_nodes:
+            self.assertFalse(n.persist_value,
+                "mutate() must reset persist_value=False on output nodes for stateless genomes")
+
+    def test_stateful_false_allow_output_memory_propagates_to_copy(self):
+        yane = self._make(n_inputs=2, n_outputs=1, stateful=False)
+        g = yane.next_genome()
+        copy = g.copy()
+        self.assertFalse(copy.allow_output_memory)
+        for n in copy.output_nodes:
+            self.assertFalse(n.persist_value)
 
     def test_max_nodes_propagates_to_genome(self):
         yane = self._make(n_inputs=2, n_outputs=1, max_nodes=7)

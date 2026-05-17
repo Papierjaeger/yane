@@ -199,6 +199,41 @@ class TestGenomeMutation(unittest.TestCase):
                 self.assertGreaterEqual(m.shift_rate, Mutation.MIN_RATE)
                 self.assertGreaterEqual(m.bool_rate, Mutation.MIN_RATE)
 
+    def test_allow_output_memory_false_survives_repeated_mutation(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(2, 1, max_nodes=10, max_connections=20, stateful=False)
+        g = yane.next_genome()
+        for _ in range(200):
+            g.mutate()
+        for n in g.output_nodes:
+            self.assertFalse(n.persist_value,
+                "Output persist_value must stay False after many mutations on stateless genome")
+
+
+class TestGenomePickle(unittest.TestCase):
+
+    def test_allow_output_memory_survives_pickle_roundtrip(self):
+        import pickle
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(2, 1, stateful=False)
+        g = yane.next_genome()
+        g2 = pickle.loads(pickle.dumps(g))
+        self.assertFalse(g2.allow_output_memory)
+        for n in g2.output_nodes:
+            self.assertFalse(n.persist_value)
+
+    def test_backward_compat_missing_allow_output_memory_defaults_true(self):
+        from yane.core.genome import Genome
+        g = _make_genome()
+        state = g.__getstate__()
+        del state['allow_output_memory']   # simulate genome pickled before this attribute existed
+        g2 = Genome()
+        g2.__setstate__(state)
+        self.assertTrue(g2.allow_output_memory,
+            "Old pickled genomes must default allow_output_memory=True for backward compatibility")
+
 
 if __name__ == "__main__":
     unittest.main()
