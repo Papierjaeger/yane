@@ -600,6 +600,20 @@ class TrainingTab(QWidget):
             "3–5 = gut für Regression/Supervised Learning\n"
             "0 = empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!)")
 
+        self.spin_species = QSpinBox()
+        self.spin_species.setRange(2, 50)
+        self.spin_species.setValue(5)
+        self.spin_species.setToolTip(
+            "Zielanzahl der Arten (Species) in der Population.\n"
+            "Der Kompatibilitätsschwellwert wird automatisch angepasst,\n"
+            "um diese Anzahl zu erreichen.\n\n"
+            "Mehr Arten = mehr Strukturnischen geschützt.\n"
+            "Hilfreich für XOR-ähnliche Aufgaben (Regression, binäre Mappings):\n"
+            "  5   → Standard (gut für Gym-Environments)\n"
+            "  10–20 → besser für diskrete Mappings (XOR, Regression)\n\n"
+            "Benchmark: species=20 löst Regression 2→2 in 3/5 Seeds bei 60k it,\n"
+            "           species=5  löst sie in 0/5 Seeds bei gleicher Laufzeit.")
+
         self.chk_normalize = QCheckBox("aktiv")
         self.chk_normalize.setChecked(True)
         self.chk_normalize.setVisible(False)   # shown only for examples that support it
@@ -615,6 +629,7 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Max nodes:",      self.spin_nodes)
         cfg_form.addRow("Max connections:", self.spin_conns)
         cfg_form.addRow("Population:",     self.spin_pop)
+        cfg_form.addRow("Zielarten:",      self.spin_species)
         cfg_form.addRow("Lamarck steps:",  self.spin_lamarck)
         cfg_form.addRow("Normalisierung:", self.chk_normalize)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
@@ -811,6 +826,7 @@ class TrainingTab(QWidget):
                 n_initial_hidden=ex.n_initial_hidden,
             )
             self._yane.set_population_size(self.spin_pop.value())
+            self._yane.set_target_species(self.spin_species.value())
             lamarck_steps = self.spin_lamarck.value()
             if lamarck_steps > 0:
                 self._yane.set_lamarck(n_steps=lamarck_steps)

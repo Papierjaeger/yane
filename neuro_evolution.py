@@ -277,6 +277,21 @@ class NeuroEvolution:
                             / max(1, len(self._population._evaluated))),
         }
 
+    def set_target_species(self, n: int) -> None:
+        """Set the target number of species the population tries to maintain.
+
+        The adaptive compatibility threshold rises/falls automatically to keep
+        the actual species count close to this target.  Higher values protect
+        more structural niches and help escape local optima (especially for
+        XOR-like tasks where intermediate structures are temporarily worse).
+
+        Default: 5.  For small discrete-mapping tasks (binary increment,
+        XOR variants): 10–20 works significantly better.
+        """
+        n = max(1, n)
+        if self._population is not None:
+            self._population._target_species = n
+
     def set_n_workers(self, n: int) -> None:
         """Number of parallel workers for evaluation (default 1 = sequential)."""
         self._n_workers = max(1, n)
