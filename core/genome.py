@@ -287,16 +287,23 @@ class Genome:
     # Mutation
     # -------------------------------------------------------------------------
 
+    # Minimum probability for structural mutations — prevents self-adaptive rates
+    # from drifting to ~0 when Lamarck makes weight-only improvements dominate.
+    # The floor is intentionally small (1%) so it only kicks in when normal
+    # self-adaptation has already suppressed the rates below this level.
+    _STRUCT_FLOOR = 0.01
+
     def mutate(self, tracker=None) -> None:
         from yane.evolution import smart_mutation
 
-        if self.mutation_add_node.mutate_bool(False):
+        floor = self._STRUCT_FLOOR
+        if self.mutation_add_node.mutate_bool(False) or random.random() < floor:
             smart_mutation.add_node(self, tracker)
-        if self.mutation_remove_node.mutate_bool(False):
+        if self.mutation_remove_node.mutate_bool(False) or random.random() < floor:
             smart_mutation.remove_node(self, tracker)
-        if self.mutation_add_connection.mutate_bool(False):
+        if self.mutation_add_connection.mutate_bool(False) or random.random() < floor:
             smart_mutation.add_connection(self, tracker)
-        if self.mutation_remove_connection.mutate_bool(False):
+        if self.mutation_remove_connection.mutate_bool(False) or random.random() < floor:
             smart_mutation.remove_connection(self, tracker)
 
         sigma = self.sigma_global

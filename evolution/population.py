@@ -116,6 +116,14 @@ class Population:
         self._stagnation_count: int = 0   # resets ONLY on fitness improvement
         self._since_last_injection: int = 0  # separate counter for injection pacing
 
+        # Structural stagnation: tracks how many evals the *topology* of the best
+        # genome hasn't changed, even if fitness keeps improving (e.g. via Lamarck).
+        # Lamarck causes fitness to creep up via weight tuning while the structure
+        # never changes → _stagnation_count never triggers injection → the population
+        # converges to weight-variants of one topology with no structural diversity.
+        self._best_topology: tuple[int, int] = (0, 0)  # (n_nodes, n_connections)
+        self._topology_stagnation_count: int = 0
+
         # Adaptive global species threshold (replaces per-genome thresholds).
         # Step size 0.005 is small relative to the actual δ distribution
         # ([0, ~0.15] for bootstrap genomes) to avoid oscillation.
@@ -167,14 +175,24 @@ class Population:
             self._behaviors[id(genome)] = np.array(rows, dtype=np.float64).ravel()
         self._novelty_evals_since_recompute += 1
 
+        topo = (len(genome.nodes), genome.connection_count)
         if fitness > self._best_fitness_seen:
             self._best_fitness_seen = fitness
             self._stagnation_count = 0
             self._since_last_injection = 0
             self._last_improvement_connections = genome.connection_count
+            # If the new best has a different topology, reset structural stagnation.
+            if topo != self._best_topology:
+                self._best_topology = topo
+                self._topology_stagnation_count = 0
+            else:
+                # Fitness improved but topology unchanged (typical Lamarck effect):
+                # still count as structural stagnation.
+                self._topology_stagnation_count += 1
         else:
             self._stagnation_count += 1
             self._since_last_injection += 1
+            self._topology_stagnation_count += 1
 
         self._prune()
 
@@ -349,6 +367,49 @@ class Population:
     # Offspring spawning
     # ------------------------------------------------------------------
 
+    def _inject_structural_diversity(self) -> None:
+        """Force structural exploration when topology stagnates despite fitness gains.
+
+        Called when the best genome's topology hasn't changed for a long time,
+        typically because Lamarck weight optimisation makes all structural
+        mutations look harmful in the short term.  We inject a genome that has
+        a different topology from the current best — either expanding the best
+        with new connections / nodes, or starting fresh from the template.
+        """
+        from yane.evolution import smart_mutation
+        strategy = random.randint(0, 2)
+
+        if strategy == 0 and self._evaluated:
+            # Expand the best genome: force-add 2–5 connections.
+            base = self.get_best().copy()
+            for _ in range(random.randint(2, 5)):
+                smart_mutation.add_connection(base, self._tracker)
+
+        elif strategy == 1 and self._evaluated:
+            # Expand the best genome: split a connection (add_node) if possible,
+            # then add a few extra connections for structural variety.
+            base = self.get_best().copy()
+            smart_mutation.add_node(base, self._tracker)
+            for _ in range(random.randint(1, 3)):
+                smart_mutation.add_connection(base, self._tracker)
+
+        else:
+            # Fresh template with random connections — maximally different topology.
+            base = self._template.copy()
+            n_in = len(base.input_nodes)
+            n_out = len(base.output_nodes)
+            for _ in range(random.randint(n_out, min(n_in * n_out, 20))):
+                smart_mutation.add_connection(base, self._tracker)
+            for node in base.nodes:
+                for conn in node.connections:
+                    conn.weight = random.gauss(0, 1.0)
+
+        base.fitness = 0.0
+        base.shared_fitness = 0.0
+        self._unevaluated.append(base)
+        # Do NOT reset _since_last_injection — this injection is structural, not
+        # fitness-stagnation-based; the two counters are independent.
+
     def _inject_fresh_genome(self) -> None:
         """Escape stagnation by injecting a diverse genome.
 
@@ -427,6 +488,15 @@ class Population:
 
         if self._since_last_injection >= self.stagnation_threshold:
             self._inject_fresh_genome()
+            return
+
+        # Structural stagnation: if the topology of the best genome hasn't changed
+        # for 3× the population size, force structural exploration even when fitness
+        # keeps creeping up (e.g. via Lamarck weight tuning). Without this check,
+        # Lamarck causes infinite fitness drift while the structure never evolves.
+        if self._topology_stagnation_count >= 3 * self.max_size:
+            self._topology_stagnation_count = 0
+            self._inject_structural_diversity()
             return
 
         self._assign_species()
