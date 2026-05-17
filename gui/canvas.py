@@ -400,6 +400,16 @@ class FitnessChart(QWidget):
         finally:
             painter.end()
 
+    @staticmethod
+    def _percentile(sorted_vals: list[float], p: float) -> float:
+        """p in [0, 1]. Requires sorted input."""
+        if not sorted_vals:
+            return 0.0
+        idx = p * (len(sorted_vals) - 1)
+        lo_i, hi_i = int(idx), min(int(idx) + 1, len(sorted_vals) - 1)
+        frac = idx - lo_i
+        return sorted_vals[lo_i] * (1 - frac) + sorted_vals[hi_i] * frac
+
     def _paint(self, painter: QPainter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), _C_BG)
@@ -421,42 +431,81 @@ class FitnessChart(QWidget):
                              "Waiting for data…")
             return
 
-        lo, hi = self._lo, self._hi
+        n = len(self._history)
+
+        # ── Outlier-resistant y-axis range (IQR method) ───────────────────
+        # Lower fence = Q1 - 1.5×IQR: the standard Tukey outlier boundary.
+        # Values below the fence are clipped to the chart edge and annotated.
+        # The best-so-far maximum is always fully visible (sets the top).
+        sorted_h = sorted(self._history)
+        actual_lo = sorted_h[0]
+        hi = max(self._best_history) if self._best_history else sorted_h[-1]
+
+        q1 = self._percentile(sorted_h, 0.25)
+        q3 = self._percentile(sorted_h, 0.75)
+        iqr = q3 - q1
+        lo_fence = (q1 - 1.5 * iqr) if iqr > 0 else actual_lo
+        lo = max(actual_lo, lo_fence)
+
+        # Add 10 % padding so lines don't touch the edges
+        span = hi - lo if hi != lo else 1e-6
+        lo -= span * 0.10
+        hi += span * 0.05
         if lo == hi:
             hi = lo + 1e-6
 
-        n = len(self._history)
+        # Clipping helper: keep y inside [pad_t, h - pad_b]
+        y_top = float(pad_t)
+        y_bot = float(h - pad_b)
 
         def px(i: int) -> float:
             return pad_l + (w - pad_l - pad_r) * i / (n - 1)
 
         def py(v: float) -> float:
-            return h - pad_b - (h - pad_t - pad_b) * (v - lo) / (hi - lo)
+            raw = h - pad_b - (h - pad_t - pad_b) * (v - lo) / (hi - lo)
+            return max(y_top, min(y_bot, raw))
 
-        # Current-fitness line (thin, dimmed)
+        def is_clipped(v: float) -> bool:
+            return v < lo or v > hi
+
+        # ── Current-fitness line (thin, dimmed, clipped) ──────────────────
         pen_cur = QPen(QColor("#4CAF5088"), 1)
-        painter.setPen(pen_cur)
+        pen_clip = QPen(QColor("#ff6b6b60"), 1, Qt.PenStyle.DotLine)
         for i in range(1, n):
-            painter.drawLine(int(px(i - 1)), int(py(self._history[i - 1])),
-                             int(px(i)),     int(py(self._history[i])))
+            v0, v1 = self._history[i - 1], self._history[i]
+            p = pen_clip if (is_clipped(v0) or is_clipped(v1)) else pen_cur
+            painter.setPen(p)
+            painter.drawLine(int(px(i - 1)), int(py(v0)),
+                             int(px(i)),     int(py(v1)))
 
-        # Best-so-far line (bright)
+        # ── Best-so-far line (bright, always fully visible) ───────────────
         pen_best = QPen(_C_CHART, 2)
         painter.setPen(pen_best)
         for i in range(1, len(self._best_history)):
             painter.drawLine(int(px(i - 1)), int(py(self._best_history[i - 1])),
                              int(px(i)),     int(py(self._best_history[i])))
 
-        # Axis labels
+        # ── Outlier indicator ─────────────────────────────────────────────
+        # If the true minimum is below the visible lo, draw a subtle marker
+        if actual_lo < lo:
+            painter.setPen(QPen(QColor("#ff6b6b99"), 1))
+            painter.drawLine(pad_l, int(y_bot), w - pad_r, int(y_bot))
+            font_sm = QFont(); font_sm.setPointSize(6)
+            painter.setFont(font_sm)
+            painter.setPen(QColor("#ff6b6b"))
+            painter.drawText(pad_l + 2, int(y_bot) - 2, f"min {actual_lo:.3g}")
+
+        # ── Axis labels ───────────────────────────────────────────────────
         font = QFont(); font.setPointSize(7)
         painter.setFont(font)
         painter.setPen(_C_TEXT)
         painter.drawText(2, pad_t + 10, f"{hi:.3g}")
+        painter.drawText(2, pad_t + int((h - pad_t - pad_b) * 0.5) + 5, f"{(lo + hi) / 2:.3g}")
         painter.drawText(2, h - pad_b,  f"{lo:.3g}")
-        painter.drawText(pad_l,         h - 5, "0")
+        painter.drawText(pad_l,          h - 5, "0")
         painter.drawText(w - pad_r - 26, h - 5, str(n))
 
-        # Legend
+        # ── Legend ────────────────────────────────────────────────────────
         painter.setPen(QPen(_C_CHART, 2))
         painter.drawLine(w - 90, pad_t + 8, w - 70, pad_t + 8)
         painter.setPen(_C_TEXT)
