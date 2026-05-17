@@ -350,6 +350,84 @@ class Population:
         elif n < self._target_species:
             self._compat_threshold = max(0.01, self._compat_threshold - 0.005)
 
+        # Behaviour-based fallback: if structural speciation produced fewer than
+        # half the target species AND the threshold is already at its minimum
+        # (meaning structural distance is too small to separate genomes further),
+        # cluster by behavioral similarity instead.  The behavior vectors are
+        # already computed from fixed probe inputs so clusters are meaningful:
+        # genomes with different outputs on the same inputs land in different
+        # species, even if their topology is identical.
+        if n < max(2, self._target_species // 2) and self._compat_threshold <= 0.015:
+            self._assign_species_by_behavior()
+
+    def _assign_species_by_behavior(self) -> None:
+        """Cluster genomes by behavioral similarity when structural speciation fails.
+
+        Called when all genomes have nearly identical structure (δ ≈ 0) so no
+        threshold value can separate them.  Instead of structural distance we use
+        the L2 distance between behavior vectors — the network outputs on a fixed
+        set of probe inputs.  These are already cached in self._behaviors, so
+        this costs only O(N·k) distance computations.
+
+        Algorithm: greedy k-means++ initialisation (one round, no iteration).
+        Picks k maximally diverse genomes as cluster centres, then assigns every
+        genome to its nearest centre.  Single-pass k-means++ gives stable, well-
+        spread clusters without expensive iterative optimisation.
+        """
+        k = self._target_species
+
+        # Only cluster genomes that have a behavior vector.
+        pool = [g for g in self._evaluated if id(g) in self._behaviors]
+        if len(pool) < k:
+            return  # not enough data yet
+
+        bvs = np.stack([np.nan_to_num(self._behaviors[id(g)]) for g in pool])  # (N, D)
+        N = bvs.shape[0]
+
+        # k-means++ seeding: pick k centers greedily (each new center is the
+        # genome farthest from all existing centers).
+        centers: list[int] = [0]
+        for _ in range(k - 1):
+            # Squared distance from each genome to its nearest center
+            min_d2 = np.full(N, np.inf)
+            for c in centers:
+                d2 = ((bvs - bvs[c]) ** 2).sum(axis=1)
+                np.minimum(min_d2, d2, out=min_d2)
+            centers.append(int(np.argmax(min_d2)))
+
+        # Assign each genome to nearest center
+        center_bvs = bvs[centers]                            # (k, D)
+        diff = bvs[:, None, :] - center_bvs[None, :, :]     # (N, k, D)
+        assignments = np.argmin((diff ** 2).sum(axis=2), axis=1)  # (N,)
+
+        # Build Species from clusters
+        groups: dict[int, list] = {i: [] for i in range(k)}
+        for genome, label in zip(pool, assignments.tolist()):
+            groups[label].append(genome)
+
+        # Genomes without behavior vectors → largest group
+        extras = [g for g in self._evaluated if id(g) not in self._behaviors]
+
+        new_species: list[Species] = []
+        for label, members in groups.items():
+            if not members:
+                continue
+            rep = max(members, key=lambda g: g.fitness)
+            sp = Species(rep)
+            for g in members:
+                sp.add(g)
+                g._last_species_id = id(sp)
+            new_species.append(sp)
+
+        if extras and new_species:
+            best_sp = max(new_species, key=lambda sp: sp.best().fitness)
+            for g in extras:
+                best_sp.add(g)
+                g._last_species_id = id(best_sp)
+
+        if new_species:
+            self._species = new_species
+
     def _compute_shared_fitness(self) -> None:
         # No parsimony penalty: even a tiny coefficient causes evolution to
         # converge to empty/minimal genomes when the fitness signal is weak
