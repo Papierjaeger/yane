@@ -45,8 +45,9 @@ class Mutation:
         return value
 
     def mutate_rates(self) -> None:
-        if random.random() < self.rate_mutation_rate:
-            scale = random.uniform(0.9, 1.1)
+        _r = random.random   # local alias avoids repeated attribute lookup
+        if _r() < self.rate_mutation_rate:
+            scale = _r() * 0.2 + 0.9   # uniform(0.9, 1.1) without function call
             lo = self.MIN_RATE
             self.shift_rate = max(lo, min(0.999, self.shift_rate * scale))
             self.custom_rate = max(lo, min(0.999, self.custom_rate * scale))
@@ -54,9 +55,9 @@ class Mutation:
             self.int_rate = max(lo, min(0.999, self.int_rate * scale))
             self.rate_mutation_rate = max(lo, min(0.999, self.rate_mutation_rate * scale))
 
-        if random.random() < self.shift_rate:
+        if _r() < self.shift_rate:
             self.value_delta = max(1e-6, min(self.MAX_DELTA,
-                                             self.value_delta * random.uniform(0.9, 1.1)))
+                                             self.value_delta * (_r() * 0.2 + 0.9)))
 
     def copy(self) -> 'Mutation':
         m = Mutation()

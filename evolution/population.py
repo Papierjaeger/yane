@@ -1,9 +1,15 @@
 from __future__ import annotations
 import random
+from operator import attrgetter
 
 import numpy as np
 
 from yane.core.genome import Genome
+
+# Module-level key functions — C-level attrgetter is ~2× faster than a Python
+# lambda for attribute access in max()/min()/sorted() calls.
+_fitness_key        = attrgetter('fitness')
+_shared_fitness_key = attrgetter('shared_fitness')
 
 
 # ---------------------------------------------------------------------------
@@ -25,19 +31,22 @@ def _compatibility(g1: Genome, g2: Genome) -> float:
     so repeated comparisons against stable species representatives cost nothing
     beyond a dict lookup.
     """
-    g1_innov, max_innov_g1 = g1._get_innov_cache()
-    g2_innov, max_innov_g2 = g2._get_innov_cache()
+    g1_innov, max_innov_g1, n1_innov = g1._get_innov_cache()
+    g2_innov, max_innov_g2, n2_innov = g2._get_innov_cache()
 
     if not g1_innov and not g2_innov:
         # Legacy fallback: simple topology distance
         n1, n2 = len(g1.nodes), len(g2.nodes)
         c1, c2 = g1.connection_count, g2.connection_count
-        node_diff = abs(n1 - n2) / max(n1, n2, 1)
-        conn_diff = abs(c1 - c2) / max(c1, c2, 1)
+        node_diff = abs(n1 - n2) / ((n1 if n1 >= n2 else n2) or 1)
+        conn_diff = abs(c1 - c2) / ((c1 if c1 >= c2 else c2) or 1)
         return (node_diff + conn_diff) / 2.0
 
-    smaller_max = min(max_innov_g1, max_innov_g2)
-    N = max(len(g1_innov), len(g2_innov), 1)
+    # Inline min/max — avoids Python function-call overhead on this hot path.
+    smaller_max = max_innov_g1 if max_innov_g1 <= max_innov_g2 else max_innov_g2
+    N = n1_innov if n1_innov >= n2_innov else n2_innov
+    if N == 0:
+        N = 1
 
     excess = disjoint = matching = 0
     weight_diff_sum = 0.0
@@ -82,7 +91,7 @@ class Species:
         self.members.append(genome)
 
     def best(self) -> Genome:
-        return max(self.members, key=lambda g: g.fitness)
+        return max(self.members, key=_fitness_key)
 
     def avg_shared_fitness(self) -> float:
         if not self.members:
@@ -213,11 +222,11 @@ class Population:
     def get_best(self) -> Genome:
         if not self._evaluated:
             raise RuntimeError("No evaluated genomes yet.")
-        return max(self._evaluated, key=lambda g: g.fitness)
+        return max(self._evaluated, key=_fitness_key)
 
     def get_top(self, k: int) -> list[Genome]:
         """Return up to k best evaluated genomes, sorted by fitness descending."""
-        return sorted(self._evaluated, key=lambda g: g.fitness, reverse=True)[:k]
+        return sorted(self._evaluated, key=_fitness_key, reverse=True)[:k]
 
     @property
     def size(self) -> int:
@@ -599,7 +608,7 @@ class Population:
             if not candidates:
                 break
 
-            worst = min(candidates, key=lambda g: g.fitness)
+            worst = min(candidates, key=_fitness_key)
             self._behaviors.pop(id(worst), None)
             self._evaluated.remove(worst)
             # Remove from its species before clearing to release the reference
@@ -622,7 +631,7 @@ class Population:
         target_size = max(1, target_size)
         if len(self._evaluated) <= target_size:
             return
-        self._evaluated.sort(key=lambda g: g.fitness, reverse=True)
+        self._evaluated.sort(key=_fitness_key, reverse=True)
         discarded = self._evaluated[target_size:]
         self._evaluated = self._evaluated[:target_size]
         for g in discarded:

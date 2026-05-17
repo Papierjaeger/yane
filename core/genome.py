@@ -556,7 +556,8 @@ class Genome:
                  for src in self.nodes
                  for conn in src.connections
                  if conn.innovation >= 0}
-            self._innov_cache = (d, max(d, default=-1))
+            # Cache len alongside the dict so _compatibility never calls len(d).
+            self._innov_cache = (d, max(d, default=-1), len(d))
         return self._innov_cache
 
     def _invalidate_topology(self) -> None:
