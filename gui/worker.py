@@ -60,6 +60,7 @@ class TrainingWorker(QThread):
 
     iteration_done = Signal(int, float, object, dict)
     error_occurred = Signal(str)
+    info_message   = Signal(str)   # non-fatal status update (e.g. MP fallback)
 
     def __init__(
         self,
@@ -196,16 +197,31 @@ class TrainingWorker(QThread):
 
         ctx = mp.get_context('fork')
 
-        # Bootstrap: evaluate the seed genome once sequentially so that
-        # next_genome_batch() has at least one evaluated genome to spawn from.
+        # Bootstrap: evaluate the seed genome sequentially, measure speed,
+        # and fall back to sequential if MP overhead would dominate.
+        # Rule of thumb: MP only helps when eval > ~10ms per genome.
+        _MP_MIN_MS = 10.0   # min evaluation time for MP to be worthwhile
         try:
             seed_fn = self._make_eval_fn(None)
             seed_g  = self._yane.next_genome()
-            self._yane.submit_fitness(seed_fn(seed_g))
+            t0 = time.perf_counter()
+            seed_fit = seed_fn(seed_g)
+            eval_ms  = (time.perf_counter() - t0) * 1000.0
+            self._yane.submit_fitness(seed_fit)
             self._iteration += 1
             _close_env(seed_fn)
         except Exception as exc:
             self.error_occurred.emit(str(exc))
+            return
+
+        if eval_ms < _MP_MIN_MS:
+            # Evaluation is too fast — MP overhead (~16ms IPC+pickle) would dominate.
+            # Fall back to sequential and inform the user via the status bar.
+            self.info_message.emit(
+                f"MP-Overhead > Nutzen ({eval_ms:.1f}ms/Genome < {_MP_MIN_MS:.0f}ms Schwelle) "
+                f"— Training läuft sequenziell."
+            )
+            self._run_sequential(0.0)
             return
 
         # Worker processes inherit make_eval_fn via fork; initializer creates

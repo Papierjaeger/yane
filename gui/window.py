@@ -607,13 +607,14 @@ class TrainingTab(QWidget):
         self.spin_workers.setSpecialValueText("1 (sequenziell)")
         self.spin_workers.setToolTip(
             f"Anzahl paralleler Prozesse für die Fitness-Berechnung.\n"
-            f"1 = sequenziell (Standard).\n"
-            f"> 1 = Multiprocessing mit fork — jeder Prozess wertet ein\n"
-            f"      Genome aus, alle parallel. Speedup ≈ Anzahl CPUs.\n\n"
-            f"Empfohlen für CPU-gebundene Aufgaben: Dataset-Beispiele,\n"
-            f"kleine Gym-Environments.\n"
-            f"Für Gym mit Physics (LunarLander, BipedalWalker): Threads\n"
-            f"geben weniger Overhead, aber Prozesse helfen auch.\n\n"
+            f"1 = sequenziell (Standard, immer korrekt).\n\n"
+            f"Wann lohnt sich Multiprocessing?\n"
+            f"  ✓ Gym-Environments mit langen Episoden (>10ms/Genome)\n"
+            f"    z.B. LunarLander, BipedalWalker, MNIST\n"
+            f"  ✗ Schnelle Dataset-Aufgaben (XOR, Multiplication, Regression)\n"
+            f"    — Overhead ~16ms >> Evaluation ~0.01ms → langsamer!\n\n"
+            f"Automatische Erkennung: Wenn die erste Evaluation zu schnell\n"
+            f"ist, schaltet das System automatisch auf sequenziell um.\n\n"
             f"Dein System hat {_mp.cpu_count()} CPU-Kerne.")
 
         self.spin_species = QSpinBox()
@@ -880,6 +881,7 @@ class TrainingTab(QWidget):
         worker.finished.connect(worker.deleteLater)
         worker.iteration_done.connect(self._on_iteration)
         worker.error_occurred.connect(self._on_error)
+        worker.info_message.connect(self.status_lbl.setText)
         worker.finished.connect(lambda: self._on_finished(run_id))
         if self._episode_runner and self._episode_runner.isRunning():
             self._episode_runner.stop()
