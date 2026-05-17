@@ -163,6 +163,24 @@ class LeftPanel(QWidget):
         self.lbl_shared_fit   = _label("—", "statValue")
         self.lbl_activations  = _label("—", "mutRate")
         self.lbl_activations.setWordWrap(True)
+        self.lbl_nodes.setToolTip(
+            "Gesamtzahl der Knoten im besten Netz\n(Input-Nodes + Hidden-Nodes + Output-Nodes)")
+        self.lbl_connections.setToolTip(
+            "Anzahl der gerichteten Verbindungen (Synapsen) im besten Netz.\n"
+            "Jede Verbindung hat ein evolviertes Gewicht.")
+        self.lbl_best_fit.setToolTip(
+            "Rohfitness des besten Genoms — der Wert den deine evaluate()-Funktion zurückgibt.\n"
+            "Wird nie geteilt oder angepasst.")
+        self.lbl_shared_fit.setToolTip(
+            "Geteilte Fitness = Rohfitness ÷ Artenanzahl (fitness sharing).\n"
+            "Verhindert dass eine dominante Art alle anderen verdrängt.\n"
+            "Wird für die Selektion verwendet.")
+        self.lbl_activations.setToolTip(
+            "Aktivierungsfunktionen aller Nodes im besten Netz (Kürzel:Anzahl).\n"
+            "SIG=Sigmoid  LIN=Linear  TAN=Tanh  REL=ReLU  SQU=Square (x²)\n"
+            "ABS=Betrag   GAU=Gauß    CUB=Kubik  SIN=Sinus  COS=Kosinus\n"
+            "ELU=ELU  SWI=Swish  SOF=Softplus  LEA=Leaky ReLU  BIN=Binär\n"
+            "Zeigt was das Netz selbst entdeckt hat.")
         best_layout.addRow("Nodes:",          self.lbl_nodes)
         best_layout.addRow("Connections:",    self.lbl_connections)
         best_layout.addRow("Fitness:",        self.lbl_best_fit)
@@ -184,6 +202,30 @@ class LeftPanel(QWidget):
         self.lbl_stagnation      = _label("—", "statValue")
         self.lbl_next_injection  = _label("—", "statValue")
         self.lbl_novelty_weight  = _label("—", "statValue")
+        self.lbl_population.setToolTip("Gesamtzahl der Genomes (evaluiert + noch ausstehend)")
+        self.lbl_species.setToolTip(
+            "Anzahl der Arten (Species).\n"
+            "Strukturell ähnliche Genomes werden gruppiert — Innovation ist\n"
+            "innerhalb einer Art geschützt, bevor sie gegen andere antritt.")
+        self.lbl_avg_nodes.setToolTip("Durchschnittliche Knotenanzahl über alle Genomes der Population")
+        self.lbl_avg_conns.setToolTip("Durchschnittliche Verbindungsanzahl über alle Genomes der Population")
+        _spread_tip = ("Fitnessspanne der gesamten Population.\n"
+                       "Kleine Spanne = Population konvergiert.\n"
+                       "Große Spanne = viel Diversität.")
+        self.lbl_pop_min.setToolTip(_spread_tip)
+        self.lbl_pop_avg.setToolTip(_spread_tip)
+        self.lbl_pop_max.setToolTip(_spread_tip)
+        self.lbl_stagnation.setToolTip(
+            "Wie viele Iterationen seit der letzten Fitness-Verbesserung.\n"
+            "Bei Stagnation wird automatisch Diversität in die Population injiziert\n"
+            "(neue zufällige Genomes oder Mutationen des besten).")
+        self.lbl_next_injection.setToolTip(
+            "Fortschritt bis zur nächsten Diversitäts-Injektion.\n"
+            "Format: since / threshold  (noch verbleibende Iterationen)")
+        self.lbl_novelty_weight.setToolTip(
+            "Wie stark Neuartigkeit (novelty) bei der Selektion gewichtet wird.\n"
+            "Steigt von 0.1 → 0.5 je länger die Population stagniert.\n"
+            "Zwingt Evolution neue Verhaltensweisen zu erkunden statt zu optimieren.")
         pop_layout.addRow("Genomes:",           self.lbl_population)
         pop_layout.addRow("Species:",           self.lbl_species)
         pop_layout.addRow("Avg nodes:",         self.lbl_avg_nodes)
@@ -204,9 +246,23 @@ class LeftPanel(QWidget):
         self.lbl_rate_rem_node  = _label("—", "mutRate")
         self.lbl_rate_add_conn  = _label("—", "mutRate")
         self.lbl_rate_rem_conn  = _label("—", "mutRate")
-        # bypass_connection_prob: when removing a node, probability of creating
-        # a shortcut A→B for each A→N→B path to preserve connectivity.
         self.lbl_bypass         = _label("—", "mutRate")
+        self.lbl_rate_add_node.setToolTip(
+            "Wahrscheinlichkeit pro Mutation, eine neue Hidden-Node einzufügen.\n"
+            "NEAT-Prinzip: eine bestehende Verbindung A→B wird aufgeteilt in A→N→B.\n"
+            "Das Netzwerk-Verhalten bleibt dabei erhalten.")
+        self.lbl_rate_rem_node.setToolTip(
+            "Wahrscheinlichkeit pro Mutation, eine zufällige Hidden-Node zu entfernen.\n"
+            "Für jede Verbindung A→N→B wird mit 'Bypass prob' eine Direktverbindung A→B erzeugt.")
+        self.lbl_rate_add_conn.setToolTip(
+            "Wahrscheinlichkeit pro Mutation, eine neue Verbindung hinzuzufügen.\n"
+            "Zyklen (Schleifen) sind erlaubt — das Netz kann damit Gedächtnis entwickeln.")
+        self.lbl_rate_rem_conn.setToolTip(
+            "Wahrscheinlichkeit pro Mutation, eine zufällige Verbindung zu entfernen.")
+        self.lbl_bypass.setToolTip(
+            "Beim Entfernen einer Node N: Wahrscheinlichkeit, für jedes Paar A→N→B\n"
+            "eine Direktverbindung A→B zu erzeugen (Bypass).\n"
+            "Bypass-Gewicht = w(A→N) × w(N→B) — erhält den Signalfluss näherungsweise.")
         struct_layout.addRow("Add node:",    self.lbl_rate_add_node)
         struct_layout.addRow("Rem node:",    self.lbl_rate_rem_node)
         struct_layout.addRow("Add conn:",    self.lbl_rate_add_conn)
@@ -222,6 +278,23 @@ class LeftPanel(QWidget):
         self.lbl_offspring_factor = _label("—", "mutRate")
         self.lbl_compat_thresh    = _label("—", "mutRate")
         self.lbl_sigma_global     = _label("—", "mutRate")
+        self.lbl_crossover_prob.setToolTip(
+            "Wahrscheinlichkeit, dass ein Offspring durch Kreuzung (Crossover) zweier\n"
+            "Elternteile entsteht (statt reiner Mutation).\n"
+            "Evolviert sich selbst — kein manuelles Tuning nötig.")
+        self.lbl_offspring_factor.setToolTip(
+            "Relativer Fortpflanzungsvorteil: höher = öfter als Elternteil ausgewählt.\n"
+            "Genomes mit höherem Faktor dominieren die Selektion stärker.\n"
+            "Evolviert sich selbst.")
+        self.lbl_compat_thresh.setToolTip(
+            "Globale Kompatibilitätsschwelle für die Artzuordnung.\n"
+            "Zwei Genomes landen in derselben Art wenn ihre Distanz < Schwelle.\n"
+            "Wird automatisch angepasst: steigt wenn zu viele Arten entstehen,\n"
+            "sinkt wenn zu wenige.")
+        self.lbl_sigma_global.setToolTip(
+            "Globale Schrittgröße für Gewichts- und Bias-Mutationen (ähnlich CMA-ES).\n"
+            "Kleiner = feineres Tuning, größer = weiterer Sprung im Gewichtsraum.\n"
+            "Evolviert sich selbst und wird auch von Lamarck als Suchradius genutzt.")
         strat_layout.addRow("Crossover prob:",   self.lbl_crossover_prob)
         strat_layout.addRow("Offspring factor:", self.lbl_offspring_factor)
         strat_layout.addRow("Compat threshold:", self.lbl_compat_thresh)
@@ -234,6 +307,11 @@ class LeftPanel(QWidget):
         iscale_layout.setSpacing(3)
         self.lbl_input_scales = _label("—", "mutRate")
         self.lbl_input_scales.setWordWrap(True)
+        self.lbl_input_scales.setToolTip(
+            "Skalierungsfaktoren für jeden Input-Node — vom Netz selbst erlernt.\n"
+            "In0: ×0.12 bedeutet: roher Input-Wert wird intern mit 0.12 multipliziert.\n"
+            "Ermöglicht automatische Normalisierung ohne manuelles Preprocessing.\n"
+            "Startet bei ×1.0 (neutral) und evolviert sich mit der Zeit.")
         iscale_layout.addRow(self.lbl_input_scales)
         layout.addWidget(iscale)
 
@@ -246,6 +324,21 @@ class LeftPanel(QWidget):
         self.lbl_bias_rate    = _label("—", "mutRate")
         self.lbl_bias_delta   = _label("—", "mutRate")
         self.lbl_activ_rate   = _label("—", "mutRate")
+        self.lbl_weight_rate.setToolTip(
+            "Durchschnittliche Wahrscheinlichkeit, dass ein Gewicht pro Mutation verändert wird.\n"
+            "Selbst-adaptiv: passt sich über Generationen an (shift_rate).")
+        self.lbl_weight_delta.setToolTip(
+            "Durchschnittliche Schrittgröße der Gewichtsänderungen (value_delta × sigma_global).\n"
+            "Selbst-adaptiv: kleiner wenn gut konvergiert, größer bei Exploration.")
+        self.lbl_bias_rate.setToolTip(
+            "Durchschnittliche Wahrscheinlichkeit, dass ein Bias pro Mutation verändert wird.\n"
+            "Der Bias verschiebt die Aktivierungsfunktion auf der x-Achse.")
+        self.lbl_bias_delta.setToolTip(
+            "Durchschnittliche Schrittgröße der Bias-Änderungen.\n"
+            "Selbst-adaptiv wie die Gewichts-Schrittgröße.")
+        self.lbl_activ_rate.setToolTip(
+            "Durchschnittliche Wahrscheinlichkeit, dass eine Node ihre\n"
+            "Aktivierungsfunktion pro Mutation wechselt (custom_rate).")
         wn_layout.addRow("Weight rate:", self.lbl_weight_rate)
         wn_layout.addRow("Weight Δ:",    self.lbl_weight_delta)
         wn_layout.addRow("Bias rate:",   self.lbl_bias_rate)
@@ -255,6 +348,11 @@ class LeftPanel(QWidget):
 
         # ── Weight distribution histogram ─────────────────────────────────
         whist = QGroupBox("Gewichtsverteilung")
+        whist.setToolTip(
+            "Histogramm der Verbindungsgewichte im besten Netz.\n"
+            "Schmal = Gewichte sind konvergiert (ähnliche Werte).\n"
+            "Breit = viel Variation, Netz exploriert noch.\n"
+            "Die gestrichelte Linie zeigt Gewicht = 0.")
         whist_layout = QVBoxLayout(whist)
         whist_layout.setContentsMargins(4, 4, 4, 4)
         self.weight_hist = WeightHistogram()
@@ -453,16 +551,51 @@ class TrainingTab(QWidget):
         self.dspin_mem    = QDoubleSpinBox(); self.dspin_mem.setRange(0.1, 32.0); self.dspin_mem.setSingleStep(0.5); self.dspin_mem.setValue(2.0); self.dspin_mem.setSuffix(" GB")
         self.dspin_target = QDoubleSpinBox(); self.dspin_target.setRange(-1e9, 1e9); self.dspin_target.setSingleStep(0.1); self.dspin_target.setDecimals(4); self.dspin_target.setSpecialValueText("—")
 
+        self.spin_inputs.setToolTip(
+            "Anzahl der Input-Neuronen.\n"
+            "Muss der Dimension des Beobachtungsvektors (state/observation) entsprechen.\n"
+            "Beispiel: CartPole hat 4 Werte → Inputs = 4")
+        self.spin_outputs.setToolTip(
+            "Anzahl der Output-Neuronen.\n"
+            "Muss der Anzahl der Aktionen/Ausgaben entsprechen.\n"
+            "Beispiel: CartPole hat 2 Aktionen (links/rechts) → Outputs = 2")
+        self.spin_nodes.setToolTip(
+            "Maximale Gesamtzahl an Nodes pro Netz (Input + Hidden + Output).\n"
+            "Begrenzt die Netzgröße — kleinere Netze sind schneller aber weniger ausdrucksstark.\n"
+            "0 = unbegrenzt (Netz wächst so groß wie nötig).")
+        self.spin_conns.setToolTip(
+            "Maximale Anzahl an Verbindungen (Synapsen) pro Netz.\n"
+            "Begrenzt die Komplexität — weniger Verbindungen = schnellere Forward-Passes.\n"
+            "0 = unbegrenzt.")
+        self.spin_pop.setToolTip(
+            "Anzahl der Genomes in der Population.\n"
+            "Mehr Genomes = mehr Diversität und robustere Exploration,\n"
+            "aber langsamere Iterationen (jedes Genome muss einmal evaluiert werden).\n"
+            "Typisch: 50–200 für einfache Tasks, 200–500 für komplexe.")
+        self.dspin_mem.setToolTip(
+            "Maximaler RAM-Verbrauch dieses Prozesses in GB.\n"
+            "Bei Überschreitung wird die Population auf die Hälfte geschrumpft\n"
+            "(schlechteste Genomes werden entfernt).")
+        self.dspin_target.setToolTip(
+            "Ziel-Fitness: Training stoppt automatisch wenn ein Genome diesen Wert erreicht.\n"
+            "— = kein Zielwert (Training läuft bis du Stop drückst).\n"
+            "Beispiel: CartPole gilt als gelöst ab Fitness 500.")
+
         self.spin_lamarck = QSpinBox()
         self.spin_lamarck.setRange(0, 20)
         self.spin_lamarck.setValue(0)
         self.spin_lamarck.setSpecialValueText("Aus")
         self.spin_lamarck.setToolTip(
-            "Lamarck-Schritte pro Offspring: Hill-Climbing auf Gewichten/Biases\n"
-            "nach jeder NEAT-Mutation. Schrittgröße passt sich über sigma_global\n"
-            "automatisch an — kein manuelles sigma nötig.\n"
-            "0 = deaktiviert,  5 = guter Einstiegswert für Regression."
-        )
+            "Lamarck-Gewichtsoptimierung: Anzahl Hill-Climbing-Schritte pro Offspring.\n\n"
+            "Was passiert pro Schritt:\n"
+            "  1. Alle Gewichte + Biases mit Gauß-Rauschen perturbieren\n"
+            "  2. Fitness messen\n"
+            "  3. Besser → behalten,  Schlechter → zurücksetzen\n\n"
+            "Schrittgröße = sigma_global des Genoms (evolviert sich selbst automatisch).\n"
+            "Kein manuelles sigma nötig.\n\n"
+            "0 = deaktiviert\n"
+            "3–5 = gut für Regression/Supervised Learning\n"
+            "0 = empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!)")
 
         cfg_form.addRow("Inputs:",         self.spin_inputs)
         cfg_form.addRow("Outputs:",        self.spin_outputs)
