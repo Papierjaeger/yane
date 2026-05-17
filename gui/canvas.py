@@ -510,3 +510,139 @@ class FitnessChart(QWidget):
         painter.drawLine(w - 90, pad_t + 8, w - 70, pad_t + 8)
         painter.setPen(_C_TEXT)
         painter.drawText(w - 66, pad_t + 12, "best")
+
+
+# ---------------------------------------------------------------------------
+
+class SpeciesChart(QWidget):
+    """Compact line chart that tracks species count over training iterations."""
+
+    _MAX_POINTS = 400
+    _C_LINE = QColor("#fab387")  # peach
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._history: list[int] = []
+        self.setMinimumHeight(65)
+        self.setMaximumHeight(75)
+
+    def add_point(self, count: int) -> None:
+        self._history.append(count)
+        if len(self._history) > self._MAX_POINTS:
+            self._history = self._history[-self._MAX_POINTS:]
+        self.update()
+
+    def clear(self) -> None:
+        self._history.clear()
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            w, h = self.width(), self.height()
+            pad_l, pad_r, pad_t, pad_b = 28, 8, 5, 14
+
+            font = QFont(); font.setPointSize(7)
+            painter.setFont(font)
+
+            if len(self._history) < 2:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Warte auf Daten…")
+                return
+
+            n = len(self._history)
+            hi = max(max(self._history), 1)
+            chart_h = h - pad_t - pad_b
+
+            painter.setPen(QPen(_C_GRID, 1))
+            painter.drawLine(pad_l, pad_t, pad_l, h - pad_b)
+
+            def px(i): return pad_l + (w - pad_l - pad_r) * i / (n - 1)
+            def py(v): return h - pad_b - chart_h * v / hi
+
+            painter.setPen(QPen(self._C_LINE, 1.5))
+            for i in range(1, n):
+                painter.drawLine(int(px(i - 1)), int(py(self._history[i - 1])),
+                                 int(px(i)),     int(py(self._history[i])))
+
+            painter.setPen(_C_TEXT)
+            painter.drawText(2, pad_t + 8, str(hi))
+            painter.drawText(2, h - pad_b + 1, "0")
+            painter.setPen(self._C_LINE)
+            painter.drawText(pad_l + 4, pad_t + 9, f"Arten: {self._history[-1]}")
+        finally:
+            painter.end()
+
+
+# ---------------------------------------------------------------------------
+
+class WeightHistogram(QWidget):
+    """Bar chart of connection-weight distribution for the best genome."""
+
+    _BINS = 24
+    _C_BAR  = QColor("#89b4fa70")
+    _C_ZERO = QColor("#cba6f760")
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._weights: list[float] = []
+        self.setMinimumHeight(65)
+        self.setMaximumHeight(75)
+
+    def set_weights(self, weights: list[float]) -> None:
+        self._weights = weights
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            w, h = self.width(), self.height()
+            pad_l, pad_r, pad_t, pad_b = 6, 6, 5, 14
+
+            font = QFont(); font.setPointSize(6)
+            painter.setFont(font)
+
+            if not self._weights:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Keine Gewichte")
+                return
+
+            lo, hi_val = min(self._weights), max(self._weights)
+            if lo == hi_val:
+                lo -= 0.5; hi_val += 0.5
+            span = hi_val - lo
+
+            bins = [0] * self._BINS
+            for wv in self._weights:
+                idx = min(int((wv - lo) / span * self._BINS), self._BINS - 1)
+                bins[idx] += 1
+
+            max_count = max(bins) if bins else 1
+            chart_w = w - pad_l - pad_r
+            chart_h = h - pad_t - pad_b
+            bar_w = chart_w / self._BINS
+
+            # Zero line
+            if lo < 0 < hi_val:
+                zero_x = pad_l + (-lo) / span * chart_w
+                painter.setPen(QPen(self._C_ZERO, 1))
+                painter.drawLine(int(zero_x), pad_t, int(zero_x), h - pad_b)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self._C_BAR))
+            for i, count in enumerate(bins):
+                bh = chart_h * count / max_count
+                painter.drawRect(QRectF(pad_l + i * bar_w + 0.5,
+                                        h - pad_b - bh, bar_w - 1.0, bh))
+
+            painter.setPen(_C_TEXT)
+            painter.drawText(pad_l, h - 2, f"{lo:.2f}")
+            tw = len(f"{hi_val:.2f}") * 5
+            painter.drawText(w - pad_r - tw, h - 2, f"{hi_val:.2f}")
+            painter.drawText(pad_l + 2, pad_t + 8, f"Gewichte ({len(self._weights)})")
+        finally:
+            painter.end()

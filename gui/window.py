@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
 
-from yane.gui.canvas import NetworkCanvas, FitnessChart
+from yane.gui.canvas import NetworkCanvas, FitnessChart, SpeciesChart, WeightHistogram
 from yane.gui.worker import TrainingWorker, EpisodeRunner, ServerThread
 from yane.gui.examples import load_examples
 
@@ -161,10 +161,13 @@ class LeftPanel(QWidget):
         self.lbl_connections  = _label("—", "statValue")
         self.lbl_best_fit     = _label("—", "statValue")
         self.lbl_shared_fit   = _label("—", "statValue")
+        self.lbl_activations  = _label("—", "mutRate")
+        self.lbl_activations.setWordWrap(True)
         best_layout.addRow("Nodes:",          self.lbl_nodes)
         best_layout.addRow("Connections:",    self.lbl_connections)
         best_layout.addRow("Fitness:",        self.lbl_best_fit)
         best_layout.addRow("Shared fitness:", self.lbl_shared_fit)
+        best_layout.addRow("Aktivierungen:",  self.lbl_activations)
         layout.addWidget(best)
 
         # ── Population ────────────────────────────────────────────────────
@@ -175,6 +178,9 @@ class LeftPanel(QWidget):
         self.lbl_species     = _label("—", "statValue")
         self.lbl_avg_nodes   = _label("—", "statValue")
         self.lbl_avg_conns   = _label("—", "statValue")
+        self.lbl_pop_min     = _label("—", "mutRate")
+        self.lbl_pop_avg     = _label("—", "mutRate")
+        self.lbl_pop_max     = _label("—", "mutRate")
         self.lbl_stagnation      = _label("—", "statValue")
         self.lbl_next_injection  = _label("—", "statValue")
         self.lbl_novelty_weight  = _label("—", "statValue")
@@ -182,6 +188,9 @@ class LeftPanel(QWidget):
         pop_layout.addRow("Species:",           self.lbl_species)
         pop_layout.addRow("Avg nodes:",         self.lbl_avg_nodes)
         pop_layout.addRow("Avg conns:",         self.lbl_avg_conns)
+        pop_layout.addRow("Min fitness:",       self.lbl_pop_min)
+        pop_layout.addRow("Avg fitness:",       self.lbl_pop_avg)
+        pop_layout.addRow("Max fitness:",       self.lbl_pop_max)
         pop_layout.addRow("Stagn. (gesamt):",   self.lbl_stagnation)
         pop_layout.addRow("Nächste Injection:", self.lbl_next_injection)
         pop_layout.addRow("Novelty weight:",    self.lbl_novelty_weight)
@@ -219,6 +228,15 @@ class LeftPanel(QWidget):
         strat_layout.addRow("Sigma global:",     self.lbl_sigma_global)
         layout.addWidget(strat)
 
+        # ── Input scales (best genome) ────────────────────────────────────
+        iscale = QGroupBox("Input Scales  (×)")
+        iscale_layout = QFormLayout(iscale)
+        iscale_layout.setSpacing(3)
+        self.lbl_input_scales = _label("—", "mutRate")
+        self.lbl_input_scales.setWordWrap(True)
+        iscale_layout.addRow(self.lbl_input_scales)
+        layout.addWidget(iscale)
+
         # ── Weight / Node rates (avg over best genome) ────────────────────
         wn = QGroupBox("Weight / Node rates  (avg)")
         wn_layout = QFormLayout(wn)
@@ -235,6 +253,14 @@ class LeftPanel(QWidget):
         wn_layout.addRow("Activation:",  self.lbl_activ_rate)
         layout.addWidget(wn)
 
+        # ── Weight distribution histogram ─────────────────────────────────
+        whist = QGroupBox("Gewichtsverteilung")
+        whist_layout = QVBoxLayout(whist)
+        whist_layout.setContentsMargins(4, 4, 4, 4)
+        self.weight_hist = WeightHistogram()
+        whist_layout.addWidget(self.weight_hist)
+        layout.addWidget(whist)
+
         layout.addStretch()
         scroll.setWidget(inner)
         outer.addWidget(scroll)
@@ -248,6 +274,14 @@ class LeftPanel(QWidget):
         self.lbl_best_fit.setText(f"{genome.fitness:.4f}")
         self.lbl_shared_fit.setText(f"{genome.shared_fitness:.4f}")
 
+        # Activation distribution (abbreviation ×count)
+        from collections import Counter
+        act_counts = Counter(n.activation.name[:3] for n in genome.nodes)
+        self.lbl_activations.setText(
+            "  ".join(f"{k}:{v}" for k, v in sorted(act_counts.items(), key=lambda x: -x[1]))
+            or "—"
+        )
+
         # Population aggregates
         self.lbl_population.setText(str(mem.get("total_genomes", "—")))
         self.lbl_species.setText(str(mem.get("species_count", "—")))
@@ -255,6 +289,11 @@ class LeftPanel(QWidget):
         avg_c = mem.get("avg_connections_per_genome")
         self.lbl_avg_nodes.setText(f"{avg_n:.1f}" if avg_n is not None else "—")
         self.lbl_avg_conns.setText(f"{avg_c:.1f}" if avg_c is not None else "—")
+        for key, lbl in (("min_fitness", self.lbl_pop_min),
+                         ("avg_fitness", self.lbl_pop_avg),
+                         ("max_fitness", self.lbl_pop_max)):
+            v = mem.get(key)
+            lbl.setText(f"{v:.4f}" if v is not None else "—")
         stag  = mem.get("stagnation_count")
         thr   = mem.get("stagnation_threshold")
         since = mem.get("since_last_injection")
@@ -281,6 +320,15 @@ class LeftPanel(QWidget):
         self.lbl_compat_thresh.setText(f"{ct:.4f}" if ct is not None else "—")
         self.lbl_sigma_global.setText(f"{genome.sigma_global:.4f}")
 
+        # Input scales
+        inp_nodes = genome.input_nodes
+        if inp_nodes:
+            self.lbl_input_scales.setText(
+                "  ".join(f"In{i}: ×{n.input_scale:.3f}" for i, n in enumerate(inp_nodes))
+            )
+        else:
+            self.lbl_input_scales.setText("—")
+
         # Weight / Node rates (averaged over all nodes/connections)
         nodes = genome.nodes
         conns = [c for n in nodes for c in n.connections]
@@ -296,6 +344,9 @@ class LeftPanel(QWidget):
                 f"{sum(c.mutation.shift_rate for c in conns) / len(conns):.4f}")
             self.lbl_weight_delta.setText(
                 f"{sum(c.mutation.value_delta for c in conns) / len(conns):.4f}")
+            self.weight_hist.set_weights([c.weight for c in conns])
+        else:
+            self.weight_hist.set_weights([])
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +419,7 @@ class TrainingTab(QWidget):
         self._had_error = False
         self._last_ram_color = ""
         self._run_id = 0
+        self._start_time: float = 0.0
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -401,11 +453,23 @@ class TrainingTab(QWidget):
         self.dspin_mem    = QDoubleSpinBox(); self.dspin_mem.setRange(0.1, 32.0); self.dspin_mem.setSingleStep(0.5); self.dspin_mem.setValue(2.0); self.dspin_mem.setSuffix(" GB")
         self.dspin_target = QDoubleSpinBox(); self.dspin_target.setRange(-1e9, 1e9); self.dspin_target.setSingleStep(0.1); self.dspin_target.setDecimals(4); self.dspin_target.setSpecialValueText("—")
 
+        self.spin_lamarck = QSpinBox()
+        self.spin_lamarck.setRange(0, 20)
+        self.spin_lamarck.setValue(0)
+        self.spin_lamarck.setSpecialValueText("Aus")
+        self.spin_lamarck.setToolTip(
+            "Lamarck-Schritte pro Offspring: Hill-Climbing auf Gewichten/Biases\n"
+            "nach jeder NEAT-Mutation. Schrittgröße passt sich über sigma_global\n"
+            "automatisch an — kein manuelles sigma nötig.\n"
+            "0 = deaktiviert,  5 = guter Einstiegswert für Regression."
+        )
+
         cfg_form.addRow("Inputs:",         self.spin_inputs)
         cfg_form.addRow("Outputs:",        self.spin_outputs)
         cfg_form.addRow("Max nodes:",      self.spin_nodes)
         cfg_form.addRow("Max connections:", self.spin_conns)
         cfg_form.addRow("Population:",     self.spin_pop)
+        cfg_form.addRow("Lamarck steps:",  self.spin_lamarck)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
         layout.addWidget(cfg)
@@ -446,8 +510,10 @@ class TrainingTab(QWidget):
 
         self.lbl_iter    = _label("Iteration: —")
         self.lbl_fitness = _label("Fitness: —")
+        self.lbl_speed   = _label("Speed: —")
         prog_layout.addWidget(self.lbl_iter)
         prog_layout.addWidget(self.lbl_fitness)
+        prog_layout.addWidget(self.lbl_speed)
 
         ram_row = QWidget()
         ram_layout = QHBoxLayout(ram_row)
@@ -465,6 +531,10 @@ class TrainingTab(QWidget):
         prog_layout.addWidget(QLabel("Fitness history:"))
         self.chart = FitnessChart()
         prog_layout.addWidget(self.chart)
+
+        prog_layout.addWidget(QLabel("Artenanzahl:"))
+        self.species_chart = SpeciesChart()
+        prog_layout.addWidget(self.species_chart)
 
         layout.addWidget(prog)
 
@@ -544,6 +614,9 @@ class TrainingTab(QWidget):
                 n_initial_hidden=ex.n_initial_hidden,
             )
             self._yane.set_population_size(self.spin_pop.value())
+            lamarck_steps = self.spin_lamarck.value()
+            if lamarck_steps > 0:
+                self._yane.set_lamarck(n_steps=lamarck_steps)
             self._yane.set_resource_limits(max_process_gb=self.dspin_mem.value())
             target = self.dspin_target.value()
             if target > -1e9:
@@ -593,6 +666,8 @@ class TrainingTab(QWidget):
         self._score_lbl.setVisible(False)
 
         self.chart.clear()
+        self.species_chart.clear()
+        self._start_time = _time.perf_counter()
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
         self.btn_stop.setEnabled(True)
@@ -622,9 +697,15 @@ class TrainingTab(QWidget):
             self.status_lbl.setText("Stopped")
 
     def _on_iteration(self, iteration: int, fitness: float, best_genome, mem: dict) -> None:
+        elapsed = _time.perf_counter() - self._start_time
+        iter_s = iteration / elapsed if elapsed > 0 else 0.0
+        mins, secs = divmod(int(elapsed), 60)
+        elapsed_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
         self.lbl_iter.setText(f"Iteration: {iteration}")
-        self.lbl_fitness.setText(f"Current: {fitness:.4f}   Best: {best_genome.fitness:.4f}")
+        self.lbl_fitness.setText(f"Aktuell: {fitness:.4f}   Beste: {best_genome.fitness:.4f}")
+        self.lbl_speed.setText(f"Speed: {iter_s:.1f} iter/s   Laufzeit: {elapsed_str}")
         self.chart.add_point(fitness)
+        self.species_chart.add_point(mem.get("species_count", 0))
         self.genome_updated.emit(best_genome, mem)
         self._update_ram_bar()
         self.btn_run_best.setEnabled(self.btn_run_best.isVisible())

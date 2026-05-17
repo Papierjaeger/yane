@@ -271,6 +271,10 @@ class NeuroEvolution:
             "stagnation_threshold":    self._population.stagnation_threshold,
             "since_last_injection":    self._population._since_last_injection,
             "novelty_weight":          self._population.novelty_weight,
+            "min_fitness": min((g.fitness for g in self._population._evaluated), default=0.0),
+            "max_fitness": max((g.fitness for g in self._population._evaluated), default=0.0),
+            "avg_fitness": (sum(g.fitness for g in self._population._evaluated)
+                            / max(1, len(self._population._evaluated))),
         }
 
     def set_n_workers(self, n: int) -> None:
