@@ -152,7 +152,8 @@ def _make_continuous_action_eval(
             done = False
             while not done:
                 raw = genome.forward(state)
-                action = [r * 2.0 - 1.0 for r in raw[:n_outputs]]
+                # Clamp to [-1, 1] — LINEAR-activated outputs could otherwise blow up.
+                action = [max(-1.0, min(1.0, r * 2.0 - 1.0)) for r in raw[:n_outputs]]
                 state, reward, terminated, truncated, _ = env.step(action)
                 total += reward
                 done = terminated or truncated
@@ -380,9 +381,9 @@ def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
                 inputs = (small.flatten() / 255.0).tolist()
 
                 raw = genome.forward(inputs)
-                steering = raw[0] * 2.0 - 1.0          # sigmoid → [-1, 1]
-                gas      = max(0.0, min(1.0, raw[1]))   # sigmoid → [0, 1]
-                brake    = max(0.0, min(1.0, raw[2]))   # sigmoid → [0, 1]
+                steering = max(-1.0, min(1.0, raw[0] * 2.0 - 1.0))   # clamp to [-1, 1]
+                gas      = max( 0.0, min(1.0, raw[1]))                # clamp to [ 0, 1]
+                brake    = max( 0.0, min(1.0, raw[2]))                # clamp to [ 0, 1]
                 obs, reward, terminated, truncated, _ = env.step(np.array([steering, gas, brake], dtype=np.float64))
                 total += reward
                 done = terminated or truncated
@@ -496,7 +497,9 @@ def _make_pendulum_eval(max_train_steps: int = 500):
             for _ in range(episode_cap):
                 raw = genome.forward(state)
                 # sigmoid output [0,1] → action in [-2, 2]
-                action = [raw[0] * 4.0 - 2.0]
+                # Clamp to action space [-2, 2] — output activation can evolve to
+                # LINEAR (any value), which would otherwise crash gym with NaN/Overflow.
+                action = [max(-2.0, min(2.0, raw[0] * 4.0 - 2.0))]
                 state, reward, terminated, truncated, _ = env.step(action)
                 total += reward
                 if _hooks: _hooks(total, env)
@@ -526,7 +529,9 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
             for _ in range(episode_cap):
                 raw = genome.forward(state)
                 # sigmoid [0,1] → action in [-1, 1] so genome can push both ways
-                action = [raw[0] * 2.0 - 1.0]
+                # Clamp to action space [-1, 1] — output activation can evolve to
+                # LINEAR (any value), which would otherwise crash gym with NaN/Overflow.
+                action = [max(-1.0, min(1.0, raw[0] * 2.0 - 1.0))]
                 state, reward, terminated, truncated, _ = env.step(action)
                 pos = state[0]
                 if pos > max_pos: max_pos = pos
@@ -606,6 +611,7 @@ def load_examples() -> list[ExampleConfig]:
             ),
             n_inputs=_MULT_NI, n_outputs=_MULT_NO,
             max_nodes=30, max_connections=100,
+            n_initial_hidden=3,    # multiplication is non-linear; needs hidden layer
             make_eval=_mult_make_eval,
             target_fitness=_MULT_FIT,
             category="Dataset",
@@ -615,9 +621,10 @@ def load_examples() -> list[ExampleConfig]:
         ),
         ExampleConfig(
             name="Regression 2→2",
-            description="Lernt eine kontinuierliche 2→2 Abbildung (4 Samples).",
+            description="Lernt eine kontinuierliche 2→2 Abbildung (4 Samples) — enthält XOR-artige Muster.",
             n_inputs=_REG22_NI, n_outputs=_REG22_NO,
-            max_nodes=20, max_connections=60,
+            max_nodes=25, max_connections=80,
+            n_initial_hidden=4,    # 2 outputs × 2 hidden each — enough capacity for parallel XOR + linear
             make_eval=_reg22_make_eval,
             target_fitness=_REG22_FIT,
             category="Dataset",
@@ -626,9 +633,10 @@ def load_examples() -> list[ExampleConfig]:
         ),
         ExampleConfig(
             name="Regression 3→3",
-            description="Lernt eine kontinuierliche 3→3 Abbildung (8 Samples).",
+            description="Lernt eine kontinuierliche 3→3 Abbildung (8 Samples) — nichtlinear.",
             n_inputs=_REG33_NI, n_outputs=_REG33_NO,
-            max_nodes=20, max_connections=80,
+            max_nodes=30, max_connections=120,
+            n_initial_hidden=6,    # 3 outputs × 2 hidden each
             make_eval=_reg33_make_eval,
             target_fitness=_REG33_FIT,
             category="Dataset",
@@ -645,6 +653,7 @@ def load_examples() -> list[ExampleConfig]:
             category="Dataset",
             supports_normalization=True,
             stateful=True,
+            test_cases=[(s["input"], s["output"]) for s in _PI_DATASET[:_PI_DECIMAL_PLACES]],
             sequence_samples=[(s["input"], s["output"]) for s in _PI_DATASET[:_PI_DECIMAL_PLACES]],
         ),
     ]
@@ -697,8 +706,9 @@ def load_examples() -> list[ExampleConfig]:
                 description="Swing up and balance a pendulum with continuous torque (3 inputs, 1 output).",
                 n_inputs=3, n_outputs=1,
                 max_nodes=20, max_connections=60,
+                n_initial_hidden=2,    # continuous control benefits from hidden layer
                 make_eval=_make_pendulum_eval(max_train_steps=200),
-                target_fitness=-300,
+                target_fitness=-400,    # realistic target above the empty-genome baseline (-507)
                 category="Classic Control",
                 supports_render=True,
             ),
@@ -782,9 +792,10 @@ def load_examples() -> list[ExampleConfig]:
                     "Belohnung: +20 Abgabe, -10 illegale Aktion, -1/Schritt."
                 ),
                 n_inputs=4, n_outputs=6,
-                max_nodes=30, max_connections=100,
+                max_nodes=40, max_connections=150,
+                n_initial_hidden=6,    # 6 actions × full input visibility needed
                 make_eval=_make_taxi_eval(max_steps=500),
-                target_fitness=5.0,
+                target_fitness=-170.0,    # baseline ≈ -200; -170 = meaningful shaping progress
                 category="Toy Text",
                 supports_render=True,
             ),

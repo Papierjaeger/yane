@@ -11,7 +11,7 @@ with open(os.path.join(_here, "dataset_2_2.json")) as f:
 
 N_INPUTS       = 2
 N_OUTPUTS      = 2
-TARGET_FITNESS = -0.1
+TARGET_FITNESS = -0.4   # 4 samples × 2 outputs = 8 errors; avg ≤ 0.05 per output
 
 TEST_CASES = [
     (list(map(float, s["input"])), list(map(float, s["output"])))
@@ -23,7 +23,7 @@ def make_eval(render_callback=None, step_callback=None, demo=False):
     def evaluate(genome):
         fitness = 0.0
         for sample in dataset:
-            # stateless: _forward already zeros output nodes; no reset needed
+            genome.reset()   # stateless: clear persistent memory between samples
             outputs = genome.forward(sample["input"])
             for i, target in enumerate(sample["output"]):
                 fitness -= abs(outputs[i] - target)

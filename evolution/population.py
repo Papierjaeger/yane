@@ -4,6 +4,11 @@ from operator import attrgetter
 
 import numpy as np
 
+# Genome forward() can produce inf/overflow when output activation evolves to
+# LINEAR and weights grow large — this is expected and handled by nan_to_num
+# in submit(). Silence the cosmetic warnings.
+np.seterr(over='ignore', invalid='ignore')
+
 from yane.core.genome import Genome
 
 # Module-level key functions — C-level attrgetter is ~2× faster than a Python
@@ -191,10 +196,18 @@ class Population:
 
         # Compute behavior descriptor immediately after evaluation — the genome's
         # weights are still intact and forward() is deterministic.
+        # Reset between probes so persistent hidden nodes can't carry state
+        # from one probe to the next (would otherwise accumulate to ±Inf).
         if self._probe_inputs:
-            # float64: float32 overflows when networks produce large outputs (e.g. SINE).
-            rows = [genome.forward(inp) for inp in self._probe_inputs]
-            self._behaviors[id(genome)] = np.array(rows, dtype=np.float64).ravel()
+            rows = []
+            for inp in self._probe_inputs:
+                genome.reset()
+                rows.append(genome.forward(inp))
+            # float64 + sanitise: any NaN/Inf from a degenerate network must not
+            # propagate into the novelty matrix (would break compatibility distance).
+            arr = np.array(rows, dtype=np.float64).ravel()
+            arr = np.nan_to_num(arr, nan=0.0, posinf=1e6, neginf=-1e6)
+            self._behaviors[id(genome)] = arr
         self._novelty_evals_since_recompute += 1
 
         _cc = genome.connection_count   # cache property once; avoids descriptor overhead in the two reads below

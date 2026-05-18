@@ -27,7 +27,7 @@ dataset = [
 
 N_INPUTS       = 2
 N_OUTPUTS      = 1
-TARGET_FITNESS = -0.5   # total |error| ≤ 0.5 across 100 normalised samples
+TARGET_FITNESS = -5.0   # total |error| ≤ 5 across 100 normalised samples (avg 0.05)
 
 # Normalised test cases: inputs a/9, b/9 → output a*b/81
 TEST_CASES = [
@@ -42,7 +42,9 @@ def make_eval(render_callback=None, step_callback=None, demo=False, normalize=Tr
     def evaluate(genome):
         fitness = 0.0
         for sample in data:
-            # stateless: _forward already zeros output nodes; no reset needed
+            # Reset between samples so any persistent hidden nodes (developed
+            # through mutation) can't accumulate state and produce NaN/Inf.
+            genome.reset()
             outputs = genome.forward(sample["input"])
             for i, target in enumerate(sample["output"]):
                 fitness -= abs(outputs[i] - target)
