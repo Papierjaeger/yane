@@ -28,6 +28,7 @@ Es enthält:
 - Strategie-Gene wie `crossover_prob`, `offspring_factor` und `sigma_global`
 - Mutationsobjekte für Struktur und Strategieparameter
 - optionale Limits `max_nodes` und `max_connections`
+- `allow_memory`: steuert, ob Nodes `persist_value=True` halten dürfen; wird durch `stateful` in `configure()` gesetzt
 
 ### 2.1 Nodes
 
@@ -40,7 +41,7 @@ Eine `Node` hat folgende relevante Eigenschaften:
 - `persist_value`: wenn `True`, bleibt der aktivierte Wert nach dem Feuern erhalten
 - `max_triggers`: Schutzlimit für zyklische Netze im BFS-Forward-Modus
 - `input_index`: Index des gelesenen Eingabewerts bei Input-Nodes
-- `input_scale`: evolvierbarer Skalierungsfaktor für Input-Nodes
+- `input_scale`: evolvierbarer Skalierungsfaktor für Input-Nodes (Standard `1.0`); multipliziert den Rohwert, damit das Netz Eingaben selbst normalisieren kann
 - `connections`: ausgehende gewichtete Verbindungen
 
 Input-Nodes werden bei `configure()` auf `LINEAR` gesetzt, damit Rohwerte unverändert ins Netz gelangen. Output-Nodes starten mit `SIGMOID`, weil `Node` standardmäßig diese Aktivierung verwendet. Aktivierungen können später mutieren.
@@ -100,7 +101,7 @@ Der Ablauf:
 3. Für jeden Output wird ein `OUTPUT`-Node angelegt.
 4. Wenn `stateful=True`, bekommen Output-Nodes initial `persist_value=True`.
 5. Wenn `n_initial_hidden > 0`, werden Hidden Nodes angelegt.
-6. Bei initialen Hidden Nodes wird Input -> Hidden -> Output vollständig verbunden.
+6. Bei initialen Hidden Nodes wird Input -> Hidden -> Output vollständig verbunden. Die Verbindungsgewichte werden mit `random.uniform(-1.0, 1.0)` initialisiert.
 7. Ohne initiale Hidden Nodes startet das Genom ohne Connections.
 8. Eine `Population` wird mit diesem Startgenom und einer Template-Kopie erzeugt.
 
@@ -117,7 +118,7 @@ YANE unterstützt zwei Arten der Netzausführung: vollständiger `forward()` und
 Beim ersten Aufruf entscheidet YANE, ob das Netz azyklisch ist:
 
 - Wenn kein Zyklus gefunden wird, baut `_build_exec_order()` eine topologische Reihenfolge.
-- Danach wird mit `_compile_forward()` eine schnelle Closure erzeugt und für weitere Aufrufe gecacht.
+- Danach wird mit `_compile_forward()` eine schnelle Closure erzeugt und für alle weiteren Aufrufe direkt gecacht (`_forward_dispatch`). Ab dem zweiten Aufruf gibt es kein Attribute-Lookup auf die Topologie mehr.
 - Wenn ein Zyklus gefunden wird, verwendet das Genom dauerhaft `_bfs_forward()`.
 
 ### 4.2 Azyklischer Fast Path
@@ -125,7 +126,7 @@ Beim ersten Aufruf entscheidet YANE, ob das Netz azyklisch ist:
 Bei azyklischen Netzen:
 
 1. Output-Nodes werden pro Aufruf auf `0.0` gesetzt.
-2. Triviale Input-Nodes (`LINEAR`, Bias `0`, nicht persistent) leiten Werte direkt über ihre Connections weiter.
+2. Triviale Input-Nodes (`LINEAR`, Bias `0`, nicht persistent) leiten Werte direkt über ihre Connections weiter, multipliziert mit `input_scale`.
 3. Andere Input-Nodes feuern über `fire_simple()`.
 4. Hidden- und Output-Nodes feuern in topologischer Reihenfolge.
 5. Outputs werden aus `output_nodes` gelesen.
@@ -342,6 +343,8 @@ Novelty wird auf `[0, 1]` normalisiert. Der Bonus steigt bei Stagnation:
 novelty_weight = 0.1 + 0.4 * min(1.0, stagnation_count / population_size)
 ```
 
+Deskriptoren, deren Novelty den Schwellwert `0.3` überschreiten, werden in ein persistentes Archiv aufgenommen (maximal 200 Einträge; älteste Einträge werden bei Überlauf verworfen). Das Archiv verhindert, dass Novelty kollabiert, wenn die Population konvergiert. Die Novelty-Matrix wird alle `max_size / 2` Bewertungen neu berechnet statt bei jedem Submit, um den Rechenaufwand zu begrenzen.
+
 ### 8.7 Stagnation und Diversity Injection
 
 Wenn lange keine Fitnessverbesserung entsteht, injiziert YANE neue Diversität:
@@ -351,7 +354,7 @@ Wenn lange keine Fitnessverbesserung entsteht, injiziert YANE neue Diversität:
 - frische Template-Genome mit zufälligen Connections
 - stark mutierte Template-Genome
 
-Zusätzlich gibt es strukturelle Stagnation. Wenn die Topologie des besten Genoms sehr lange gleich bleibt, werden gezielt Strukturvarianten erzeugt. Das ist wichtig, wenn Lamarckian Refinement die Gewichte verbessert, aber die Topologie nicht mehr wächst.
+Zusätzlich gibt es strukturelle Stagnation. Wenn die Topologie des besten Genoms sehr lange gleich bleibt (Schwellwert: `3 × population_size` Bewertungen), werden gezielt Strukturvarianten erzeugt. Das ist wichtig, wenn Lamarckian Refinement die Gewichte verbessert, aber die Topologie nicht mehr wächst.
 
 ### 8.8 Pruning
 
@@ -372,11 +375,14 @@ yane.set_lamarck(n_steps=5, sigma=1.0)
 
 Vor der eigentlichen Fitnessbewertung wird ein lokaler Hill-Climb auf Gewichten und Biases durchgeführt:
 
+0. die Basisfitness des aktuellen Genoms wird einmalig berechnet
 1. aktuelle Gewichte und Biases werden gespeichert
 2. alle Gewichte und Biases werden mit Gaußrauschen verändert
 3. die Fitness wird neu berechnet
 4. nur bessere Änderungen bleiben erhalten
 5. schlechtere Änderungen werden zurückgerollt
+
+Schritte 1–5 werden `n_steps` Mal wiederholt. Danach folgt die reguläre Fitnessbewertung in der Trainingsschleife. Gesamtkosten pro Genom: `n_steps + 2` Fitnessfunktionsaufrufe (1 Basisfitness + `n_steps` Hill-Climb + 1 finale Bewertung).
 
 Die Schrittweite ist:
 
@@ -813,7 +819,36 @@ Trainingsablauf per HTTP:
 - Für Sequenzen und Episoden sollte `genome.reset()` nur am Episodenstart aufgerufen werden.
 - Normalisierung ist oft entscheidend, weil Aktivierungsfunktionen und Mutationsschrittweiten sonst in ungünstigen Skalen arbeiten.
 
-## 15. Testabdeckung
+## 15. Weitere öffentliche API-Methoden
+
+### 15.1 Populationsgröße und Species
+
+```python
+yane.set_population_size(n)   # Standard: 100
+yane.set_target_species(n)    # Standard: 5
+```
+
+`set_population_size(n)` legt die maximale Anzahl von Genomen in der Population fest. Kleinere Populationen trainieren schneller, finden aber öfter lokale Optima. `set_target_species(n)` setzt die Zielanzahl der Species; der Kompatibilitätsschwellwert wird automatisch angepasst. Höhere Werte erhalten mehr strukturelle Diversität.
+
+### 15.2 Batch-Evaluation
+
+```python
+genomes = yane.next_genome_batch(n=4)
+results = [(g, run_simulation(g)) for g in genomes]
+yane.submit_fitness_batch(results)
+```
+
+Für manuelle Parallelisierung: `next_genome_batch(n)` gibt `n` unbewertete Genome zurück (spawnt bei Bedarf Nachkommen). `submit_fitness_batch(results)` reicht Fitnesswerte für eine Liste von `(Genom, Fitness)`-Paaren ein. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
+
+### 15.3 Speicherverwaltung
+
+```python
+yane.trim_memory()
+```
+
+Gibt freigegebene Heap-Seiten explizit ans Betriebssystem zurück (ruft `malloc_trim` auf Linux auf). Nützlich nach langen Trainingsläufen oder nach `set_resource_limits(max_process_gb=...)`.
+
+## 16. Testabdeckung
 
 Die Tests decken unter anderem ab:
 

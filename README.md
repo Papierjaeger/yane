@@ -132,7 +132,7 @@ Parameter:
 - `max_nodes`: optionale Obergrenze für Nodes pro Genom
 - `max_connections`: optionale Obergrenze für Connections pro Genom
 - `n_initial_hidden`: Hidden Nodes im Startgenom
-- `stateful`: erlaubt persistente Node-Werte und damit Gedächtnis über mehrere `forward()`-Aufrufe
+- `stateful`: erlaubt persistente Node-Werte und damit Gedächtnis über mehrere `forward()`-Aufrufe (Standard: `True`)
 
 ### Automatisches Training
 
@@ -189,9 +189,38 @@ outputs = yane.forward_ensemble([0.2, 0.8], k=3)
 yane.set_efficiency_penalty(max_ms=10.0, penalty_per_ms=0.5)
 yane.set_resource_limits(min_free_gb=2.0, max_used_percent=85.0, max_process_gb=2.0)
 print(yane.population_memory_info())
+yane.trim_memory()
 ```
 
-Die Effizienzstrafe reduziert Fitness für langsame Bewertungen. Die Ressourcenlimits pausieren Training bei knappem Systemspeicher oder verkleinern die Population, wenn der Prozess zu viel RAM nutzt.
+Die Effizienzstrafe reduziert Fitness für langsame Bewertungen. Die Ressourcenlimits pausieren Training bei knappem Systemspeicher oder verkleinern die Population, wenn der Prozess zu viel RAM nutzt. `trim_memory()` gibt explizit freigegebene Heap-Seiten ans Betriebssystem zurück und ist nützlich nach langen Trainingsläufen.
+
+### Weitere Konfiguration
+
+```python
+yane.set_population_size(100)   # Standard: 100
+yane.set_target_species(5)      # Standard: 5
+```
+
+- `set_population_size(n)`: Größe der Population.
+- `set_target_species(n)`: Zielanzahl Species; der Kompatibilitätsschwellwert wird automatisch angepasst. Höhere Werte schützen mehr strukturelle Nischen (besonders nützlich für XOR-artige Aufgaben).
+
+### Lamarckian Refinement
+
+```python
+yane.set_lamarck(n_steps=5, sigma=1.0)
+```
+
+Vor jeder Fitnessbewertung werden Gewichte und Biases mit `n_steps` lokalen Hill-Climb-Schritten verfeinert. Verbesserte Gewichte werden direkt ins Genom übernommen und weitervererbt. Kosten: `n_steps + 1` zusätzliche Fitnessfunktionsaufrufe pro Genom.
+
+### Batch-API
+
+```python
+genomes = yane.next_genome_batch(n=4)
+results = [(g, run_simulation(g)) for g in genomes]
+yane.submit_fitness_batch(results)
+```
+
+Für manuelle Parallelisierung. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
 
 ## Beispiele
 
@@ -202,9 +231,11 @@ Die Effizienzstrafe reduziert Fitness für langsame Bewertungen. Die Ressourcenl
 | Regression 2->2 | 2 | 2 | nein, Werte 0/1 | 4 | nein | -0.4 |
 | Regression 3->3 | 3 | 3 | nein, Werte 0/1 | 9 | nein | -5.0 |
 | Sequence: Pi-Ziffern | 1 | 1 | Digit /9 | 0 | ja | -10.0 |
-| MNIST | 784 | 10 | Pixel /255 | 0 | ja | Anzahl Samples |
+| MNIST | 784 | 10 | Pixel /255 | – | ja | Anzahl Samples |
 
-Weitere GUI-Beispiele sind CartPole, Acrobot, MountainCar, Pendulum, LunarLander, BipedalWalker, CarRacing, Blackjack, Cliff Walking, Frozen Lake und Taxi. Details stehen in [TECHNISCHE_DOKUMENTATION.md](TECHNISCHE_DOKUMENTATION.md).
+MNIST ist nur als Skript verfügbar (`python -m yane.examples.MNIST`), nicht in der GUI; die Spalte „Hidden Nodes in GUI" entfällt daher.
+
+Weitere GUI-Beispiele sind CartPole, Acrobot, MountainCar (Continuous), MountainCar (Discrete), Pendulum, LunarLander, BipedalWalker, CarRacing, Blackjack, Cliff Walking, Frozen Lake und Taxi. Details stehen in [TECHNISCHE_DOKUMENTATION.md](TECHNISCHE_DOKUMENTATION.md).
 
 ## Technische Dokumentation
 
