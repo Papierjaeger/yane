@@ -17,77 +17,93 @@ from yane.core.genome import Genome
 _fitness_key        = attrgetter('fitness')
 _shared_fitness_key = attrgetter('shared_fitness')
 
+# Below this connection count per genome, pure-Python frozenset operations are
+# faster than NumPy due to array-creation overhead (~13 μs fixed cost).
+# Above it, NumPy's vectorised searchsorted + abs win (crossover measured ~200).
+_COMPAT_NUMPY_THRESHOLD: int = 200
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _compatibility(g1: Genome, g2: Genome, threshold: float | None = None) -> float:
+def _compatibility(g1: Genome, g2: Genome) -> float:
     """NEAT-style compatibility distance δ = c1·E/N + c2·D/N + c3·W̄
 
-    When innovation numbers are available, uses the original NEAT formula
-    with excess (E), disjoint (D) and average weight difference (W̄) of
-    matching genes.  Falls back to the old topology-count heuristic for
-    genomes without innovation tracking.
+    Automatically switches between two implementations based on network size:
 
-    Coefficients tuned to keep δ in roughly [0, 2]:
-      c1 = 1.0 (excess)   c2 = 1.0 (disjoint)   c3 = 0.4 (weight diff)
+    • Python path  (N < _COMPAT_NUMPY_THRESHOLD):
+      Frozenset operations + Python loops.  Fast for small NEAT networks
+      (typical: 2-50 connections) due to low per-call overhead.
 
-    Hot path: innovation dicts are cached per genome (invalidated on topology
-    change).  Cache access is inlined here to avoid function-call overhead on
-    the ~500K calls per training run.
+    • NumPy path   (N ≥ _COMPAT_NUMPY_THRESHOLD):
+      Sorted int32 arrays + np.searchsorted + vectorised abs/sum.  Faster
+      than the Python path for large networks (crossover measured at ~200).
+
+    Coefficients:  c1 = 1.0 (excess)   c2 = 1.0 (disjoint)   c3 = 0.4 (W̄)
+    Cache: innovation dicts + frozensets + optional sorted arrays are built
+    once per topology change and reused for all subsequent comparisons.
     """
-    # Inline _get_innov_cache() — avoids function-call overhead on this hot path.
-    # The cache stores (innov_dict, max_innov, n_innov, key_frozenset) so the
-    # frozenset is built once and reused for C-level set intersection below.
+    # ── Inline cache access (avoids function-call overhead on hot path) ────
     _cache1 = g1._innov_cache
     if _cache1 is None:
         _d = {conn.innovation: conn
               for src in g1.nodes for conn in src.connections
               if conn.innovation >= 0}
-        _cache1 = (_d, max(_d, default=-1), len(_d), frozenset(_d))
+        _n = len(_d)
+        _sarr = np.array(sorted(_d), dtype=np.int32) if _n >= _COMPAT_NUMPY_THRESHOLD else None
+        _cache1 = (_d, max(_d, default=-1), _n, frozenset(_d), _sarr)
         g1._innov_cache = _cache1
-    g1_innov, max_innov_g1, n1_innov, g1_keys = _cache1
+    g1_innov, max_innov_g1, n1_innov, g1_keys, g1_sorted = _cache1
 
     _cache2 = g2._innov_cache
     if _cache2 is None:
         _d = {conn.innovation: conn
               for src in g2.nodes for conn in src.connections
               if conn.innovation >= 0}
-        _cache2 = (_d, max(_d, default=-1), len(_d), frozenset(_d))
+        _n = len(_d)
+        _sarr = np.array(sorted(_d), dtype=np.int32) if _n >= _COMPAT_NUMPY_THRESHOLD else None
+        _cache2 = (_d, max(_d, default=-1), _n, frozenset(_d), _sarr)
         g2._innov_cache = _cache2
-    g2_innov, max_innov_g2, n2_innov, g2_keys = _cache2
+    g2_innov, max_innov_g2, n2_innov, g2_keys, g2_sorted = _cache2
 
+    # ── Legacy fallback (no innovation tracking) ────────────────────────────
     if not g1_innov and not g2_innov:
-        # Legacy fallback: simple topology distance
         n1, n2 = len(g1.nodes), len(g2.nodes)
         c1, c2 = g1.connection_count, g2.connection_count
         node_diff = abs(n1 - n2) / ((n1 if n1 >= n2 else n2) or 1)
         conn_diff = abs(c1 - c2) / ((c1 if c1 >= c2 else c2) or 1)
         return (node_diff + conn_diff) / 2.0
 
-    # Structural identity fast-path: if both genomes have the same innovation
-    # numbers, excess=0 and disjoint=0.  Only the weight-difference term remains.
-    # Skips the frozenset intersection + two classification loops (~40% of calls
-    # in stable populations where weight-only mutations dominate).
+    # ── Dynamic dispatch ────────────────────────────────────────────────────
+    if n1_innov < _COMPAT_NUMPY_THRESHOLD and n2_innov < _COMPAT_NUMPY_THRESHOLD:
+        return _compat_python(g1_innov, g2_innov, g1_keys, g2_keys,
+                              max_innov_g1, max_innov_g2, n1_innov, n2_innov)
+    else:
+        return _compat_numpy(g1_innov, g2_innov, g1_sorted, g2_sorted,
+                             g1_keys, g2_keys,
+                             max_innov_g1, max_innov_g2, n1_innov, n2_innov)
+
+
+def _compat_python(g1_innov, g2_innov, g1_keys, g2_keys,
+                   max1, max2, n1, n2) -> float:
+    """Python path — optimised for small networks (N < _COMPAT_NUMPY_THRESHOLD)."""
+    # Structural identity fast-path: same innovation keys → only weight diff.
     if g1_keys == g2_keys:
-        if n1_innov == 0:
+        if n1 == 0:
             return 0.0
         weight_diff_sum = 0.0
         for k in g1_keys:
             d = g1_innov[k].weight - g2_innov[k].weight
             weight_diff_sum += d if d >= 0.0 else -d
-        return 0.4 * weight_diff_sum / n1_innov
+        return 0.4 * weight_diff_sum / n1
 
-    # Inline min/max — avoids Python function-call overhead on this hot path.
-    smaller_max = max_innov_g1 if max_innov_g1 <= max_innov_g2 else max_innov_g2
-    N = n1_innov if n1_innov >= n2_innov else n2_innov
+    smaller_max = max1 if max1 <= max2 else max2
+    N = n1 if n1 >= n2 else n2
     if N == 0:
         N = 1
 
-    # Use the pre-computed frozensets for C-level set intersection.
-    matching_set = g1_keys & g2_keys   # C-level frozenset intersection
-
+    matching_set = g1_keys & g2_keys
     matching = 0
     weight_diff_sum = 0.0
     for k in matching_set:
@@ -110,7 +126,61 @@ def _compatibility(g1: Genome, g2: Genome, threshold: float | None = None) -> fl
                 disjoint += 1
 
     W_bar = weight_diff_sum / matching if matching > 0 else 0.0
-    return (1.0 * excess / N) + (1.0 * disjoint / N) + (0.4 * W_bar)
+    return (excess / N) + (disjoint / N) + (0.4 * W_bar)
+
+
+def _compat_numpy(g1_innov, g2_innov, g1_sorted, g2_sorted,
+                  g1_keys, g2_keys,
+                  max1, max2, n1, n2) -> float:
+    """NumPy path — faster for large networks (N ≥ _COMPAT_NUMPY_THRESHOLD)."""
+    # Build sorted arrays if the smaller genome fell below the threshold
+    # (mixed case: one genome large, the other small).
+    if g1_sorted is None:
+        g1_sorted = np.array(sorted(g1_keys), dtype=np.int32)
+    if g2_sorted is None:
+        g2_sorted = np.array(sorted(g2_keys), dtype=np.int32)
+
+    # Build weight arrays fresh — weights change every mutation but topology
+    # (and thus sorted key order) only changes on structural mutations.
+    g1_weights = np.fromiter((g1_innov[k].weight for k in g1_sorted),
+                              dtype=np.float64, count=n1)
+    g2_weights = np.fromiter((g2_innov[k].weight for k in g2_sorted),
+                              dtype=np.float64, count=n2)
+
+    # Structural identity fast-path (same keys → only weight diff).
+    if n1 == n2 and np.array_equal(g1_sorted, g2_sorted):
+        if n1 == 0:
+            return 0.0
+        return 0.4 * float(np.abs(g1_weights - g2_weights).mean())
+
+    smaller_max = max1 if max1 <= max2 else max2
+    N = n1 if n1 >= n2 else n2
+    if N == 0:
+        N = 1
+
+    # Find matching genes via searchsorted on sorted innovation arrays.
+    idx = np.searchsorted(g2_sorted, g1_sorted)
+    idx_clipped = np.clip(idx, 0, n2 - 1) if n2 > 0 else np.zeros(n1, dtype=np.intp)
+    match_mask = (g1_sorted == g2_sorted[idx_clipped]) if n2 > 0 else np.zeros(n1, dtype=bool)
+
+    matching = int(match_mask.sum())
+    W_bar = 0.0
+    if matching > 0:
+        W_bar = float(np.abs(g1_weights[match_mask]
+                             - g2_weights[idx_clipped[match_mask]]).sum()) / matching
+
+    # Exclusive genes: excess (beyond smaller max-innovation) and disjoint.
+    g1_excl = g1_sorted[~match_mask]
+    if n2 > 0:
+        not_in_g1 = np.ones(n2, dtype=bool)
+        not_in_g1[idx_clipped[match_mask]] = False
+        g2_excl = g2_sorted[not_in_g1]
+    else:
+        g2_excl = g2_sorted
+
+    excess  = int((g1_excl > smaller_max).sum()) + int((g2_excl > smaller_max).sum())
+    disjoint = len(g1_excl) + len(g2_excl) - excess
+    return (excess / N) + (disjoint / N) + (0.4 * W_bar)
 
 
 # ---------------------------------------------------------------------------

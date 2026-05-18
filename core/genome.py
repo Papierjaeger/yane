@@ -581,18 +581,23 @@ class Genome:
         return [(node, conn) for node in self.nodes for conn in node.connections]
 
     def _get_innov_cache(self) -> tuple:
-        """Return (innov_dict, max_innov, n_innov, key_frozenset) for this genome.
+        """Return (innov_dict, max_innov, n_innov, key_frozenset, sorted_arr) for this genome.
 
         Built once on first call after any structural change, then reused.
-        The frozenset enables C-level set intersection in _compatibility()
-        without calling dict.keys() on every comparison.
+        sorted_arr is a sorted np.int32 array of innovation keys — used by the
+        NumPy path in _compatibility() for large networks.  None for small networks
+        (below _COMPAT_NUMPY_THRESHOLD) to avoid allocation overhead.
         """
         if self._innov_cache is None:
+            from yane.evolution.population import _COMPAT_NUMPY_THRESHOLD
+            import numpy as _np
             d = {conn.innovation: conn
                  for src in self.nodes
                  for conn in src.connections
                  if conn.innovation >= 0}
-            self._innov_cache = (d, max(d, default=-1), len(d), frozenset(d))
+            n = len(d)
+            sorted_arr = _np.array(sorted(d), dtype=_np.int32) if n >= _COMPAT_NUMPY_THRESHOLD else None
+            self._innov_cache = (d, max(d, default=-1), n, frozenset(d), sorted_arr)
         return self._innov_cache
 
     def _invalidate_topology(self) -> None:
