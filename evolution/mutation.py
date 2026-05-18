@@ -49,15 +49,21 @@ class Mutation:
         if _r() < self.rate_mutation_rate:
             scale = _r() * 0.2 + 0.9   # uniform(0.9, 1.1) without function call
             lo = self.MIN_RATE
-            self.shift_rate = max(lo, min(0.999, self.shift_rate * scale))
-            self.custom_rate = max(lo, min(0.999, self.custom_rate * scale))
-            self.bool_rate = max(lo, min(0.999, self.bool_rate * scale))
-            self.int_rate = max(lo, min(0.999, self.int_rate * scale))
-            self.rate_mutation_rate = max(lo, min(0.999, self.rate_mutation_rate * scale))
+            # if/else avoids max()/min() Python function-call overhead
+            r = self.shift_rate * scale
+            self.shift_rate = r if lo <= r <= 0.999 else (lo if r < lo else 0.999)
+            r = self.custom_rate * scale
+            self.custom_rate = r if lo <= r <= 0.999 else (lo if r < lo else 0.999)
+            r = self.bool_rate * scale
+            self.bool_rate = r if lo <= r <= 0.999 else (lo if r < lo else 0.999)
+            r = self.int_rate * scale
+            self.int_rate = r if lo <= r <= 0.999 else (lo if r < lo else 0.999)
+            r = self.rate_mutation_rate * scale
+            self.rate_mutation_rate = r if lo <= r <= 0.999 else (lo if r < lo else 0.999)
 
         if _r() < self.shift_rate:
-            self.value_delta = max(1e-6, min(self.MAX_DELTA,
-                                             self.value_delta * (_r() * 0.2 + 0.9)))
+            d = self.value_delta * (_r() * 0.2 + 0.9)
+            self.value_delta = d if 1e-6 <= d <= self.MAX_DELTA else (1e-6 if d < 1e-6 else self.MAX_DELTA)
 
     def copy(self) -> 'Mutation':
         m = Mutation()
@@ -71,4 +77,5 @@ class Mutation:
 
     @classmethod
     def _clamp(cls, rate: float) -> float:
-        return max(cls.MIN_RATE, min(0.999, rate))
+        r = rate
+        return r if cls.MIN_RATE <= r <= 0.999 else (cls.MIN_RATE if r < cls.MIN_RATE else 0.999)

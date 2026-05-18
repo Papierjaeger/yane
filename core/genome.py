@@ -86,6 +86,11 @@ class Genome:
         # Set by Population.submit(); initialised here so the attribute always exists.
         self.shared_fitness: float = 0.0
 
+        # Species placement cache for Population._assign_species() fast path.
+        # Stores id(Species) of the last species this genome was placed in so
+        # the fast path can skip the full O(species) search.
+        self._last_species_id: int | None = None
+
     # -------------------------------------------------------------------------
     # Tick mode
     # -------------------------------------------------------------------------
@@ -535,6 +540,8 @@ class Genome:
             self.allow_memory = state.get('allow_output_memory', True)
         # Drop the obsolete attribute if it leaked in.
         self.__dict__.pop('allow_output_memory', None)
+        # Backward compat: old pickles won't have this attribute.
+        self.__dict__.setdefault('_last_species_id', None)
 
     # -------------------------------------------------------------------------
     # Diagnostics
@@ -563,20 +570,19 @@ class Genome:
         """All (source, connection) pairs in the network."""
         return [(node, conn) for node in self.nodes for conn in node.connections]
 
-    def _get_innov_cache(self) -> tuple[dict, int]:
-        """Return (innovation→connection dict, max_innovation) for this genome.
+    def _get_innov_cache(self) -> tuple:
+        """Return (innov_dict, max_innov, n_innov, key_frozenset) for this genome.
 
         Built once on first call after any structural change, then reused.
-        Calling _assign_species with a stable representative re-uses the same
-        dict across all O(population_size) comparisons per generation.
+        The frozenset enables C-level set intersection in _compatibility()
+        without calling dict.keys() on every comparison.
         """
         if self._innov_cache is None:
             d = {conn.innovation: conn
                  for src in self.nodes
                  for conn in src.connections
                  if conn.innovation >= 0}
-            # Cache len alongside the dict so _compatibility never calls len(d).
-            self._innov_cache = (d, max(d, default=-1), len(d))
+            self._innov_cache = (d, max(d, default=-1), len(d), frozenset(d))
         return self._innov_cache
 
     def _invalidate_topology(self) -> None:

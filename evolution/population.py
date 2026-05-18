@@ -22,7 +22,7 @@ _shared_fitness_key = attrgetter('shared_fitness')
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _compatibility(g1: Genome, g2: Genome) -> float:
+def _compatibility(g1: Genome, g2: Genome, threshold: float | None = None) -> float:
     """NEAT-style compatibility distance δ = c1·E/N + c2·D/N + c3·W̄
 
     When innovation numbers are available, uses the original NEAT formula
@@ -33,12 +33,30 @@ def _compatibility(g1: Genome, g2: Genome) -> float:
     Coefficients tuned to keep δ in roughly [0, 2]:
       c1 = 1.0 (excess)   c2 = 1.0 (disjoint)   c3 = 0.4 (weight diff)
 
-    Hot path: both dicts are cached per genome (invalidated on topology change),
-    so repeated comparisons against stable species representatives cost nothing
-    beyond a dict lookup.
+    Hot path: innovation dicts are cached per genome (invalidated on topology
+    change).  Cache access is inlined here to avoid function-call overhead on
+    the ~500K calls per training run.
     """
-    g1_innov, max_innov_g1, n1_innov = g1._get_innov_cache()
-    g2_innov, max_innov_g2, n2_innov = g2._get_innov_cache()
+    # Inline _get_innov_cache() — avoids function-call overhead on this hot path.
+    # The cache stores (innov_dict, max_innov, n_innov, key_frozenset) so the
+    # frozenset is built once and reused for C-level set intersection below.
+    _cache1 = g1._innov_cache
+    if _cache1 is None:
+        _d = {conn.innovation: conn
+              for src in g1.nodes for conn in src.connections
+              if conn.innovation >= 0}
+        _cache1 = (_d, max(_d, default=-1), len(_d), frozenset(_d))
+        g1._innov_cache = _cache1
+    g1_innov, max_innov_g1, n1_innov, g1_keys = _cache1
+
+    _cache2 = g2._innov_cache
+    if _cache2 is None:
+        _d = {conn.innovation: conn
+              for src in g2.nodes for conn in src.connections
+              if conn.innovation >= 0}
+        _cache2 = (_d, max(_d, default=-1), len(_d), frozenset(_d))
+        g2._innov_cache = _cache2
+    g2_innov, max_innov_g2, n2_innov, g2_keys = _cache2
 
     if not g1_innov and not g2_innov:
         # Legacy fallback: simple topology distance
@@ -54,23 +72,27 @@ def _compatibility(g1: Genome, g2: Genome) -> float:
     if N == 0:
         N = 1
 
-    excess = disjoint = matching = 0
+    # Use the pre-computed frozensets for C-level set intersection.
+    # frozenset & frozenset avoids calling dict.keys() and creates a frozenset
+    # result, eliminating 1M+ method-call overheads per training run.
+    matching_set = g1_keys & g2_keys   # C-level frozenset intersection
+
+    matching = 0
     weight_diff_sum = 0.0
+    for k in matching_set:
+        matching += 1
+        d = g1_innov[k].weight - g2_innov[k].weight
+        weight_diff_sum += d if d >= 0.0 else -d  # avoids abs() function-call overhead
 
-    # Iterate g1's genes; classify each as matching, disjoint, or excess.
-    for innov, conn1 in g1_innov.items():
-        conn2 = g2_innov.get(innov)
-        if conn2 is not None:
-            matching += 1
-            weight_diff_sum += abs(conn1.weight - conn2.weight)
-        elif innov > smaller_max:
-            excess += 1
-        else:
-            disjoint += 1
-
-    # Count g2-exclusive genes (g1 already handled matching ones above).
-    for innov in g2_innov:
-        if innov not in g1_innov:
+    excess = disjoint = 0
+    for innov in g1_keys:
+        if innov not in matching_set:
+            if innov > smaller_max:
+                excess += 1
+            else:
+                disjoint += 1
+    for innov in g2_keys:
+        if innov not in matching_set:
             if innov > smaller_max:
                 excess += 1
             else:
@@ -104,11 +126,15 @@ class Species:
             return 0.0
         return sum(g.shared_fitness for g in self.members) / len(self.members)
 
-    def update_stagnation(self) -> None:
-        """Update stagnation counter based on the current best member's fitness."""
+    def update_stagnation(self, best_genome: 'Genome | None' = None) -> None:
+        """Update stagnation counter based on the current best member's fitness.
+
+        best_genome: pre-computed best member (avoids a second max() scan when
+        the caller already computed sp.best() for another purpose).
+        """
         if not self.members:
             return
-        current_best = self.best().fitness
+        current_best = (best_genome if best_genome is not None else self.best()).fitness
         if current_best > self.best_fitness_seen:
             self.best_fitness_seen = current_best
             self.stagnation_count = 0
@@ -178,6 +204,15 @@ class Population:
         self._novelty_cache: dict[int, float] = {}
         self._novelty_evals_since_recompute: int = 0
 
+        # Incremental eval-time range tracking — updated in O(1) on each submit().
+        # _compute_efficiency_scores() uses these instead of a separate min/max pass.
+        # Set to None when no valid eval_time has been seen yet.
+        self._eval_time_min: float | None = None
+        self._eval_time_max: float | None = None
+        # Dirty flag: True when the range expanded (new fastest/slowest genome) so
+        # _compute_efficiency_scores() actually needs to rescale all stored scores.
+        self._efficiency_dirty: bool = False
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -196,7 +231,25 @@ class Population:
         genome.selection_score = 0.0
         self._unevaluated.remove(genome)
         self._evaluated.append(genome)
-        self._compute_efficiency_scores()
+        # Update eval-time range and compute this genome's efficiency score in O(1).
+        # Full rescale of all genomes happens in _spawn_offspring() → _compute_efficiency_scores().
+        t = elapsed_ms
+        if t is not None and math.isfinite(t) and t >= 0.0:
+            if self._eval_time_min is None or t < self._eval_time_min:
+                self._eval_time_min = t
+            if self._eval_time_max is None or t > self._eval_time_max:
+                self._eval_time_max = t
+        old_min, old_max = self._eval_time_min, self._eval_time_max
+        lo, hi = old_min, old_max
+        span = (hi - lo) if (lo is not None and hi is not None) else 0.0
+        if span <= 1e-9 or t is None or not math.isfinite(t):
+            genome.efficiency_score = 1.0
+        else:
+            score = (hi - t) / span
+            genome.efficiency_score = score if 0.0 <= score <= 1.0 else (1.0 if score > 1.0 else 0.0)
+        # Mark all efficiency scores as needing rescale if the range changed.
+        if self._eval_time_min != old_min or self._eval_time_max != old_max:
+            self._efficiency_dirty = True
 
         # Compute behavior descriptor immediately after evaluation — the genome's
         # weights are still intact and forward() is deterministic.
@@ -293,31 +346,29 @@ class Population:
         return 0.5 * max(0.0, 1.0 - min(1.0, stagnation_frac))
 
     def _compute_efficiency_scores(self) -> None:
-        """Normalize evaluation speed into [0, 1], where 1 is fastest."""
-        timed = [
-            g for g in self._evaluated
-            if g.eval_time_ms is not None
-            and math.isfinite(g.eval_time_ms)
-            and g.eval_time_ms >= 0.0
-        ]
-        if len(timed) < 2:
+        """Normalize evaluation speed into [0, 1], where 1 is fastest.
+
+        Uses the cached _eval_time_min/_eval_time_max tracked incrementally in
+        submit(). Skipped when the range hasn't changed since the last rescale
+        (common in steady-state evolution where eval times cluster tightly).
+        Called once per _spawn_offspring() (not per submit).
+        """
+        if not self._efficiency_dirty:
+            return
+        self._efficiency_dirty = False
+        lo, hi = self._eval_time_min, self._eval_time_max
+        if lo is None or hi is None or hi - lo <= 1e-9:
             for g in self._evaluated:
                 g.efficiency_score = 1.0
             return
-
-        lo = min(g.eval_time_ms for g in timed)
-        hi = max(g.eval_time_ms for g in timed)
         span = hi - lo
-        if span <= 1e-9:
-            for g in self._evaluated:
-                g.efficiency_score = 1.0
-            return
-
         for g in self._evaluated:
-            if g.eval_time_ms is None or not math.isfinite(g.eval_time_ms):
+            t = g.eval_time_ms
+            if t is None or not math.isfinite(t):
                 g.efficiency_score = 1.0
             else:
-                g.efficiency_score = max(0.0, min(1.0, (hi - g.eval_time_ms) / span))
+                score = (hi - t) / span
+                g.efficiency_score = score if 0.0 <= score <= 1.0 else (1.0 if score > 1.0 else 0.0)
 
     # ------------------------------------------------------------------
     # Novelty
@@ -349,12 +400,18 @@ class Population:
         else:
             ref_mat = pop_mat
 
-        # Mean distance from each population member to all reference points.
-        diff = pop_mat[:, None, :] - ref_mat[None, :, :]  # (N, R, D)
-        dists = np.sqrt((diff * diff).sum(axis=2))         # (N, R)
-        # Exclude self-distance (always 0 for archive members it won't be there,
-        # but for population members the self-row should be masked).
+        # Pairwise Euclidean distances using the identity:
+        #   ||a - b||² = ||a||² + ||b||² - 2·(a·b)
+        # This avoids materialising the (N, R, D) tensor produced by broadcasting
+        # subtraction — matrix multiplication is cache-efficient and BLAS-optimised.
         N = len(pairs)
+        pop_sq  = (pop_mat  * pop_mat ).sum(axis=1, keepdims=True)  # (N, 1)
+        ref_sq  = (ref_mat  * ref_mat ).sum(axis=1)                  # (R,)
+        cross   = pop_mat @ ref_mat.T                                 # (N, R) via BLAS
+        dist_sq = pop_sq + ref_sq - 2.0 * cross
+        np.maximum(dist_sq, 0.0, out=dist_sq)   # clip floating-point negatives
+        dists   = np.sqrt(dist_sq)               # (N, R)
+        # Mask self-distances (population vs. itself) so they don't pull the mean down.
         np.fill_diagonal(dists[:, :N], np.inf)
         finite = np.where(np.isinf(dists), 0.0, dists)
         counts = np.where(np.isinf(dists), 0, 1).sum(axis=1)
@@ -395,7 +452,7 @@ class Population:
 
             # Fast path: try last-known species first — avoids full search for
             # stable genomes that haven't drifted away from their cluster.
-            last_sp_id = getattr(genome, '_last_species_id', None)
+            last_sp_id = genome._last_species_id   # direct attr access; initialized in Genome.__init__
             if last_sp_id is not None:
                 sp = species_by_id.get(last_sp_id)
                 if sp is not None and _compatibility(genome, sp.representative) < threshold:
@@ -418,8 +475,9 @@ class Population:
 
         self._species = [sp for sp in self._species if sp.members]
         for sp in self._species:
-            sp.representative = sp.best()
-            sp.update_stagnation()   # track per-species fitness progress
+            best = sp.best()
+            sp.representative = best
+            sp.update_stagnation(best)   # pass pre-computed best to avoid second max() call
 
         # Adapt threshold so species count converges to target_species.
         # Step 0.005 keeps adaptation smooth relative to δ range [0, ~0.15].
