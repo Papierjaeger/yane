@@ -727,8 +727,9 @@ def load_examples() -> list[ExampleConfig]:
                 description="Walk with a two-legged robot using 4 continuous joint torques (24 inputs, 4 outputs).",
                 n_inputs=24, n_outputs=4,
                 max_nodes=60, max_connections=300,
+                n_initial_hidden=4,
                 make_eval=_make_continuous_action_eval("BipedalWalker-v3", n_outputs=4, early_stop=-50, max_steps=1000),
-                target_fitness=200,
+                target_fitness=0,    # baseline ≈ -100; 0 = meaningful walking attempt
                 category="Box2D",
                 supports_render=True,
             ),
@@ -738,7 +739,7 @@ def load_examples() -> list[ExampleConfig]:
                 n_inputs=144, n_outputs=3,
                 max_nodes=80, max_connections=500,
                 make_eval=_make_carracing_eval(grid=12, max_steps=500),
-                target_fitness=800,
+                target_fitness=100,    # baseline 0-50; 100 = consistent on-track driving
                 category="Pixel",
                 supports_render=True,
             ),
