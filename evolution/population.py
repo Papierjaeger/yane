@@ -114,11 +114,16 @@ class Species:
         self.members: list[Genome] = []
         self.best_fitness_seen: float = float('-inf')
         self.stagnation_count: int = 0   # spawn-cycles without fitness improvement
+        self._cached_best: Genome | None = None  # maintained by _assign_species()
 
     def add(self, genome: Genome) -> None:
         self.members.append(genome)
 
     def best(self) -> Genome:
+        # Return the incremental cache when available (set by _assign_species).
+        # Falls back to a full scan for callers outside that code path (e.g. tests).
+        if self._cached_best is not None:
+            return self._cached_best
         return max(self.members, key=_fitness_key)
 
     def avg_shared_fitness(self) -> float:
@@ -446,6 +451,7 @@ class Population:
     def _assign_species(self) -> None:
         for sp in self._species:
             sp.members = []
+            sp._cached_best = None   # reset incremental cache for this cycle
 
         threshold = self._compat_threshold
         # Map id(species) → species for O(1) fast-path lookup.
@@ -460,28 +466,34 @@ class Population:
             if last_sp_id is not None:
                 sp = species_by_id.get(last_sp_id)
                 if sp is not None and _compatibility(genome, sp.representative) < threshold:
-                    sp.members.append(genome)   # inlined sp.add() to eliminate method-call overhead
+                    sp.members.append(genome)
+                    # Maintain incremental best so sp.best() is O(1) after assignment.
+                    if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
+                        sp._cached_best = genome
                     placed = True
 
             if not placed:
                 for sp in self._species:
                     if _compatibility(genome, sp.representative) < threshold:
-                        sp.members.append(genome)   # inlined sp.add()
+                        sp.members.append(genome)
+                        if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
+                            sp._cached_best = genome
                         genome._last_species_id = id(sp)
                         placed = True
                         break
             if not placed:
                 new_sp = Species(genome)
-                new_sp.members.append(genome)   # inlined sp.add()
+                new_sp.members.append(genome)
+                new_sp._cached_best = genome
                 self._species.append(new_sp)
                 species_by_id[id(new_sp)] = new_sp
                 genome._last_species_id = id(new_sp)
 
         self._species = [sp for sp in self._species if sp.members]
         for sp in self._species:
-            best = sp.best()
+            best = sp.best()    # O(1) — returns _cached_best built above
             sp.representative = best
-            sp.update_stagnation(best)   # pass pre-computed best to avoid second max() call
+            sp.update_stagnation(best)
 
         # Adapt threshold so species count converges to target_species.
         # Step 0.005 keeps adaptation smooth relative to δ range [0, ~0.15].
@@ -725,16 +737,18 @@ class Population:
         # they're just isolated genomes that happened to form their own
         # cluster. Protecting all single-genome champions would block
         # pruning entirely when every genome is in its own species.
-        protected: set[int] = {id(self.get_best())}
+        # Store genome object references directly — avoids calling id() on every
+        # genome in the candidates comprehension (was 600K+ id() calls per run).
+        protected: set = {self.get_best()}
         for sp in self._species:
             if len(sp.members) > 1:
-                protected.add(id(sp.best()))
+                protected.add(sp.best())
 
         while self._evaluated and len(self._evaluated) + len(self._unevaluated) > self.max_size:
             if len(self._evaluated) <= 1:
                 break
 
-            candidates = [g for g in self._evaluated if id(g) not in protected]
+            candidates = [g for g in self._evaluated if g not in protected]
             if not candidates:
                 break
 
@@ -746,6 +760,9 @@ class Population:
             for sp in self._species:
                 if worst in sp.members:
                     sp.members.remove(worst)
+                    # Invalidate incremental best cache if the removed genome was cached.
+                    if sp._cached_best is worst:
+                        sp._cached_best = None  # triggers full scan on next best() call
                     # Keep representative up-to-date so it doesn't hold a
                     # stale reference to the cleared genome.
                     if sp.representative is worst:
