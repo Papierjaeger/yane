@@ -1,6 +1,7 @@
 """Background threads for training and the API server."""
 from __future__ import annotations
 import gc
+import math
 import multiprocessing as mp
 import threading
 import time
@@ -237,9 +238,7 @@ class TrainingWorker(QThread):
         ctx = mp.get_context('fork')
 
         # Bootstrap: evaluate the seed genome sequentially, measure speed,
-        # and fall back to sequential if MP overhead would dominate.
-        # Rule of thumb: MP only helps when eval > ~10ms per genome.
-        _MP_MIN_MS = 10.0   # min evaluation time for MP to be worthwhile
+        # then decide whether MP overhead is worth it (see cost model below).
         try:
             seed_fn = self._make_eval_fn(None)
             seed_g  = self._yane.next_genome()
@@ -251,14 +250,34 @@ class TrainingWorker(QThread):
             self.error_occurred.emit(str(exc))
             return
 
-        # Auto-mode or manual MP: decide how many workers to actually use.
-        # Formula: keep workers busy when eval_ms × batch / n_workers >> overhead.
-        # Optimal: n = min(cpu_count, eval_ms × batch / overhead).
-        # Constants from benchmark: overhead ≈ 16ms, batch ≈ max_size.
+        # Decide how many workers to use.
+        #
+        # Cost model (for a batch of k genomes):
+        #   sequential:   k × eval_ms
+        #   w workers:    k × eval_ms / w  +  overhead
+        #
+        # MP beats sequential when:  overhead  <  k × eval_ms × (w−1)/w
+        # → MP is NEVER beneficial when seq_time ≤ overhead (any overhead dominates).
+        # → When seq_time > overhead, there exist w≥2 that win.
+        #
+        # Minimum w that beats sequential:
+        #   w ≥ seq_time / (seq_time − overhead)
+        #
+        # "Optimal" w (eval-work-per-worker equals overhead, diminishing returns):
+        #   w_opt = seq_time / overhead  (real-valued; round up to nearest int ≥ min_beneficial)
         _OVERHEAD_MS = 16.0
         batch_size   = self._yane._population.max_size
-        optimal      = max(1, int(eval_ms * batch_size / _OVERHEAD_MS))
-        chosen       = min(n_workers, optimal)
+        seq_time     = batch_size * eval_ms   # ms if evaluated sequentially
+
+        if seq_time <= _OVERHEAD_MS:
+            # Even with unlimited workers the per-batch overhead dominates.
+            optimal = 1
+        else:
+            min_beneficial = math.ceil(seq_time / (seq_time - _OVERHEAD_MS))
+            min_beneficial = max(2, min_beneficial)
+            optimal = max(min_beneficial, int(seq_time / _OVERHEAD_MS))
+
+        chosen = min(n_workers, optimal)
 
         if auto:
             if chosen <= 1:
@@ -276,10 +295,11 @@ class TrainingWorker(QThread):
                     f"Auto → {n_workers} Worker "
                     f"({eval_ms:.1f}ms/Genome, {mp.cpu_count()} CPUs)"
                 )
-        elif eval_ms < _MP_MIN_MS:
+        elif optimal <= 1:
             self.workers_resolved.emit(1)
             self.info_message.emit(
-                f"MP-Overhead > Nutzen ({eval_ms:.1f}ms/Genome < {_MP_MIN_MS:.0f}ms Schwelle) "
+                f"MP-Overhead > Nutzen ({eval_ms:.2f}ms/Genome, "
+                f"seq={seq_time:.0f}ms < overhead={_OVERHEAD_MS:.0f}ms) "
                 f"— Training läuft sequenziell."
             )
             self._run_sequential(0.0)
