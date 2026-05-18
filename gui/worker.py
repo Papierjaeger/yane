@@ -367,8 +367,13 @@ class TrainingWorker(QThread):
                     eval_ema = (1 - _ALPHA) * eval_ema + _ALPHA * est
 
                     if auto and batch_count % _RESCALE_EVERY == 0:
-                        new_opt = min(n_workers_max,
-                                      max(1, int(eval_ema * batch_size / _OVERHEAD_MS)))
+                        _seq = batch_size * eval_ema
+                        if _seq <= _OVERHEAD_MS:
+                            _new_raw = 1
+                        else:
+                            _min_b = math.ceil(_seq / (_seq - _OVERHEAD_MS))
+                            _new_raw = max(max(2, _min_b), int(_seq / _OVERHEAD_MS))
+                        new_opt = min(n_workers_max, _new_raw)
                         if abs(new_opt - n_workers) >= 2:
                             pool.terminate(); pool.join()
                             n_workers  = new_opt
