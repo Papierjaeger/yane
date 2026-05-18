@@ -1080,36 +1080,63 @@ class TrainingTab(QWidget):
 # Inspect tab
 # ---------------------------------------------------------------------------
 
+def _fmt_value(v: float, denormalized: bool) -> str:
+    """Format a single value for display. When denormalized and close to an integer,
+    drop decimals so e.g. 5 → "5" instead of "5.000"."""
+    if denormalized and abs(v - round(v)) < 0.01 and abs(v) < 1e9:
+        return f"{int(round(v))}"
+    return f"{v:.2f}" if denormalized else f"{v:.3f}"
+
+
+def _fmt_list(vs: list[float], scale: list[float] | None, denormalized: bool) -> str:
+    if denormalized and scale:
+        vs = [v * s for v, s in zip(vs, scale)]
+    return "[" + ", ".join(_fmt_value(v, denormalized) for v in vs) + "]"
+
+
+_TOL_NORMALIZED = 0.05   # average per-output error implied by typical target_fitness values
+
+
 class _TestCaseRow:
     """One persistent row in the test-cases table. Created once, updated in place."""
 
     _MONO = "font-family: monospace; font-size: 12px;"
 
-    def __init__(self, layout, inputs: list[float], expected: list[float]) -> None:
-        self._inputs   = inputs
-        self._expected = expected
+    def __init__(self, layout, inputs: list[float], expected: list[float],
+                 input_scale: list[float] | None = None,
+                 output_scale: list[float] | None = None,
+                 denormalized: bool = False) -> None:
+        self._inputs        = inputs
+        self._expected      = expected
+        self._input_scale   = input_scale
+        self._output_scale  = output_scale
+        self._denormalized  = denormalized
 
         row = QWidget()
         rlay = QHBoxLayout(row)
         rlay.setContentsMargins(0, 2, 0, 2)
 
-        in_str  = "[" + ", ".join(f"{v:.1f}" for v in inputs) + "]"
-        exp_str = "[" + ", ".join(f"{v:.1f}" for v in expected) + "]"
-
-        self._in_lbl  = QLabel(in_str);  self._in_lbl.setMinimumWidth(120); self._in_lbl.setStyleSheet(self._MONO)
-        self._exp_lbl = QLabel(exp_str); self._exp_lbl.setMinimumWidth(80);  self._exp_lbl.setStyleSheet(self._MONO)
-        self._out_lbl = QLabel("—");     self._out_lbl.setMinimumWidth(90);  self._out_lbl.setStyleSheet(self._MONO)
-        self._tick    = QLabel("?");     self._tick.setFixedWidth(30)
+        self._in_lbl    = QLabel();    self._in_lbl.setMinimumWidth(120);   self._in_lbl.setStyleSheet(self._MONO)
+        self._exp_lbl   = QLabel();    self._exp_lbl.setMinimumWidth(80);   self._exp_lbl.setStyleSheet(self._MONO)
+        self._out_lbl   = QLabel("—"); self._out_lbl.setMinimumWidth(90);   self._out_lbl.setStyleSheet(self._MONO)
+        self._delta_lbl = QLabel("—"); self._delta_lbl.setMinimumWidth(60); self._delta_lbl.setStyleSheet(self._MONO + " color: #a6adc8;")
+        self._tick      = QLabel("?"); self._tick.setFixedWidth(30)
         self._tick.setStyleSheet("color: #585b70; font-size: 16px; font-weight: bold;")
 
-        for w in (self._in_lbl, self._exp_lbl, self._out_lbl, self._tick):
+        self._refresh_static_labels()
+        for w in (self._in_lbl, self._exp_lbl, self._out_lbl, self._delta_lbl, self._tick):
             rlay.addWidget(w)
 
         layout.addWidget(row)
 
+    def _refresh_static_labels(self) -> None:
+        self._in_lbl.setText(_fmt_list(self._inputs, self._input_scale, self._denormalized))
+        self._exp_lbl.setText(_fmt_list(self._expected, self._output_scale, self._denormalized))
+
     def update(self, genome) -> None:
         if genome is None:
             self._out_lbl.setText("—")
+            self._delta_lbl.setText("—")
             self._tick.setText("?")
             self._tick.setStyleSheet("color: #585b70; font-size: 16px; font-weight: bold;")
             return
@@ -1117,13 +1144,30 @@ class _TestCaseRow:
             outputs = genome.forward(self._inputs)
         except Exception:
             self._out_lbl.setText("err")
+            self._delta_lbl.setText("—")
             self._tick.setText("✗")
             self._tick.setStyleSheet("color: #f38ba8; font-size: 16px; font-weight: bold;")
             return
 
-        correct = all(abs(o - e) < 0.2 for o, e in zip(outputs, self._expected))
-        out_str = "[" + ", ".join(f"{v:.3f}" for v in outputs) + "]"
-        self._out_lbl.setText(out_str)
+        # Correctness check matches the displayed units: when denormalized, the tick
+        # is ✓ only if every output rounds to the same integer as the expected raw
+        # value. Otherwise we keep the normalized tolerance the genome was trained on.
+        if self._denormalized and self._output_scale:
+            correct = all(
+                round(o * s) == round(e * s)
+                for o, e, s in zip(outputs, self._expected, self._output_scale)
+            )
+        else:
+            correct = all(abs(o - e) < _TOL_NORMALIZED for o, e in zip(outputs, self._expected))
+        self._out_lbl.setText(_fmt_list(list(outputs), self._output_scale, self._denormalized))
+
+        # Δ shown in displayed units (raw if denormalized, normalized otherwise).
+        diffs = [o - e for o, e in zip(outputs, self._expected)]
+        if self._denormalized and self._output_scale:
+            diffs = [d * s for d, s in zip(diffs, self._output_scale)]
+        total = sum(abs(d) for d in diffs)
+        self._delta_lbl.setText(f"{total:.2f}" if self._denormalized else f"{total:.3f}")
+
         tick, color = ("✓", "#a6e3a1") if correct else ("✗", "#f38ba8")
         self._tick.setText(tick)
         self._tick.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
@@ -1135,9 +1179,15 @@ class _SequenceStepRow:
     _MONO = "font-family: monospace; font-size: 12px;"
 
     def __init__(self, layout, step_idx: int,
-                 inputs: list[float], expected: list[float]) -> None:
-        self._inputs   = inputs
-        self._expected = expected
+                 inputs: list[float], expected: list[float],
+                 input_scale: list[float] | None = None,
+                 output_scale: list[float] | None = None,
+                 denormalized: bool = False) -> None:
+        self._inputs        = inputs
+        self._expected      = expected
+        self._input_scale   = input_scale
+        self._output_scale  = output_scale
+        self._denormalized  = denormalized
         self._delta: float | None = None
 
         row = QWidget()
@@ -1149,11 +1199,8 @@ class _SequenceStepRow:
         step_lbl.setFixedWidth(24)
         step_lbl.setStyleSheet(self._MONO + " color: #585b70;")
 
-        in_str  = "[" + ", ".join(f"{v:.3f}" for v in inputs)   + "]"
-        exp_str = "[" + ", ".join(f"{v:.3f}" for v in expected) + "]"
-
-        self._in_lbl    = QLabel(in_str)
-        self._exp_lbl   = QLabel(exp_str)
+        self._in_lbl    = QLabel(_fmt_list(inputs,   input_scale,  denormalized))
+        self._exp_lbl   = QLabel(_fmt_list(expected, output_scale, denormalized))
         self._out_lbl   = QLabel("—")
         self._delta_lbl = QLabel("—")
         self._tick      = QLabel("?")
@@ -1176,12 +1223,24 @@ class _SequenceStepRow:
         layout.addWidget(row)
 
     def set_result(self, outputs: list[float]) -> float:
-        out_str = "[" + ", ".join(f"{v:.3f}" for v in outputs) + "]"
-        self._out_lbl.setText(out_str)
-        self._delta = sum(abs(o - e) for o, e in zip(outputs, self._expected))
-        self._delta_lbl.setText(f"{self._delta:.3f}")
-        thresh = 0.2 * len(self._expected)
-        tick, color = ("✓", "#a6e3a1") if self._delta < thresh else ("✗", "#f38ba8")
+        self._out_lbl.setText(_fmt_list(list(outputs), self._output_scale, self._denormalized))
+        # Δ shown in displayed units (raw if denormalized, normalized otherwise).
+        # When denormalized, the tick matches what the user sees: ✓ only if every
+        # output rounds to the same integer as the expected raw value.
+        norm_delta = sum(abs(o - e) for o, e in zip(outputs, self._expected))
+        if self._denormalized and self._output_scale:
+            shown = sum(abs((o - e) * s) for o, e, s
+                        in zip(outputs, self._expected, self._output_scale))
+            self._delta_lbl.setText(f"{shown:.2f}")
+            correct = all(
+                round(o * s) == round(e * s)
+                for o, e, s in zip(outputs, self._expected, self._output_scale)
+            )
+        else:
+            self._delta_lbl.setText(f"{norm_delta:.3f}")
+            correct = norm_delta < _TOL_NORMALIZED * len(self._expected)
+        self._delta = norm_delta
+        tick, color = ("✓", "#a6e3a1") if correct else ("✗", "#f38ba8")
         self._tick.setText(tick)
         self._tick.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
         return self._delta
@@ -1230,6 +1289,22 @@ class InspectTab(QWidget):
         # ── Test Cases ─────────────────────────────────────────────────────
         self._test_group = QGroupBox("Test Cases — best genome output vs. expected")
         self._test_inner = QVBoxLayout(self._test_group)
+        # Denormalize toggle — visible only for examples with input/output scales.
+        # When on, values are shown in raw units (e.g. 5 * 5 → 25 instead of 0.56 → 0.31).
+        self._denorm_row = QWidget()
+        denorm_layout = QHBoxLayout(self._denorm_row)
+        denorm_layout.setContentsMargins(0, 0, 0, 4)
+        self.chk_denormalize = QCheckBox("Werte denormalisieren (Rohwerte anzeigen)")
+        self.chk_denormalize.setChecked(True)
+        self.chk_denormalize.setToolTip(
+            "Aus: Werte werden im normalisierten [0,1]-Bereich angezeigt.\n"
+            "An: Werte werden in Roheinheiten dargestellt (z. B. 5 * 5 → 25)."
+        )
+        self.chk_denormalize.toggled.connect(self._on_denormalize_toggled)
+        denorm_layout.addWidget(self.chk_denormalize)
+        denorm_layout.addStretch()
+        self._denorm_row.setVisible(False)
+        self._test_inner.addWidget(self._denorm_row)
         self._placeholder = _label("Select an example to see test cases.", "sectionTitle")
         self._test_inner.addWidget(self._placeholder)
         layout.addWidget(self._test_group)
@@ -1339,6 +1414,8 @@ class InspectTab(QWidget):
 
     def set_example(self, example) -> None:
         self._example = example
+        has_scales = bool(example and (example.input_scale or example.output_scale))
+        self._denorm_row.setVisible(has_scales)
         self._rebuild_test_rows()
         self._rebuild_input_widgets(
             example.n_inputs  if example else 0,
@@ -1390,8 +1467,9 @@ class InspectTab(QWidget):
 
     def _rebuild_test_rows(self) -> None:
         self._test_rows.clear()
-        while self._test_inner.count():
-            item = self._test_inner.takeAt(0)
+        # Strip everything except the persistent denormalize checkbox row at index 0.
+        while self._test_inner.count() > 1:
+            item = self._test_inner.takeAt(1)
             if item.widget():
                 item.widget().deleteLater()
 
@@ -1406,14 +1484,18 @@ class InspectTab(QWidget):
         header = QWidget()
         hlay = QHBoxLayout(header)
         hlay.setContentsMargins(0, 0, 0, 0)
-        for txt, w in [("Inputs", 120), ("Expected", 80), ("Output", 90), ("", 40)]:
+        for txt, w in [("Inputs", 120), ("Expected", 80), ("Output", 90), ("Δ", 60), ("", 40)]:
             lbl = _label(txt, "sectionTitle")
             lbl.setMinimumWidth(w)
             hlay.addWidget(lbl)
         self._test_inner.addWidget(header)
 
+        in_scale  = self._example.input_scale
+        out_scale = self._example.output_scale
+        denorm    = self._denorm_active()
         for inputs, expected in tc:
-            row = _TestCaseRow(self._test_inner, inputs, expected)
+            row = _TestCaseRow(self._test_inner, inputs, expected,
+                               in_scale, out_scale, denorm)
             self._test_rows.append(row)
 
     def _rebuild_input_widgets(self, n_inputs: int, n_outputs: int) -> None:
@@ -1421,11 +1503,23 @@ class InspectTab(QWidget):
             self._inputs_form_layout.removeRow(0)
         self._input_widgets.clear()
 
+        in_scale = self._example.input_scale if self._example else None
+        denorm   = self._denorm_active()
         for i in range(n_inputs):
             spin = QDoubleSpinBox()
             spin.setRange(-1e6, 1e6)
-            spin.setDecimals(4)
-            spin.setSingleStep(0.1)
+            if denorm and in_scale and i < len(in_scale):
+                scale = in_scale[i]
+                # Integer-style stepping when scale ≥ 5 and is itself integer-ish.
+                if scale >= 5 and abs(scale - round(scale)) < 0.01:
+                    spin.setDecimals(0)
+                    spin.setSingleStep(1)
+                else:
+                    spin.setDecimals(2)
+                    spin.setSingleStep(scale / 10)
+            else:
+                spin.setDecimals(4)
+                spin.setSingleStep(0.1)
             self._inputs_form_layout.addRow(f"Input {i}:", spin)
             self._input_widgets.append(spin)
 
@@ -1459,8 +1553,12 @@ class InspectTab(QWidget):
         self._seq_group.setVisible(True)
         self._acc_fitness_lbl.setText("")
 
+        in_scale  = self._example.input_scale
+        out_scale = self._example.output_scale
+        denorm    = self._denorm_active()
         for idx, (inp, exp) in enumerate(samples):
-            row = _SequenceStepRow(self._seq_rows_layout, idx, inp, exp)
+            row = _SequenceStepRow(self._seq_rows_layout, idx, inp, exp,
+                                   in_scale, out_scale, denorm)
             self._seq_rows.append(row)
 
         self._update_seq_buttons()
@@ -1519,7 +1617,7 @@ class InspectTab(QWidget):
             return
         total   = sum(deltas)
         correct = sum(1 for r in self._seq_rows
-                      if r._delta is not None and r._delta < 0.2)
+                      if r._delta is not None and r._delta < _TOL_NORMALIZED)
         done    = len(deltas)
         self._acc_fitness_lbl.setText(
             f"Σ Δ: {total:.4f}  |  Fitness: {-total:.4f}  |  "
@@ -1604,14 +1702,53 @@ class InspectTab(QWidget):
         if self._genome is None:
             return
         inputs = [w.value() for w in self._input_widgets]
+        in_scale  = self._example.input_scale  if self._example else None
+        out_scale = self._example.output_scale if self._example else None
+        denorm    = self._denorm_active()
+        # Spinbox holds raw values in denorm mode → convert to normalized for the genome.
+        if denorm and in_scale:
+            inputs = [v / s if s else v for v, s in zip(inputs, in_scale)]
         try:
             outputs = self._genome.forward(inputs)
             for i, lbl in enumerate(self._output_labels):
-                lbl.setText(f"{outputs[i]:.5f}" if i < len(outputs) else "—")
+                if i >= len(outputs):
+                    lbl.setText("—")
+                    continue
+                v = outputs[i]
+                if denorm and out_scale and i < len(out_scale):
+                    v *= out_scale[i]
+                    lbl.setText(_fmt_value(v, True))
+                else:
+                    lbl.setText(f"{v:.5f}")
         except Exception as e:
             for lbl in self._output_labels:
                 lbl.setText(f"Error: {e}")
         self._update_memory_display()
+
+    # ── Denormalize toggle ─────────────────────────────────────────────
+
+    def _denorm_active(self) -> bool:
+        """Denormalize is active only when the example exposes scales AND the box is checked."""
+        if not self._example:
+            return False
+        if not (self._example.input_scale or self._example.output_scale):
+            return False
+        return self.chk_denormalize.isChecked()
+
+    def _on_denormalize_toggled(self, _checked: bool) -> None:
+        if not self._example:
+            return
+        self._rebuild_test_rows()
+        # Re-run test rows against current genome so freshly created rows aren't empty.
+        if self._genome is not None:
+            self._genome.reset()
+            for row in self._test_rows:
+                row.update(self._genome)
+        self._rebuild_input_widgets(self._example.n_inputs, self._example.n_outputs)
+        self._rebuild_sequence_table()
+        # Replay sequence so newly created rows show their last results.
+        if self._genome is not None and self._seq_samples:
+            self._seq_run_all()
 
 
 # ---------------------------------------------------------------------------

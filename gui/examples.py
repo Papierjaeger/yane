@@ -15,6 +15,7 @@ from yane.examples.basic_multiplication import (
     make_eval as _mult_make_eval,
     N_INPUTS as _MULT_NI, N_OUTPUTS as _MULT_NO, TARGET_FITNESS as _MULT_FIT,
     TEST_CASES as _MULT_TEST_CASES,
+    dataset as _MULT_DATASET,
 )
 from yane.examples.simple_2_2_continuous import (
     make_eval as _reg22_make_eval,
@@ -592,6 +593,8 @@ class ExampleConfig:
         test_cases: list[tuple[list[float], list[float]]] | None = None,
         stateful: bool = True,
         sequence_samples: list[tuple[list[float], list[float]]] | None = None,
+        input_scale: list[float] | None = None,
+        output_scale: list[float] | None = None,
     ) -> None:
         self.name = name
         self.description = description
@@ -608,6 +611,11 @@ class ExampleConfig:
         self.test_cases = test_cases
         self.stateful = stateful
         self.sequence_samples = sequence_samples
+        # Per-channel scale factors mapping normalized [0,1] values to raw units
+        # (e.g. Multiplication: input_scale=[9,9], output_scale=[81]). When set,
+        # the Inspect tab exposes a toggle to view/enter values in raw units.
+        self.input_scale = input_scale
+        self.output_scale = output_scale
 
 
 def load_examples() -> list[ExampleConfig]:
@@ -639,7 +647,10 @@ def load_examples() -> list[ExampleConfig]:
             category="Dataset",
             supports_normalization=True,
             stateful=False,
-            test_cases=_MULT_TEST_CASES,
+            # Full multiplication table (100 entries) — user can scan all a*b combinations
+            test_cases=[(s["input"], s["output"]) for s in _MULT_DATASET],
+            input_scale=[9.0, 9.0],
+            output_scale=[81.0],
         ),
         ExampleConfig(
             name="Regression 2→2",
@@ -677,6 +688,8 @@ def load_examples() -> list[ExampleConfig]:
             stateful=True,
             test_cases=[(s["input"], s["output"]) for s in _PI_DATASET[:_PI_DECIMAL_PLACES]],
             sequence_samples=[(s["input"], s["output"]) for s in _PI_DATASET[:_PI_DECIMAL_PLACES]],
+            input_scale=[9.0],
+            output_scale=[9.0],
         ),
     ]
 
