@@ -73,6 +73,35 @@ class TestPopulation(unittest.TestCase):
         fitnesses = [g.fitness for g in pop._evaluated]
         self.assertEqual(sorted(fitnesses, reverse=True), fitnesses)
 
+    def test_submit_records_eval_time_and_efficiency_score(self):
+        pop = self._make_population(max_size=10)
+        g1 = pop.select_for_evaluation()
+        pop.submit(g1, 1.0, elapsed_ms=10.0)
+        g2 = pop.select_for_evaluation()
+        pop.submit(g2, 1.0, elapsed_ms=30.0)
+        self.assertEqual(g1.eval_time_ms, 10.0)
+        self.assertEqual(g2.eval_time_ms, 30.0)
+        self.assertAlmostEqual(g1.efficiency_score, 1.0)
+        self.assertAlmostEqual(g2.efficiency_score, 0.0)
+
+    def test_efficiency_weight_fades_during_stagnation(self):
+        pop = self._make_population(max_size=10)
+        self.assertAlmostEqual(pop.efficiency_weight, 0.5)
+        pop._stagnation_count = pop.stagnation_threshold
+        self.assertAlmostEqual(pop.efficiency_weight, 0.0)
+
+    def test_efficiency_affects_selection_score_not_raw_fitness(self):
+        pop = self._make_population(max_size=10)
+        g1 = pop.select_for_evaluation()
+        pop.submit(g1, 1.0, elapsed_ms=10.0)
+        g2 = pop.select_for_evaluation()
+        pop.submit(g2, 1.0, elapsed_ms=30.0)
+        pop._unevaluated.clear()
+        pop._spawn_offspring()
+        self.assertEqual(g1.fitness, 1.0)
+        self.assertEqual(g2.fitness, 1.0)
+        self.assertGreater(g1.selection_score, g2.selection_score)
+
 
 if __name__ == "__main__":
     unittest.main()

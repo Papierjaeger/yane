@@ -35,6 +35,9 @@ def _pick(a, b):
 class Genome:
     def __init__(self) -> None:
         self.fitness: float = 0.0
+        self.eval_time_ms: float | None = None
+        self.efficiency_score: float = 1.0
+        self.selection_score: float = 0.0
         self.nodes: list[Node] = []
         self.input_nodes: list[Node] = []
         self.output_nodes: list[Node] = []
@@ -488,6 +491,9 @@ class Genome:
 
         genome.fitness = self.fitness
         genome.shared_fitness = self.shared_fitness
+        genome.eval_time_ms = self.eval_time_ms
+        genome.efficiency_score = self.efficiency_score
+        genome.selection_score = self.selection_score
         genome.max_nodes = self.max_nodes
         genome.max_connections = self.max_connections
         for attr in _SCALAR_GENES:

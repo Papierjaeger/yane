@@ -161,6 +161,7 @@ class LeftPanel(QWidget):
         self.lbl_connections  = _label("—", "statValue")
         self.lbl_best_fit     = _label("—", "statValue")
         self.lbl_shared_fit   = _label("—", "statValue")
+        self.lbl_efficiency   = _label("—", "statValue")
         self.lbl_activations  = _label("—", "mutRate")
         self.lbl_activations.setWordWrap(True)
         self.lbl_nodes.setToolTip(
@@ -175,6 +176,10 @@ class LeftPanel(QWidget):
             "Geteilte Fitness = Rohfitness ÷ Anzahl Genomes in derselben Art (fitness sharing).\n"
             "Verhindert dass eine dominante Art alle anderen verdrängt.\n"
             "Wird für die Selektion verwendet.")
+        self.lbl_efficiency.setToolTip(
+            "Relative Auswertungsgeschwindigkeit des besten Genoms.\n"
+            "1.0 = schnellstes gemessenes Genom in der aktuellen Population,\n"
+            "0.0 = langsamstes. Die Rohfitness bleibt davon unverändert.")
         self.lbl_activations.setToolTip(
             "Aktivierungsfunktionen aller Nodes im besten Netz (Kürzel:Anzahl).\n"
             "SIG=Sigmoid  LIN=Linear  TAN=Tanh  REL=ReLU  SQU=Square (x²)\n"
@@ -185,6 +190,7 @@ class LeftPanel(QWidget):
         best_layout.addRow("Connections:",    self.lbl_connections)
         best_layout.addRow("Fitness:",        self.lbl_best_fit)
         best_layout.addRow("Shared fitness:", self.lbl_shared_fit)
+        best_layout.addRow("Effizienz:",       self.lbl_efficiency)
         best_layout.addRow("Aktivierungen:",  self.lbl_activations)
         layout.addWidget(best)
 
@@ -202,6 +208,7 @@ class LeftPanel(QWidget):
         self.lbl_stagnation      = _label("—", "statValue")
         self.lbl_next_injection  = _label("—", "statValue")
         self.lbl_novelty_weight  = _label("—", "statValue")
+        self.lbl_eff_weight      = _label("—", "statValue")
         self.lbl_population.setToolTip("Gesamtzahl der Genomes (evaluiert + noch ausstehend)")
         self.lbl_species.setToolTip(
             "Anzahl der Arten (Species).\n"
@@ -226,6 +233,10 @@ class LeftPanel(QWidget):
             "Wie stark Neuartigkeit (novelty) bei der Selektion gewichtet wird.\n"
             "Steigt von 0.1 → 0.5 je länger die Population stagniert.\n"
             "Zwingt Evolution neue Verhaltensweisen zu erkunden statt zu optimieren.")
+        self.lbl_eff_weight.setToolTip(
+            "Wie stark Effizienz aktuell in die Elternauswahl einfließt.\n"
+            "Hoch bei Fortschritt, niedrig bei Stagnation.\n"
+            "Dadurch werden schnelle Netze bevorzugt, solange die Aufgabe gut vorankommt.")
         pop_layout.addRow("Genomes:",           self.lbl_population)
         pop_layout.addRow("Species:",           self.lbl_species)
         pop_layout.addRow("Avg nodes:",         self.lbl_avg_nodes)
@@ -236,6 +247,7 @@ class LeftPanel(QWidget):
         pop_layout.addRow("Stagn. (gesamt):",   self.lbl_stagnation)
         pop_layout.addRow("Nächste Injection:", self.lbl_next_injection)
         pop_layout.addRow("Novelty weight:",    self.lbl_novelty_weight)
+        pop_layout.addRow("Effizienz-Relevanz:", self.lbl_eff_weight)
         layout.addWidget(pop)
 
         # ── Structure mutations (best genome) ─────────────────────────────
@@ -372,6 +384,12 @@ class LeftPanel(QWidget):
         self.lbl_connections.setText(str(genome.connection_count))
         self.lbl_best_fit.setText(f"{genome.fitness:.4f}")
         self.lbl_shared_fit.setText(f"{genome.shared_fitness:.4f}")
+        if genome.eval_time_ms is not None:
+            self.lbl_efficiency.setText(
+                f"{genome.efficiency_score:.3f}  ({genome.eval_time_ms:.2f} ms)"
+            )
+        else:
+            self.lbl_efficiency.setText("—")
 
         # Activation distribution (abbreviation ×count)
         from collections import Counter
@@ -404,6 +422,9 @@ class LeftPanel(QWidget):
         nw = mem.get("novelty_weight")
         if nw is not None:
             self.lbl_novelty_weight.setText(f"{nw:.3f}")
+        ew = mem.get("efficiency_weight")
+        if ew is not None:
+            self.lbl_eff_weight.setText(f"{ew:.3f}")
 
         # Structure mutations
         self.lbl_rate_add_node.setText(f"{genome.mutation_add_node.bool_rate:.4f}")

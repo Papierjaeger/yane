@@ -12,24 +12,15 @@ Legende:
 
 ## 1. Fitness, Evaluation und Training
 
-### P0: Effizienzstrafe in alle Trainingspfade integrieren
+### Erledigt: Automatische Effizienz in der Elternauswahl
 
-Aktuell wirkt `EfficiencyPenalty` nur in `NeuroEvolution.train()`. Die GUI und manuelle Loops verwenden eigene Pfade.
+YANE misst Bewertungszeiten inzwischen in `train()` und in den GUI-Worker-Pfaden. Die Rohfitness bleibt unverändert; Effizienz wird als eigene Variable geführt und wirkt dynamisch nur auf die Elternauswahl. Bei Stagnation sinkt die Effizienz-Relevanz bis auf `0`.
 
-Aufgaben:
+Offene Anschlussideen:
 
-- Bewertungszeit auch in `TrainingWorker` messen.
-- Effizienzstrafe in sequenzieller GUI-Auswertung anwenden.
-- Effizienzstrafe in paralleler Thread-Auswertung anwenden.
-- Effizienzstrafe in Multiprocessing-Auswertung anwenden oder dort Fitness plus Laufzeit zurueckgeben.
-- GUI-Felder fuer `max_ms` und `penalty_per_ms` ergaenzen.
-- API/manuelle Nutzung optional mit Helper unterstuetzen, z. B. `submit_timed_fitness()`.
-
-Nutzen:
-
-- Langsame, ueberkomplexe Netze werden automatisch unattraktiver.
-- Evolution bevorzugt kompaktere Topologien.
-- Wichtig fuer groessere Aufgaben mit teuren Simulationen.
+- API um optionale Bewertungszeit erweitern.
+- GUI-Trends fuer Effizienz ueber Zeit plotten.
+- Feste `EfficiencyPenalty` optional in der GUI konfigurierbar machen.
 
 ### P0: Einheitliche Evaluation-Statistiken
 
@@ -671,8 +662,8 @@ Nutzen:
 
 ## 11. Erste konkrete TODO-Liste
 
-- [ ] Effizienzstrafe in `TrainingWorker._run_sequential()` anwenden.
-- [ ] Effizienzstrafe in parallelen GUI-Pfaden anwenden.
+- [x] Automatische Effizienzbewertung in der Elternauswahl anwenden.
+- [x] Bewertungszeit in den GUI-Worker-Pfaden messen.
 - [ ] `EvaluationResult`-Objekt einfuehren.
 - [ ] Fitness-Sanitizing zentralisieren.
 - [ ] Seed-Parameter fuer `NeuroEvolution` einfuehren.
@@ -681,4 +672,3 @@ Nutzen:
 - [ ] Benchmark-Suite mit mehreren Seeds erstellen.
 - [ ] Mutationsraten-Diagnostics implementieren.
 - [ ] API-`/configure` um wichtige Konfigurationsparameter erweitern.
-

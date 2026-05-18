@@ -31,9 +31,15 @@ class TestGenomeCopy(unittest.TestCase):
         g = _make_genome()
         g.fitness = 12.5
         g.shared_fitness = 3.125
+        g.eval_time_ms = 7.5
+        g.efficiency_score = 0.75
+        g.selection_score = 42.0
         copy = g.copy()
         self.assertEqual(copy.fitness, 12.5)
         self.assertEqual(copy.shared_fitness, 3.125)
+        self.assertEqual(copy.eval_time_ms, 7.5)
+        self.assertEqual(copy.efficiency_score, 0.75)
+        self.assertEqual(copy.selection_score, 42.0)
 
     def test_copy_nodes_are_different_objects(self):
         g = _make_genome()

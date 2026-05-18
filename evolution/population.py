@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import random
 from operator import attrgetter
 
@@ -186,13 +187,16 @@ class Population:
             self._spawn_offspring()
         return self._unevaluated[0]
 
-    def submit(self, genome: Genome, fitness: float) -> None:
+    def submit(self, genome: Genome, fitness: float, elapsed_ms: float | None = None) -> None:
         if genome not in self._unevaluated:
             return
         genome.fitness = fitness
         genome.shared_fitness = fitness
+        genome.eval_time_ms = elapsed_ms
+        genome.selection_score = 0.0
         self._unevaluated.remove(genome)
         self._evaluated.append(genome)
+        self._compute_efficiency_scores()
 
         # Compute behavior descriptor immediately after evaluation — the genome's
         # weights are still intact and forward() is deterministic.
@@ -276,6 +280,44 @@ class Population:
         """
         stagnation_frac = self._stagnation_count / max(1, self.stagnation_threshold)
         return 0.1 + 0.4 * min(1.0, stagnation_frac)
+
+    @property
+    def efficiency_weight(self) -> float:
+        """Selection pressure for efficient genomes.
+
+        Efficiency matters most while task fitness is improving. During
+        stagnation it fades out so larger or slower structural experiments can
+        survive long enough to become useful.
+        """
+        stagnation_frac = self._stagnation_count / max(1, self.stagnation_threshold)
+        return 0.5 * max(0.0, 1.0 - min(1.0, stagnation_frac))
+
+    def _compute_efficiency_scores(self) -> None:
+        """Normalize evaluation speed into [0, 1], where 1 is fastest."""
+        timed = [
+            g for g in self._evaluated
+            if g.eval_time_ms is not None
+            and math.isfinite(g.eval_time_ms)
+            and g.eval_time_ms >= 0.0
+        ]
+        if len(timed) < 2:
+            for g in self._evaluated:
+                g.efficiency_score = 1.0
+            return
+
+        lo = min(g.eval_time_ms for g in timed)
+        hi = max(g.eval_time_ms for g in timed)
+        span = hi - lo
+        if span <= 1e-9:
+            for g in self._evaluated:
+                g.efficiency_score = 1.0
+            return
+
+        for g in self._evaluated:
+            if g.eval_time_ms is None or not math.isfinite(g.eval_time_ms):
+                g.efficiency_score = 1.0
+            else:
+                g.efficiency_score = max(0.0, min(1.0, (hi - g.eval_time_ms) / span))
 
     # ------------------------------------------------------------------
     # Novelty
@@ -538,12 +580,14 @@ class Population:
 
         self._assign_species()
         self._compute_shared_fitness()
+        self._compute_efficiency_scores()
 
         if self._novelty_evals_since_recompute >= max(1, self.max_size // 2):
             self._novelty_cache = self._compute_novelty()
             self._novelty_evals_since_recompute = 0
         novelty = self._novelty_cache
         nw = self.novelty_weight
+        ew = self.efficiency_weight
 
         # Species-health placeholder — disabled after benchmarking showed it
         # consistently hurts performance for discrete/XOR-type tasks.
@@ -561,15 +605,19 @@ class Population:
         k = min(3, len(self._evaluated))
         candidates = random.sample(self._evaluated, k)
         min_fit = min(g.shared_fitness for g in self._evaluated)
-        parent = max(
-            candidates,
-            key=lambda g: (
+        def _selection_score(g: Genome) -> float:
+            efficiency_factor = 1.0 - ew * (1.0 - g.efficiency_score)
+            score = (
                 max(0.0, g.shared_fitness - min_fit + 1e-6)
                 * g.offspring_factor
                 * (1.0 + nw * novelty.get(id(g), 0.0))
+                * efficiency_factor
                 * _genome_health.get(id(g), 1.0)
-            ),
-        )
+            )
+            g.selection_score = score
+            return score
+
+        parent = max(candidates, key=_selection_score)
 
         # Note: elite protection is handled by _prune() which never removes the
         # global best or species bests. Here, even elite parents produce mutated

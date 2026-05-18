@@ -30,9 +30,19 @@ def _mp_initializer(make_eval_fn, render_cb):
     global _mp_eval_fn
     _mp_eval_fn = make_eval_fn(render_cb)
 
-def _mp_evaluate(genome: Genome) -> float:
+def _mp_evaluate(genome: Genome) -> tuple[float, float]:
     """Evaluate a single genome — runs inside a worker process."""
-    return _mp_eval_fn(genome)
+    start = time.perf_counter()
+    fitness = _mp_eval_fn(genome)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    return fitness, elapsed_ms
+
+
+def _timed_evaluate(eval_fn: Callable, genome: Genome) -> tuple[float, float]:
+    start = time.perf_counter()
+    fitness = eval_fn(genome)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    return fitness, elapsed_ms
 
 
 def _close_env(eval_fn) -> None:
@@ -115,8 +125,8 @@ class TrainingWorker(QThread):
 
             try:
                 genome = self._yane.next_genome()
-                fitness = self._evaluate(genome)
-                self._yane.submit_fitness(fitness)
+                fitness, elapsed_ms = _timed_evaluate(self._evaluate, genome)
+                self._yane.submit_fitness(fitness, elapsed_ms)
                 self._iteration += 1
                 if self._yane.min_fitness is not None and fitness >= self._yane.min_fitness:
                     self._running = False
@@ -157,9 +167,13 @@ class TrainingWorker(QThread):
 
                 try:
                     genomes = self._yane.next_genome_batch(n_workers)
-                    futures = [pool.submit(fn, g) for fn, g in zip(eval_fns, genomes)]
-                    fitnesses = [f.result() for f in futures]
-                    results = list(zip(genomes, fitnesses))
+                    futures = [pool.submit(_timed_evaluate, fn, g) for fn, g in zip(eval_fns, genomes)]
+                    timed = [f.result() for f in futures]
+                    fitnesses = [fitness for fitness, _elapsed_ms in timed]
+                    results = [
+                        (genome, fitness, elapsed_ms)
+                        for genome, (fitness, elapsed_ms) in zip(genomes, timed)
+                    ]
                     self._yane.submit_fitness_batch(results)
                     self._iteration += len(results)
 
@@ -215,7 +229,7 @@ class TrainingWorker(QThread):
             t0 = time.perf_counter()
             seed_fit = seed_fn(seed_g)
             eval_ms  = (time.perf_counter() - t0) * 1000.0
-            self._yane.submit_fitness(seed_fit)
+            self._yane.submit_fitness(seed_fit, eval_ms)
             self._iteration += 1
             _close_env(seed_fn)
         except Exception as exc:
@@ -296,10 +310,14 @@ class TrainingWorker(QThread):
                     chunksize = max(1, len(genomes) // n_workers)
 
                     t_map = time.perf_counter()
-                    fitnesses = pool.map(_mp_evaluate, genomes, chunksize=chunksize)
+                    timed = pool.map(_mp_evaluate, genomes, chunksize=chunksize)
                     map_ms    = (time.perf_counter() - t_map) * 1000.0
 
-                    results = list(zip(genomes, fitnesses))
+                    fitnesses = [fitness for fitness, _elapsed_ms in timed]
+                    results = [
+                        (genome, fitness, elapsed_ms)
+                        for genome, (fitness, elapsed_ms) in zip(genomes, timed)
+                    ]
                     self._yane.submit_fitness_batch(results)
                     self._iteration += len(results)
                     batch_count += 1

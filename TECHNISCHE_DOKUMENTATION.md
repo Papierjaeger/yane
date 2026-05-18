@@ -286,7 +286,7 @@ Neue Eltern werden per Tournament Selection gewählt:
 
 - Turniergröße `k = 3`, falls genügend Genome vorhanden sind
 - Fitness wird so verschoben, dass negative Fitnesswerte die Gewichtung nicht invertieren
-- Auswahlwert enthält Shared Fitness, `offspring_factor` und Novelty-Bonus
+- Auswahlwert enthält Shared Fitness, `offspring_factor`, Novelty-Bonus und Effizienz-Faktor
 
 Formelhaft:
 
@@ -295,7 +295,10 @@ selection_score =
   shifted_shared_fitness
   * offspring_factor
   * (1 + novelty_weight * novelty)
+  * efficiency_factor
 ```
+
+Der `efficiency_factor` ist `1 - efficiency_weight * (1 - efficiency_score)`. Details zur Berechnung stehen in Abschnitt 8.9.
 
 ### 8.4 Speziation
 
@@ -364,6 +367,39 @@ Wenn die Population über `max_size` wächst:
 - Species-Champions aus Species mit mehreren Mitgliedern bleiben geschützt
 - schlechteste nicht geschützte Genome werden entfernt
 - entfernte Genome werden mit `_clear()` von Referenzen befreit
+
+### 8.9 Automatische Effizienzbewertung
+
+YANE speichert pro Genom optional die Bewertungszeit:
+
+- `eval_time_ms`: Dauer der Fitnessbewertung
+- `efficiency_score`: relative Geschwindigkeit innerhalb der evaluierten Population
+- `selection_score`: zuletzt berechneter interner Auswahlwert
+
+Der `efficiency_score` wird relativ zur aktuellen Population normalisiert:
+
+```text
+1.0 = schnellstes getimtes Genom
+0.0 = langsamstes getimtes Genom
+```
+
+Genome ohne Timingdaten bleiben neutral bei `1.0`. Die Rohfitness wird dadurch nicht verändert.
+
+Die Relevanz der Effizienz hängt von Stagnation ab:
+
+```text
+efficiency_weight = 0.5 * (1 - min(1, stagnation_count / stagnation_threshold))
+```
+
+Bei guter Entwicklung ist Effizienz also relevant. Bei Stagnation fällt die Effizienz-Relevanz bis auf `0`, damit langsamere oder größere Strukturvarianten nicht zu früh aus der Elternauswahl gedrängt werden.
+
+Die Elternauswahl verwendet Effizienz als Multiplikator:
+
+```text
+efficiency_factor = 1 - efficiency_weight * (1 - efficiency_score)
+```
+
+Die bestehende feste `EfficiencyPenalty` bleibt separat verfügbar. Sie reduziert direkt die Fitness, wenn `set_efficiency_penalty(max_ms, penalty_per_ms)` gesetzt wurde. Die automatische Effizienzbewertung ist dagegen eine eigene Variable und wirkt nur in der Elternauswahl.
 
 ## 9. Lamarckian Refinement
 
@@ -838,7 +874,7 @@ results = [(g, run_simulation(g)) for g in genomes]
 yane.submit_fitness_batch(results)
 ```
 
-Für manuelle Parallelisierung: `next_genome_batch(n)` gibt `n` unbewertete Genome zurück (spawnt bei Bedarf Nachkommen). `submit_fitness_batch(results)` reicht Fitnesswerte für eine Liste von `(Genom, Fitness)`-Paaren ein. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
+Für manuelle Parallelisierung: `next_genome_batch(n)` gibt `n` unbewertete Genome zurück (spawnt bei Bedarf Nachkommen). `submit_fitness_batch(results)` reicht Fitnesswerte für eine Liste von `(Genom, Fitness)`-Paaren ein. Optional sind auch `(Genom, Fitness, Bewertungszeit_ms)`-Tupel möglich, damit die automatische Effizienzbewertung in eigenen Batch-Loops greift. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
 
 ### 15.3 Speicherverwaltung
 

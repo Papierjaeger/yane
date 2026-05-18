@@ -452,10 +452,11 @@ class TestGenomePickle(unittest.TestCase):
         ev = make_eval()
         direct = ev(g)
         g.reset()
-        via_mp = _mp_evaluate(g)
+        via_mp, elapsed_ms = _mp_evaluate(g)
 
         self.assertAlmostEqual(direct, via_mp, places=10,
                                msg="_mp_evaluate must match direct evaluation")
+        self.assertGreaterEqual(elapsed_ms, 0.0)
 
 
 if __name__ == '__main__':

@@ -208,7 +208,7 @@ class NeuroEvolution:
             if self._efficiency_penalty is not None:
                 fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)
 
-            self._population.submit(genome, fitness)
+            self._population.submit(genome, fitness, elapsed_ms)
             iterations += 1
 
             if self.min_fitness is not None and fitness >= self.min_fitness:
@@ -273,6 +273,7 @@ class NeuroEvolution:
             "stagnation_threshold":    self._population.stagnation_threshold,
             "since_last_injection":    self._population._since_last_injection,
             "novelty_weight":          self._population.novelty_weight,
+            "efficiency_weight":       self._population.efficiency_weight,
             "min_fitness": min((g.fitness for g in self._population._evaluated), default=0.0),
             "max_fitness": max((g.fitness for g in self._population._evaluated), default=0.0),
             "avg_fitness": (sum(g.fitness for g in self._population._evaluated)
@@ -308,10 +309,10 @@ class NeuroEvolution:
         self._current_genome = self._population.select_for_evaluation()
         return self._current_genome
 
-    def submit_fitness(self, fitness: float) -> None:
+    def submit_fitness(self, fitness: float, elapsed_ms: float | None = None) -> None:
         if self._current_genome is None:
             raise RuntimeError("Call next_genome() before submit_fitness().")
-        self._population.submit(self._current_genome, fitness)
+        self._population.submit(self._current_genome, fitness, elapsed_ms)
         self._current_genome = None
 
     def next_genome_batch(self, n: int) -> list[Genome]:
@@ -330,10 +331,15 @@ class NeuroEvolution:
             self._population._spawn_offspring()
         return list(self._population._unevaluated[:n])
 
-    def submit_fitness_batch(self, results: list[tuple[Genome, float]]) -> None:
+    def submit_fitness_batch(self, results: list[tuple]) -> None:
         """Submit fitness values for a batch of genomes."""
-        for genome, fitness in results:
-            self._population.submit(genome, fitness)
+        for item in results:
+            if len(item) == 3:
+                genome, fitness, elapsed_ms = item
+            else:
+                genome, fitness = item
+                elapsed_ms = None
+            self._population.submit(genome, fitness, elapsed_ms)
 
     # -------------------------------------------------------------------------
     # Tick mode (operates on current_genome)

@@ -192,7 +192,9 @@ print(yane.population_memory_info())
 yane.trim_memory()
 ```
 
-Die Effizienzstrafe reduziert Fitness für langsame Bewertungen. Die Ressourcenlimits pausieren Training bei knappem Systemspeicher oder verkleinern die Population, wenn der Prozess zu viel RAM nutzt. `trim_memory()` gibt explizit freigegebene Heap-Seiten ans Betriebssystem zurück und ist nützlich nach langen Trainingsläufen.
+YANE misst automatisch, wie lange die Bewertung eines Genoms dauert. Daraus entsteht ein relativer `efficiency_score`: schnelle Genome liegen näher bei `1.0`, langsame näher bei `0.0`. Die Rohfitness bleibt unverändert; Effizienz beeinflusst nur die Elternauswahl. Wenn die Population stagniert, sinkt die Effizienz-Relevanz automatisch bis auf `0`, damit auch größere oder langsamere Struktur-Experimente eine Chance bekommen.
+
+`set_efficiency_penalty(...)` ist zusätzlich weiterhin als feste, direkte Fitnessstrafe verfügbar. Die Ressourcenlimits pausieren Training bei knappem Systemspeicher oder verkleinern die Population, wenn der Prozess zu viel RAM nutzt. `trim_memory()` gibt explizit freigegebene Heap-Seiten ans Betriebssystem zurück und ist nützlich nach langen Trainingsläufen.
 
 ### Weitere Konfiguration
 
@@ -220,7 +222,7 @@ results = [(g, run_simulation(g)) for g in genomes]
 yane.submit_fitness_batch(results)
 ```
 
-Für manuelle Parallelisierung. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
+Für manuelle Parallelisierung. Optional kann ein Ergebnis auch `(genome, fitness, elapsed_ms)` enthalten, damit die automatische Effizienzbewertung auch in eigenen Batch-Loops greift. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
 
 ## Beispiele
 
