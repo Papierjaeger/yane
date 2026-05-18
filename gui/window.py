@@ -644,6 +644,17 @@ class TrainingTab(QWidget):
             "die eigentliche Aufgabe.\n\n"
             "Deaktivieren um das Verhalten ohne Normalisierung zu vergleichen.")
 
+        self.chk_memory = QCheckBox("aktiv")
+        self.chk_memory.setChecked(False)
+        self.chk_memory.setToolTip(
+            "Wenn aktiviert, dürfen Neuronen ihre Werte über mehrere Forward-Passes\n"
+            "behalten (persistent value). Die Evolution entscheidet pro Neuron, ob\n"
+            "es als Gedächtniszelle agiert.\n\n"
+            "Default: aus für Dataset-Aufgaben (XOR, Multiplication, Regression),\n"
+            "an für sequenzielle Aufgaben (Pi, Gym-Umgebungen).\n\n"
+            "Wenn deaktiviert, können keine Neuronen ihre Werte behalten — das\n"
+            "Netz ist rein feedforward auf Schritt-Ebene.")
+
         cfg_form.addRow("Inputs:",         self.spin_inputs)
         cfg_form.addRow("Outputs:",        self.spin_outputs)
         cfg_form.addRow("Max nodes:",      self.spin_nodes)
@@ -663,6 +674,7 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Zielarten:",      self.spin_species)
         cfg_form.addRow("Lamarck steps:",  self.spin_lamarck)
         cfg_form.addRow("Normalisierung:", self.chk_normalize)
+        cfg_form.addRow("Gedächtnis:",     self.chk_memory)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
         layout.addWidget(cfg)
@@ -821,8 +833,9 @@ class TrainingTab(QWidget):
         self.spin_nodes.setValue(ex.max_nodes)
         self.spin_conns.setValue(ex.max_connections)
         self.dspin_target.setValue(ex.target_fitness)
-        mem_note = "" if ex.stateful else "  ·  Memory disabled (stateless task)"
-        self.desc_label.setText(ex.description + mem_note)
+        self.desc_label.setText(ex.description)
+        # Default memory based on example type; user can override before training.
+        self.chk_memory.setChecked(ex.stateful)
         self.btn_render.setVisible(ex.supports_render)
         self.btn_run_best.setVisible(ex.supports_render)
         if not ex.supports_render:
@@ -855,7 +868,7 @@ class TrainingTab(QWidget):
                 max_nodes=self.spin_nodes.value() or None,
                 max_connections=self.spin_conns.value() or None,
                 n_initial_hidden=ex.n_initial_hidden,
-                stateful=ex.stateful,
+                stateful=self.chk_memory.isChecked(),
             )
             self._yane.set_population_size(self.spin_pop.value())
             # 0 = Auto (worker determines optimal count at runtime)
@@ -1359,8 +1372,11 @@ class InspectTab(QWidget):
         self._genome = genome
         self.btn_run.setEnabled(bool(self._input_widgets))
         self.btn_reset_mem.setEnabled(True)
-        stateful = self._example.stateful if self._example else True
-        if not stateful and self._test_rows:
+        # Always start the test-case rollout from a clean state so the displayed
+        # output matches the evaluator's first forward pass after env.reset() /
+        # episode start. For stateless genomes this is a no-op; for stateful ones
+        # the sequence below picks up the carry-over via memory neurons.
+        if self._test_rows:
             genome.reset()
         for row in self._test_rows:
             row.update(genome)

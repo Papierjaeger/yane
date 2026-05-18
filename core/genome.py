@@ -9,7 +9,7 @@ from yane.evolution.mutation import Mutation
 # Attributes shared between copy() and crossover() — scalars and Mutation objects.
 _SCALAR_GENES = (
     'bypass_connection_prob', 'crossover_prob', 'offspring_factor',
-    'sigma_global', 'allow_output_memory',
+    'sigma_global', 'allow_memory',
 )
 _MUTATION_GENES = (
     'mutation_bypass', 'mutation_add_node', 'mutation_remove_node',
@@ -50,8 +50,9 @@ class Genome:
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
         self.max_connections: int | None = None
-        # When False (stateless tasks), output nodes may not evolve persist_value=True.
-        self.allow_output_memory: bool = True
+        # When False, NO neurons (hidden or output) may hold persist_value=True.
+        # Set by NeuroEvolution.configure(stateful=...).
+        self.allow_memory: bool = True
 
         # Structural mutation rates
         self.mutation_add_node = Mutation()
@@ -311,8 +312,9 @@ class Genome:
         sigma = self.sigma_global
         for node in self.nodes:
             node.mutate(sigma)
-        if not self.allow_output_memory:
-            for node in self.output_nodes:
+        if not self.allow_memory:
+            # Tasks with allow_memory=False allow no persistent neurons at all.
+            for node in self.nodes:
                 node.persist_value = False
 
         for attr, mut_attr, lo, hi in _STRATEGY_MUTATION_SPECS:
@@ -521,8 +523,11 @@ class Genome:
 
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
-        if 'allow_output_memory' not in state:
-            self.allow_output_memory = True
+        # Backward compat: old pickles may carry either old or no flag.
+        if 'allow_memory' not in state:
+            self.allow_memory = state.get('allow_output_memory', True)
+        # Drop the obsolete attribute if it leaked in.
+        self.__dict__.pop('allow_output_memory', None)
 
     # -------------------------------------------------------------------------
     # Diagnostics

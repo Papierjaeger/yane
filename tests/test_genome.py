@@ -199,40 +199,102 @@ class TestGenomeMutation(unittest.TestCase):
                 self.assertGreaterEqual(m.shift_rate, Mutation.MIN_RATE)
                 self.assertGreaterEqual(m.bool_rate, Mutation.MIN_RATE)
 
-    def test_allow_output_memory_false_survives_repeated_mutation(self):
+    def test_allow_memory_false_survives_repeated_mutation_all_nodes(self):
         from yane import NeuroEvolution
         yane = NeuroEvolution()
         yane.configure(2, 1, max_nodes=10, max_connections=20, stateful=False)
         g = yane.next_genome()
         for _ in range(200):
             g.mutate()
-        for n in g.output_nodes:
+        for n in g.nodes:
             self.assertFalse(n.persist_value,
-                "Output persist_value must stay False after many mutations on stateless genome")
+                f"{n.type.value} node must stay non-persistent after many mutations")
+
+
+class TestGenomeForwardCorrectness(unittest.TestCase):
+    """Forward pass must return activated output values regardless of persist_value."""
+
+    def _build_xor_network(self, out_persist: bool):
+        from yane.core.genome import Genome
+        from yane.core.node import Node, NodeType
+        from yane.core.connection import Connection
+        from yane.util.activation import ActivationType
+        g = Genome()
+        inp0 = Node(NodeType.INPUT, innovation=0); inp0.input_index = 0
+        inp0.activation = ActivationType.LINEAR
+        inp1 = Node(NodeType.INPUT, innovation=1); inp1.input_index = 1
+        inp1.activation = ActivationType.LINEAR
+        h = Node(NodeType.HIDDEN, innovation=2)
+        h.activation = ActivationType.LINEAR; h.bias = -1.5
+        out = Node(NodeType.OUTPUT, innovation=3)
+        out.activation = ActivationType.LINEAR
+        out.persist_value = out_persist
+        c0 = Connection(h, 0); c0.weight = 2.0; inp0.connections.append(c0)
+        c1 = Connection(h, 1); c1.weight = 2.0; inp1.connections.append(c1)
+        c2 = Connection(out, 2); c2.weight = 1.0; h.connections.append(c2)
+        c3 = Connection(out, 3); c3.weight = -1.0; inp0.connections.append(c3)
+        c4 = Connection(out, 4); c4.weight = -1.0; inp1.connections.append(c4)
+        g.nodes = [inp0, inp1, h, out]
+        g.input_nodes = [inp0, inp1]
+        g.output_nodes = [out]
+        return g
+
+    def test_forward_returns_activated_when_output_non_persistent(self):
+        g = self._build_xor_network(out_persist=False)
+        g.reset()
+        result = g.forward([1.0, 0.0])
+        # Expected XOR-like value: -1.0 + (2-1.5)*1 = -0.5 (linear activation)
+        # Critical: NOT 0.0 (which was the bug)
+        self.assertNotEqual(result, [0.0],
+            "forward() must return activated output value, not 0, when persist_value=False")
+        self.assertAlmostEqual(result[0], -0.5, places=4)
+
+    def test_forward_same_result_regardless_of_output_persist(self):
+        # With reset() between calls, persist_value on output should not change result
+        g_yes = self._build_xor_network(out_persist=True)
+        g_no  = self._build_xor_network(out_persist=False)
+        for inp in [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]:
+            g_yes.reset(); r_yes = g_yes.forward(inp)
+            g_no.reset();  r_no  = g_no.forward(inp)
+            self.assertEqual(r_yes, r_no,
+                f"Same input {inp}: result must match regardless of output persist_value")
 
 
 class TestGenomePickle(unittest.TestCase):
 
-    def test_allow_output_memory_survives_pickle_roundtrip(self):
+    def test_allow_memory_survives_pickle_roundtrip(self):
         import pickle
         from yane import NeuroEvolution
         yane = NeuroEvolution()
         yane.configure(2, 1, stateful=False)
         g = yane.next_genome()
         g2 = pickle.loads(pickle.dumps(g))
-        self.assertFalse(g2.allow_output_memory)
-        for n in g2.output_nodes:
+        self.assertFalse(g2.allow_memory)
+        for n in g2.nodes:
             self.assertFalse(n.persist_value)
 
-    def test_backward_compat_missing_allow_output_memory_defaults_true(self):
+    def test_backward_compat_missing_allow_memory_defaults_true(self):
         from yane.core.genome import Genome
         g = _make_genome()
         state = g.__getstate__()
-        del state['allow_output_memory']   # simulate genome pickled before this attribute existed
+        state.pop('allow_memory', None)   # simulate old pickle without flag
         g2 = Genome()
         g2.__setstate__(state)
-        self.assertTrue(g2.allow_output_memory,
-            "Old pickled genomes must default allow_output_memory=True for backward compatibility")
+        self.assertTrue(g2.allow_memory,
+            "Old pickled genomes must default allow_memory=True for backward compatibility")
+
+    def test_backward_compat_old_allow_output_memory_attribute(self):
+        from yane.core.genome import Genome
+        g = _make_genome()
+        state = g.__getstate__()
+        state.pop('allow_memory', None)
+        state['allow_output_memory'] = False  # simulate pre-rename pickle
+        g2 = Genome()
+        g2.__setstate__(state)
+        self.assertFalse(g2.allow_memory,
+            "Old allow_output_memory=False must migrate to allow_memory=False")
+        self.assertFalse(hasattr(g2, 'allow_output_memory') and 'allow_output_memory' in g2.__dict__,
+            "Obsolete allow_output_memory attribute should not leak through")
 
 
 if __name__ == "__main__":

@@ -78,7 +78,12 @@ class Node:
         for conn in self.connections:
             conn.target.value += conn.weight * activated
             next_triggered.add(conn.target)
-        self.value = activated if self.persist_value else 0.0
+        # Output nodes must retain their activated value so the caller can read it.
+        # Per-step reset is handled by reset_nodes at the start of forward().
+        if self.type is NodeType.OUTPUT or self.persist_value:
+            self.value = activated
+        else:
+            self.value = 0.0
 
     def fire_simple(self) -> None:
         """Fast path for acyclic (topologically sorted) networks — no set tracking."""
@@ -89,7 +94,12 @@ class Node:
             activated = 0.0
         for conn in self.connections:
             conn.target.value += conn.weight * activated
-        self.value = activated if self.persist_value else 0.0
+        # Output nodes must retain their activated value so the caller can read it.
+        # Per-step reset is handled by reset_nodes at the start of forward().
+        if self.type is NodeType.OUTPUT or self.persist_value:
+            self.value = activated
+        else:
+            self.value = 0.0
 
     def mutate(self, sigma: float = 1.0) -> None:
         self.bias = self.mutation_bias.mutate_value(self.bias, sigma)

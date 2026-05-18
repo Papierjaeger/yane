@@ -76,7 +76,7 @@ class NeuroEvolution:
         initial = Genome()
         initial.max_nodes = max_nodes
         initial.max_connections = max_connections
-        initial.allow_output_memory = stateful
+        initial.allow_memory = stateful
 
         for i in range(n_inputs):
             node = Node(NodeType.INPUT, innovation=tracker.next())

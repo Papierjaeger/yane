@@ -33,31 +33,40 @@ class TestNeuroEvolutionConfig(unittest.TestCase):
             self.assertTrue(n.persist_value,
                 "Output nodes must have persist_value=True for stateful tasks")
 
-    def test_stateful_false_output_nodes_no_persist(self):
+    def test_stateful_false_all_nodes_no_persist(self):
         yane = self._make(n_inputs=2, n_outputs=1, stateful=False)
         g = yane.next_genome()
-        self.assertFalse(g.allow_output_memory)
-        for n in g.output_nodes:
+        self.assertFalse(g.allow_memory)
+        for n in g.nodes:
             self.assertFalse(n.persist_value,
-                "Output nodes must not persist for stateless dataset tasks")
+                f"{n.type.value} node must not persist when allow_memory=False")
 
-    def test_stateful_false_mutation_cannot_enable_output_persist(self):
+    def test_stateful_false_mutation_cannot_enable_persist_on_any_node(self):
+        from yane.core.node import Node, NodeType
         yane = self._make(n_inputs=2, n_outputs=1, stateful=False)
         g = yane.next_genome()
-        for n in g.output_nodes:
-            n.persist_value = True  # manually force it on
+        # Add a hidden node and force-enable persist on every node type
+        h = Node(NodeType.HIDDEN, innovation=99)
+        g.nodes.append(h)
+        for n in g.nodes:
+            n.persist_value = True
         g.mutate()
-        for n in g.output_nodes:
+        for n in g.nodes:
             self.assertFalse(n.persist_value,
-                "mutate() must reset persist_value=False on output nodes for stateless genomes")
+                f"mutate() must reset persist_value=False on {n.type.value} when allow_memory=False")
 
-    def test_stateful_false_allow_output_memory_propagates_to_copy(self):
+    def test_stateful_false_allow_memory_propagates_to_copy(self):
         yane = self._make(n_inputs=2, n_outputs=1, stateful=False)
         g = yane.next_genome()
         copy = g.copy()
-        self.assertFalse(copy.allow_output_memory)
-        for n in copy.output_nodes:
+        self.assertFalse(copy.allow_memory)
+        for n in copy.nodes:
             self.assertFalse(n.persist_value)
+
+    def test_stateful_true_allows_memory_genome_flag(self):
+        yane = self._make(n_inputs=2, n_outputs=1, stateful=True)
+        g = yane.next_genome()
+        self.assertTrue(g.allow_memory)
 
     def test_max_nodes_propagates_to_genome(self):
         yane = self._make(n_inputs=2, n_outputs=1, max_nodes=7)
