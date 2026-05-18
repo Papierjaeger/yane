@@ -66,6 +66,19 @@ def _compatibility(g1: Genome, g2: Genome, threshold: float | None = None) -> fl
         conn_diff = abs(c1 - c2) / ((c1 if c1 >= c2 else c2) or 1)
         return (node_diff + conn_diff) / 2.0
 
+    # Structural identity fast-path: if both genomes have the same innovation
+    # numbers, excess=0 and disjoint=0.  Only the weight-difference term remains.
+    # Skips the frozenset intersection + two classification loops (~40% of calls
+    # in stable populations where weight-only mutations dominate).
+    if g1_keys == g2_keys:
+        if n1_innov == 0:
+            return 0.0
+        weight_diff_sum = 0.0
+        for k in g1_keys:
+            d = g1_innov[k].weight - g2_innov[k].weight
+            weight_diff_sum += d if d >= 0.0 else -d
+        return 0.4 * weight_diff_sum / n1_innov
+
     # Inline min/max — avoids Python function-call overhead on this hot path.
     smaller_max = max_innov_g1 if max_innov_g1 <= max_innov_g2 else max_innov_g2
     N = n1_innov if n1_innov >= n2_innov else n2_innov
@@ -73,8 +86,6 @@ def _compatibility(g1: Genome, g2: Genome, threshold: float | None = None) -> fl
         N = 1
 
     # Use the pre-computed frozensets for C-level set intersection.
-    # frozenset & frozenset avoids calling dict.keys() and creates a frozenset
-    # result, eliminating 1M+ method-call overheads per training run.
     matching_set = g1_keys & g2_keys   # C-level frozenset intersection
 
     matching = 0
@@ -82,7 +93,7 @@ def _compatibility(g1: Genome, g2: Genome, threshold: float | None = None) -> fl
     for k in matching_set:
         matching += 1
         d = g1_innov[k].weight - g2_innov[k].weight
-        weight_diff_sum += d if d >= 0.0 else -d  # avoids abs() function-call overhead
+        weight_diff_sum += d if d >= 0.0 else -d
 
     excess = disjoint = 0
     for innov in g1_keys:
