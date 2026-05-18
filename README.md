@@ -1,26 +1,16 @@
 # Yet Another Neuro Evolution (YANE)
 
-A Python framework for **neuroevolution** — training neural networks through evolutionary algorithms instead of backpropagation.
+YANE ist ein Python-Framework für **Neuroevolution**: Neuronale Netze werden nicht per Backpropagation trainiert, sondern durch Evolution verändert, bewertet, selektiert und über viele Generationen weiterentwickelt.
 
-**Requires Python 3.10+**
+Das Projekt enthält:
 
-## How it works
+- eine Python-API für eigene Trainingsschleifen
+- eine PySide6-GUI mit Live-Fitnesskurve und Netzwerkvisualisierung
+- einen FastAPI-Server für externe Steuerung per HTTP
+- mehrere Dataset-, Sequenz- und Gymnasium-Beispiele
+- Tests für Genome, Mutationen, Population, Innovation Tracking, Memory Nodes und Stabilität
 
-YANE maintains a **population of genomes** (neural networks) and evolves them over time:
-
-1. A genome is selected from the population and evaluated with a user-defined fitness function
-2. Fitter genomes produce offspring through mutation (tournament selection used when the unevaluated pool is exhausted)
-3. The population evolves until a target fitness is reached, or indefinitely
-
-Mutations can modify:
-- Network structure (add/remove nodes, add/remove connections)
-- Node parameters (bias, activation function, input index)
-- Whether a node carries its value to the next tick cycle
-- **Mutation rates themselves** — rates self-adapt over time (meta-evolution), with a hard minimum floor
-
-Supported activation functions: `Linear`, `Sigmoid`, `Tanh`, `ReLU`, `Binary`
-
-Cycles are explicitly allowed — self-connections, bidirectional connections, loops. The `max_triggers` parameter per node prevents infinite loops in forward mode.
+**Voraussetzung:** Python 3.10+
 
 ## Installation
 
@@ -28,232 +18,274 @@ Cycles are explicitly allowed — self-connections, bidirectional connections, l
 pip install -r requirements.txt
 ```
 
-Dependencies: `numpy`, `PySide6`, `gymnasium`, `fastapi`, `uvicorn`, `pydantic`, `psutil`
+Abhängigkeiten: `numpy`, `PySide6`, `gymnasium`, `fastapi`, `uvicorn`, `pydantic`, `psutil`
 
-## GUI
+## Schnellstart
 
-Launch the graphical interface:
+### GUI starten
+
+Aus dem Projektordner:
 
 ```bash
-cd /path/to/parent
-python -m yane.gui
-# or directly:
 python run.py
 ```
 
-The GUI provides:
-- **Training tab** — configure and run training with live fitness chart and network visualisation
-- **Inspect tab** — see how the best genome performs on known test cases after training
-- **▶ Run Best** button (gym examples) — watch the best genome play an episode in real-time
-- **API Server tab** — start the built-in HTTP server
-
-Built-in examples: XOR, CartPole, Acrobot, MountainCar (Continuous).
-
-## Usage (API / scripting)
-
-Add the **parent directory** of `yane/` to `PYTHONPATH`:
+Oder als Paket aus dem Elternordner von `yane/`:
 
 ```bash
-export PYTHONPATH=/path/to/parent
-# or run an example directly:
-cd /path/to/parent && python -m yane.examples.XOR
+python -m yane.gui
 ```
 
-### Training
+Die GUI bietet:
+
+- Training-Tab mit Beispielauswahl, Fitnesskurve und Netzwerkansicht
+- Inspect-Tab zum Prüfen des besten Genoms auf bekannten Testfällen
+- `Run Best` für renderbare Gymnasium-Beispiele
+- API-Server-Tab zum Starten der HTTP-Schnittstelle
+
+### Beispiel per Skript trainieren
+
+Aus dem Elternordner von `yane/`:
+
+```bash
+python -m yane.examples.XOR
+python -m yane.examples.basic_multiplication
+python -m yane.examples.simple_2_2_continuous
+python -m yane.examples.simple_3_3_continuous
+python -m yane.examples.sequence_recall_PI
+```
+
+## Grundprinzip
+
+YANE verwaltet eine Population von **Genomen**. Ein Genom ist ein neuronales Netz aus Nodes und gewichteten Connections.
+
+Der Trainingsablauf ist:
+
+1. Ein Genom wird zur Bewertung ausgewählt.
+2. Eine Fitness-Funktion bewertet, wie gut dieses Netz die Aufgabe löst.
+3. Das Genom wird mit seiner Fitness in die Population zurückgegeben.
+4. Sobald neue Kandidaten gebraucht werden, erzeugt die Population Nachkommen durch Mutation oder Crossover.
+5. Schlechtere Genome werden verworfen, gute und strukturell interessante Genome bleiben erhalten.
+
+Das Startgenom enthält Input- und Output-Nodes, aber standardmäßig **keine Connections**. Die erste vielfältige Population wird durch zufällige Strukturmutationen aufgebaut. Optional können mit `n_initial_hidden` von Anfang an Hidden Nodes eingefügt werden.
+
+YANE ist NEAT-inspiriert und erweitert den Ansatz um selbstadaptierende Mutationsraten, Novelty Search, Memory Nodes, optionales Lamarckian Weight Refinement und Ressourcenlimits.
+
+## Minimales Python-Beispiel
 
 ```python
 from yane import NeuroEvolution
 
+DATA = [
+    ([0.0, 0.0], [0.0]),
+    ([0.0, 1.0], [1.0]),
+    ([1.0, 0.0], [1.0]),
+    ([1.0, 1.0], [0.0]),
+]
+
 yane = NeuroEvolution()
-yane.configure(n_inputs=2, n_outputs=1, max_nodes=50, max_connections=200)
-yane.set_min_fitness(-0.1)   # stop when fitness >= this value
-yane.set_max_iterations(10000)  # or stop after N evaluations (whichever comes first)
-# omit both to train indefinitely
+yane.configure(
+    n_inputs=2,
+    n_outputs=1,
+    max_nodes=20,
+    max_connections=50,
+    n_initial_hidden=2,
+    stateful=False,
+)
+yane.set_min_fitness(-0.1)
+yane.set_resource_limits(max_process_gb=2.0)
 
 def evaluate(genome):
     fitness = 0.0
-    for inputs, target in [([0, 0], 0), ([0, 1], 1), ([1, 0], 1), ([1, 1], 0)]:
-        outputs = genome.forward(inputs)
-        fitness -= abs(outputs[0] - target)
+    for inputs, target in DATA:
+        genome.reset()
+        output = genome.forward(inputs)
+        fitness -= abs(output[0] - target[0])
     return fitness
 
-n = yane.train(evaluate)   # returns number of iterations performed
+iterations = yane.train(evaluate)
+best = yane.get_best()
+print(iterations, best.fitness)
+```
+
+Fitness ist in vielen Beispielen ein negativer Fehler. Je näher der Wert an `0` liegt, desto besser.
+
+## Wichtige API
+
+### Konfiguration
+
+```python
+yane.configure(
+    n_inputs=2,
+    n_outputs=1,
+    max_nodes=30,
+    max_connections=100,
+    n_initial_hidden=3,
+    stateful=True,
+)
+```
+
+Parameter:
+
+- `n_inputs`: Anzahl der Eingabewerte
+- `n_outputs`: Anzahl der Ausgabewerte
+- `max_nodes`: optionale Obergrenze für Nodes pro Genom
+- `max_connections`: optionale Obergrenze für Connections pro Genom
+- `n_initial_hidden`: Hidden Nodes im Startgenom
+- `stateful`: erlaubt persistente Node-Werte und damit Gedächtnis über mehrere `forward()`-Aufrufe
+
+### Automatisches Training
+
+```python
+yane.set_min_fitness(-0.1)
+yane.set_max_iterations(10_000)
+n = yane.train(evaluate)
 best = yane.get_best()
 ```
 
-### Manual loop
+Das Training stoppt, wenn `min_fitness` erreicht oder `max_iterations` ausgeschöpft ist. Ohne beide Grenzen läuft es unbegrenzt.
 
-For evaluation that spans multiple steps (e.g. a simulation):
+### Manuelle Trainingsschleife
 
 ```python
 genome = yane.next_genome()
-score = run_simulation(genome)   # your evaluation here
-yane.submit_fitness(score)
+fitness = run_simulation(genome)
+yane.submit_fitness(fitness)
 ```
 
-### Tick mode (step-by-step propagation)
+Diese Form ist nützlich für Simulationen, Episoden oder externe Systeme.
 
-Each `tick()` fires all currently stimulated nodes once. Outputs may be empty until enough ticks have propagated through the network.
+### Forward Mode
 
 ```python
-genome = yane.next_genome()
+outputs = genome.forward([0.5, 1.0])
+```
+
+`forward()` berechnet einen vollständigen Durchlauf. Für azyklische Netze wird eine schnelle topologische Ausführungsreihenfolge kompiliert. Bei Zyklen fällt YANE auf einen BFS-basierten Modus mit Trigger-Limit zurück.
+
+### Tick Mode
+
+```python
 genome.set_inputs([0.5, 1.0])
-genome.tick()                    # input nodes fire → hidden nodes receive signal
-genome.tick()                    # hidden nodes fire → output nodes receive signal
+genome.tick()
+genome.tick()
 outputs = genome.get_outputs()
-yane.submit_fitness(my_score)
 ```
 
-### Efficiency penalty
+`tick()` propagiert Signale schrittweise. Das ist praktisch, wenn man die Dynamik eines rekurrenten Netzes oder eine Simulation explizit takten möchte.
 
-Penalises genomes that take too long to evaluate, promoting smaller and faster networks:
+### Ensemble
+
+```python
+top = yane.get_ensemble(k=3)
+outputs = yane.forward_ensemble([0.2, 0.8], k=3)
+```
+
+`forward_ensemble()` mittelt die Outputs der besten `k` Genome.
+
+### Ressourcen und Effizienz
 
 ```python
 yane.set_efficiency_penalty(max_ms=10.0, penalty_per_ms=0.5)
-```
-
-### Resource limits
-
-```python
-# Pause when system memory is low, resume when it recovers:
-yane.set_resource_limits(min_free_gb=2.0, max_used_percent=85.0)
-
-# Hard cap on yane's own RAM. When exceeded, the population is halved
-# (keeping the best genomes) and the GC is forced until under budget:
-yane.set_resource_limits(max_process_gb=1.0)
-```
-
-### Diagnosing memory growth
-
-```python
+yane.set_resource_limits(min_free_gb=2.0, max_used_percent=85.0, max_process_gb=2.0)
 print(yane.population_memory_info())
-# {'total_genomes': 100, 'avg_nodes_per_genome': 12.3, 'largest_genome_nodes': 47, ...}
 ```
 
-### API server
+Die Effizienzstrafe reduziert Fitness für langsame Bewertungen. Die Ressourcenlimits pausieren Training bei knappem Systemspeicher oder verkleinern die Population, wenn der Prozess zu viel RAM nutzt.
+
+## Beispiele
+
+| Beispiel | Inputs | Outputs | Normalisierung | Hidden Nodes in GUI | Stateful | Ziel-Fitness |
+|---|---:|---:|---|---:|---|---:|
+| XOR | 2 | 1 | nein, Werte 0/1 | 2 | nein | -0.1 |
+| Multiplication | 2 | 1 | Inputs /9, Output /81 | 3 | nein | -5.0 |
+| Regression 2->2 | 2 | 2 | nein, Werte 0/1 | 4 | nein | -0.4 |
+| Regression 3->3 | 3 | 3 | nein, Werte 0/1 | 9 | nein | -5.0 |
+| Sequence: Pi-Ziffern | 1 | 1 | Digit /9 | 0 | ja | -10.0 |
+| MNIST | 784 | 10 | Pixel /255 | 0 | ja | Anzahl Samples |
+
+Weitere GUI-Beispiele sind CartPole, Acrobot, MountainCar, Pendulum, LunarLander, BipedalWalker, CarRacing, Blackjack, Cliff Walking, Frozen Lake und Taxi. Details stehen in [TECHNISCHE_DOKUMENTATION.md](TECHNISCHE_DOKUMENTATION.md).
+
+## Technische Dokumentation
+
+Die ausführliche Beschreibung des Netzaufbaus, der Forward-Ausführung, Mutation, Crossover, Speziation, Novelty Search, Memory Nodes und aller Beispielkonfigurationen steht in:
+
+[TECHNISCHE_DOKUMENTATION.md](TECHNISCHE_DOKUMENTATION.md)
+
+## API-Server
+
+Start:
 
 ```bash
-cd /path/to/parent
 uvicorn yane.api.server:app --reload
 ```
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/configure` | Initialise with n_inputs / n_outputs |
-| `POST` | `/population/next` | Select next genome for evaluation |
-| `POST` | `/population/fitness` | Submit fitness for current genome |
-| `GET`  | `/population/status` | Population size, best fitness |
-| `GET`  | `/population/best` | Best genome info |
-| `POST` | `/network/inputs` | Set input values |
-| `POST` | `/network/tick` | Execute one tick |
-| `GET`  | `/network/outputs` | Read current outputs |
-| `POST` | `/network/forward` | Full forward pass |
-| `POST` | `/network/reset` | Reset state |
+Wichtige Endpunkte:
 
-#### Example: training loop via HTTP (XOR)
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| `POST` | `/configure?n_inputs=2&n_outputs=1` | Population initialisieren |
+| `POST` | `/population/next` | nächstes Genom auswählen |
+| `POST` | `/population/fitness` | Fitness für aktuelles Genom übergeben |
+| `GET` | `/population/status` | Populationsstatus |
+| `GET` | `/population/best` | bestes Genom |
+| `POST` | `/network/inputs` | Inputs setzen |
+| `POST` | `/network/tick` | einen Tick ausführen |
+| `GET` | `/network/outputs` | Outputs lesen |
+| `POST` | `/network/forward` | vollständigen Forward Pass ausführen |
+| `POST` | `/network/reset` | Genomzustand zurücksetzen |
 
-```python
-import requests
+Swagger UI ist während des Serverbetriebs unter `http://127.0.0.1:8000/docs` erreichbar.
 
-BASE = "http://127.0.0.1:8000"
+## Projektstruktur
 
-XOR_DATA = [([0, 0], 0), ([0, 1], 1), ([1, 0], 1), ([1, 1], 0)]
-
-# 1. Configure once
-requests.post(f"{BASE}/configure", params={"n_inputs": 2, "n_outputs": 1})
-
-for _ in range(10_000):
-    # 2. Select the next genome to evaluate
-    requests.post(f"{BASE}/population/next")
-
-    # 3. Evaluate: forward pass for each input, accumulate fitness
-    fitness = 0.0
-    for inputs, target in XOR_DATA:
-        out = requests.post(f"{BASE}/network/forward", json={"data": inputs}).json()["outputs"][0]
-        fitness -= abs(out - target)
-
-    # 4. Submit fitness
-    requests.post(f"{BASE}/population/fitness", json={"fitness": fitness})
-
-# Check results
-print(requests.get(f"{BASE}/population/status").json())
-# {"size": 100, "evaluated": 99, "unevaluated": 1, "best_fitness": -0.07}
-print(requests.get(f"{BASE}/population/best").json())
-# {"fitness": -0.07, "n_nodes": 5, "n_connections": 6, "n_inputs": 2, "n_outputs": 1}
-```
-
-#### Example: tick mode (step-by-step, e.g. CartPole with recurrent network)
-
-```python
-import gymnasium as gym
-import requests
-
-BASE = "http://127.0.0.1:8000"
-
-requests.post(f"{BASE}/configure", params={"n_inputs": 4, "n_outputs": 2})
-requests.post(f"{BASE}/population/next")
-
-env = gym.make("CartPole-v1")
-obs, _ = env.reset()
-total_reward = 0.0
-
-for _ in range(500):
-    # Feed current observation
-    requests.post(f"{BASE}/network/inputs", json={"data": obs.tolist()})
-    # Propagate one step
-    requests.post(f"{BASE}/network/tick")
-    # Read action
-    outputs = requests.get(f"{BASE}/network/outputs").json()["outputs"]
-    action = int(outputs[0] > 0.5)
-
-    obs, reward, terminated, truncated, _ = env.step(action)
-    total_reward += reward
-    if terminated or truncated:
-        break
-
-requests.post(f"{BASE}/population/fitness", json={"fitness": total_reward})
-env.close()
-```
-
-The interactive API docs (Swagger UI) are available at `http://127.0.0.1:8000/docs` while the server is running.
-
-## Project structure
-
-```
-yane/                       ← the Python package (importable as `yane`)
+```text
+yane/
   __init__.py
-  neuro_evolution.py        # Main entry point
-  run.py                    # Launch the GUI
+  neuro_evolution.py          Haupt-API und Trainingsloop
+  run.py                      GUI-Startdatei
   core/
-    genome.py               # Network (tick + forward mode, mutation, copy)
-    node.py                 # Neuron with activation, bias, persist_value
-    connection.py           # Weighted connection with self-adaptive mutation
+    genome.py                 Netzwerk, Forward/Tick, Mutation, Crossover
+    node.py                   Neuron, Aktivierung, Bias, Memory, Input-Scale
+    connection.py             gewichtete Verbindung
   evolution/
-    mutation.py             # Self-adaptive mutation rates
-    smart_mutation.py       # Structure changes (insert/remove node, add/remove connection)
-    population.py           # Population management & tournament selection
-    efficiency_penalty.py   # Fitness penalty for slow networks
+    mutation.py               selbstadaptierende Mutationsparameter
+    smart_mutation.py         Strukturmutationen
+    innovation.py             Innovation Numbers für NEAT-Crossover
+    population.py             Population, Speziation, Selection, Novelty
+    efficiency_penalty.py     Laufzeitbasierte Fitnessstrafe
   util/
-    activation.py           # Activation functions
-    resource_guard.py       # System memory monitoring
+    activation.py             Aktivierungsfunktionen
+    resource_guard.py         Speicherüberwachung
+    logger.py                 Logging-Helfer
   gui/
-    window.py               # Main application window (PySide6)
-    worker.py               # Background training and episode runner threads
-    canvas.py               # Network visualisation and fitness chart widgets
-    examples.py             # Built-in example configurations (XOR, gym envs)
+    main.py
+    window.py                 PySide6-Hauptfenster
+    worker.py                 Trainings- und Demo-Threads
+    canvas.py                 Netzwerk- und Fitnessvisualisierung
+    examples.py               GUI-Beispielregistry
   api/
-    server.py               # FastAPI app
-    models.py               # Pydantic schemas
+    server.py                 FastAPI-App
+    models.py                 Pydantic-Modelle
     routes/
-      network.py            # Tick/forward endpoints
-      population.py         # Population management endpoints
+      network.py              Netzwerkendpunkte
+      population.py           Populationsendpunkte
   examples/
     XOR/
+    basic_multiplication/
+    simple_2_2_continuous/
+    simple_3_3_continuous/
+    sequence_recall_PI/
     MNIST/
-    gym/
   tests/
+```
+
+## Tests
+
+```bash
+pytest
 ```
 
 ## Status
 
-Active development.
+Aktive Entwicklung.

@@ -172,7 +172,7 @@ class LeftPanel(QWidget):
             "Rohfitness des besten Genoms — der Wert den deine evaluate()-Funktion zurückgibt.\n"
             "Wird nie geteilt oder angepasst.")
         self.lbl_shared_fit.setToolTip(
-            "Geteilte Fitness = Rohfitness ÷ Artenanzahl (fitness sharing).\n"
+            "Geteilte Fitness = Rohfitness ÷ Anzahl Genomes in derselben Art (fitness sharing).\n"
             "Verhindert dass eine dominante Art alle anderen verdrängt.\n"
             "Wird für die Selektion verwendet.")
         self.lbl_activations.setToolTip(

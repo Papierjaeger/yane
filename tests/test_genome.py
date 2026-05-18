@@ -27,6 +27,14 @@ class TestGenomeCopy(unittest.TestCase):
         self.assertEqual(len(g.input_nodes), len(copy.input_nodes))
         self.assertEqual(len(g.output_nodes), len(copy.output_nodes))
 
+    def test_copy_preserves_fitness_values(self):
+        g = _make_genome()
+        g.fitness = 12.5
+        g.shared_fitness = 3.125
+        copy = g.copy()
+        self.assertEqual(copy.fitness, 12.5)
+        self.assertEqual(copy.shared_fitness, 3.125)
+
     def test_copy_nodes_are_different_objects(self):
         g = _make_genome()
         copy = g.copy()

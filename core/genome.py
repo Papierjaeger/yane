@@ -487,6 +487,7 @@ class Genome:
                     new_node.connections.append(conn.copy(node_map))
 
         genome.fitness = self.fitness
+        genome.shared_fitness = self.shared_fitness
         genome.max_nodes = self.max_nodes
         genome.max_connections = self.max_connections
         for attr in _SCALAR_GENES:
