@@ -257,7 +257,9 @@ class Genome:
         self.set_inputs(data)
 
         trigger_counts: dict[Node, int] = {}
-        pending: list[Node] = [n for n in self.nodes if n in self._triggered]
+        # Use the _triggered set directly — avoids O(all_nodes) scan per iteration.
+        # list() creates a snapshot so fire() can safely modify _triggered via next_pending.
+        pending: list[Node] = list(self._triggered)
         next_pending: set[Node] = set()
 
         while pending:
@@ -268,7 +270,8 @@ class Genome:
                     continue
                 trigger_counts[node] = cnt + 1
                 node.fire(next_pending)
-            pending = [n for n in self.nodes if n in next_pending]
+            # Convert set directly to list — O(pending) instead of O(all_nodes).
+            pending = list(next_pending)
 
         return self.get_outputs()
 

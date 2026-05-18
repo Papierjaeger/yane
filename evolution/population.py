@@ -178,6 +178,10 @@ class Population:
         self._best_topology: tuple[int, int] = (0, 0)  # (n_nodes, n_connections)
         self._topology_stagnation_count: int = 0
 
+        # Cached minimum shared_fitness — updated by _compute_shared_fitness() so
+        # _spawn_offspring() can read it in O(1) instead of scanning all genomes.
+        self._min_shared_fitness: float = 0.0
+
         # Adaptive global species threshold (replaces per-genome thresholds).
         # Step size 0.005 is small relative to the actual δ distribution
         # ([0, ~0.15] for bootstrap genomes) to avoid oscillation.
@@ -495,10 +499,17 @@ class Population:
         # tournaments against the empty baseline). Compact networks emerge
         # naturally through remove_connection/remove_node mutations when they
         # don't improve fitness.
+        min_sf = float('inf')
         for sp in self._species:
-            n = len(sp.members)
+            # Multiply by reciprocal — avoids one division per genome.
+            inv_n = 1.0 / len(sp.members)
             for genome in sp.members:
-                genome.shared_fitness = genome.fitness / n
+                sf = genome.fitness * inv_n
+                genome.shared_fitness = sf
+                if sf < min_sf:
+                    min_sf = sf
+        # Cache so _spawn_offspring() can skip the O(N) min() scan.
+        self._min_shared_fitness = min_sf if min_sf != float('inf') else 0.0
 
     # ------------------------------------------------------------------
     # Offspring spawning
@@ -662,7 +673,7 @@ class Population:
         # cause selection to prefer genomes with smaller offspring_factor.
         k = min(3, len(self._evaluated))
         candidates = random.sample(self._evaluated, k)
-        min_fit = min(g.shared_fitness for g in self._evaluated)
+        min_fit = self._min_shared_fitness   # cached by _compute_shared_fitness(), O(1)
         def _selection_score(g: Genome) -> float:
             efficiency_factor = 1.0 - ew * (1.0 - g.efficiency_score)
             score = (
