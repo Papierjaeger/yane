@@ -208,5 +208,139 @@ class TestGenomeClearGuard(unittest.TestCase):
             "_prune() must call _clear() on the evicted genome")
 
 
+class TestMultiEval(unittest.TestCase):
+
+    def _make(self, **kwargs):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(**kwargs)
+        return yane
+
+    def test_set_multi_eval_stores_params(self):
+        yane = self._make(n_inputs=2, n_outputs=1)
+        yane.set_multi_eval(n=5, aggregation="median", sigma_penalty=0.3)
+        self.assertEqual(yane._n_evaluations, 5)
+        self.assertEqual(yane._eval_aggregation, "median")
+        self.assertAlmostEqual(yane._eval_sigma_penalty, 0.3)
+
+    def test_set_multi_eval_invalid_n(self):
+        yane = self._make(n_inputs=2, n_outputs=1)
+        with self.assertRaises(ValueError):
+            yane.set_multi_eval(n=0)
+
+    def test_set_multi_eval_invalid_aggregation(self):
+        yane = self._make(n_inputs=2, n_outputs=1)
+        with self.assertRaises(ValueError):
+            yane.set_multi_eval(n=3, aggregation="max")
+
+    def test_train_calls_fitness_fn_n_times(self):
+        """With n_evaluations=4, train() must call fitness_fn exactly 4× per genome."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=2, n_outputs=1)
+        yane.set_multi_eval(n=4)
+        yane.set_max_iterations(1)
+
+        call_count = [0]
+
+        def evaluate(genome):
+            call_count[0] += 1
+            return -1.0
+
+        yane.train(evaluate)
+        self.assertEqual(call_count[0], 4)
+
+    def test_multi_eval_mean_aggregation(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=1, n_outputs=1)
+        yane.set_multi_eval(n=3, aggregation="mean")
+        yane.set_max_iterations(1)
+
+        values = iter([1.0, 3.0, 5.0])
+
+        def evaluate(genome):
+            return next(values)
+
+        yane.train(evaluate)
+        self.assertAlmostEqual(yane.get_best().fitness, 3.0)
+
+    def test_multi_eval_median_aggregation(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=1, n_outputs=1)
+        yane.set_multi_eval(n=3, aggregation="median")
+        yane.set_max_iterations(1)
+
+        values = iter([1.0, 10.0, 3.0])
+
+        def evaluate(genome):
+            return next(values)
+
+        yane.train(evaluate)
+        self.assertAlmostEqual(yane.get_best().fitness, 3.0)
+
+    def test_multi_eval_min_aggregation(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=1, n_outputs=1)
+        yane.set_multi_eval(n=3, aggregation="min")
+        yane.set_max_iterations(1)
+
+        values = iter([5.0, 2.0, 8.0])
+
+        def evaluate(genome):
+            return next(values)
+
+        yane.train(evaluate)
+        self.assertAlmostEqual(yane.get_best().fitness, 2.0)
+
+    def test_multi_eval_sigma_penalty_reduces_fitness(self):
+        """sigma_penalty > 0 must reduce fitness below the mean when std > 0."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=1, n_outputs=1)
+        yane.set_multi_eval(n=3, aggregation="mean", sigma_penalty=1.0)
+        yane.set_max_iterations(1)
+
+        values = iter([1.0, 3.0, 5.0])  # mean=3.0, std=sqrt(8/3)≈1.63
+
+        def evaluate(genome):
+            return next(values)
+
+        yane.train(evaluate)
+        self.assertLess(yane.get_best().fitness, 3.0)
+
+    def test_multi_eval_sigma_penalty_zero_std(self):
+        """With constant values, sigma_penalty must not change the result."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=1, n_outputs=1)
+        yane.set_multi_eval(n=3, aggregation="mean", sigma_penalty=2.0)
+        yane.set_max_iterations(1)
+
+        def evaluate(genome):
+            return 4.0
+
+        yane.train(evaluate)
+        self.assertAlmostEqual(yane.get_best().fitness, 4.0)
+
+    def test_n1_default_is_fast_path(self):
+        """Default n=1 must produce identical results to not using set_multi_eval."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=1, n_outputs=1)
+        self.assertEqual(yane._n_evaluations, 1)
+        yane.set_max_iterations(1)
+        call_count = [0]
+
+        def evaluate(genome):
+            call_count[0] += 1
+            return -1.0
+
+        yane.train(evaluate)
+        self.assertEqual(call_count[0], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

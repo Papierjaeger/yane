@@ -10,7 +10,7 @@ from typing import Callable
 from PySide6.QtCore import QThread, Signal
 
 from yane.core.genome import Genome
-from yane.neuro_evolution import _return_memory_to_os
+from yane.neuro_evolution import _aggregate_fitnesses, _return_memory_to_os
 
 _EMIT_INTERVAL_S    = 0.5    # emit UI update at most every 500 ms
 _MEMORY_CHECK_EVERY = 500    # check resource limits every N iterations
@@ -20,22 +20,39 @@ _GC_EVERY           = 5000   # force gc.collect() + malloc_trim every N iteratio
 # Multiprocessing helpers — must be at module level to be picklable
 # ---------------------------------------------------------------------------
 
-_mp_eval_fn = None   # set once per subprocess by _mp_initializer
+_mp_eval_fn        = None   # set once per subprocess by _mp_initializer
+_mp_n_evaluations  = 1
+_mp_aggregation    = "mean"
+_mp_sigma_penalty  = 0.0
 
-def _mp_initializer(make_eval_fn, render_cb):
+def _mp_initializer(make_eval_fn, render_cb,
+                    n_evaluations=1, aggregation="mean", sigma_penalty=0.0):
     """Called once in each worker process to create the fitness evaluator.
     Uses fork semantics: make_eval_fn is inherited from the parent process,
     so closures (gym environments, datasets) work without pickling.
     """
-    global _mp_eval_fn
-    _mp_eval_fn = make_eval_fn(render_cb)
+    global _mp_eval_fn, _mp_n_evaluations, _mp_aggregation, _mp_sigma_penalty
+    _mp_eval_fn       = make_eval_fn(render_cb)
+    _mp_n_evaluations = n_evaluations
+    _mp_aggregation   = aggregation
+    _mp_sigma_penalty = sigma_penalty
 
 def _mp_evaluate(genome: Genome) -> tuple[float, float]:
     """Evaluate a single genome — runs inside a worker process."""
-    start = time.perf_counter()
-    fitness = _mp_eval_fn(genome)
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    return fitness, elapsed_ms
+    if _mp_n_evaluations <= 1:
+        start = time.perf_counter()
+        fitness = _mp_eval_fn(genome)
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        return fitness, elapsed_ms
+
+    fitnesses: list[float] = []
+    total_ms = 0.0
+    for _ in range(_mp_n_evaluations):
+        start = time.perf_counter()
+        f = _mp_eval_fn(genome)
+        total_ms += (time.perf_counter() - start) * 1000.0
+        fitnesses.append(f)
+    return _aggregate_fitnesses(fitnesses, _mp_aggregation, _mp_sigma_penalty), total_ms
 
 
 def _timed_evaluate(eval_fn: Callable, genome: Genome) -> tuple[float, float]:
@@ -125,7 +142,7 @@ class TrainingWorker(QThread):
 
             try:
                 genome = self._yane.next_genome()
-                fitness, elapsed_ms = _timed_evaluate(self._evaluate, genome)
+                fitness, elapsed_ms = self._yane._run_evaluations(genome, self._evaluate)
                 self._yane.submit_fitness(fitness, elapsed_ms)
                 self._iteration += 1
                 if self._yane.min_fitness is not None and fitness >= self._yane.min_fitness:
@@ -167,7 +184,7 @@ class TrainingWorker(QThread):
 
                 try:
                     genomes = self._yane.next_genome_batch(n_workers)
-                    futures = [pool.submit(_timed_evaluate, fn, g) for fn, g in zip(eval_fns, genomes)]
+                    futures = [pool.submit(self._yane._run_evaluations, g, fn) for fn, g in zip(eval_fns, genomes)]
                     timed = [f.result() for f in futures]
                     fitnesses = [fitness for fitness, _elapsed_ms in timed]
                     results = [
@@ -226,9 +243,7 @@ class TrainingWorker(QThread):
         try:
             seed_fn = self._make_eval_fn(None)
             seed_g  = self._yane.next_genome()
-            t0 = time.perf_counter()
-            seed_fit = seed_fn(seed_g)
-            eval_ms  = (time.perf_counter() - t0) * 1000.0
+            seed_fit, eval_ms = self._yane._run_evaluations(seed_g, seed_fn)
             self._yane.submit_fitness(seed_fit, eval_ms)
             self._iteration += 1
             _close_env(seed_fn)
@@ -278,7 +293,12 @@ class TrainingWorker(QThread):
             return ctx.Pool(
                 processes=nw,
                 initializer=_mp_initializer,
-                initargs=(self._make_eval_fn, None),
+                initargs=(
+                    self._make_eval_fn, None,
+                    self._yane._n_evaluations,
+                    self._yane._eval_aggregation,
+                    self._yane._eval_sigma_penalty,
+                ),
             )
 
         try:

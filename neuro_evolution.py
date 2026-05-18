@@ -1,6 +1,7 @@
 from __future__ import annotations
 import gc
 import random
+import statistics
 import time
 from typing import Callable
 
@@ -12,6 +13,25 @@ def _return_memory_to_os() -> None:
         ctypes.cdll.LoadLibrary("libc.so.6").malloc_trim(0)
     except Exception:
         pass
+
+def _aggregate_fitnesses(fitnesses: list[float], aggregation: str, sigma_penalty: float) -> float:
+    """Combine multiple fitness values into one.
+
+    aggregation: "mean" | "median" | "min"
+    sigma_penalty: subtract sigma_penalty * std from the result (0 = no penalty).
+    """
+    if len(fitnesses) == 1:
+        return fitnesses[0]
+    if aggregation == "median":
+        result = statistics.median(fitnesses)
+    elif aggregation == "min":
+        result = min(fitnesses)
+    else:
+        result = statistics.mean(fitnesses)
+    if sigma_penalty > 0.0:
+        result -= sigma_penalty * statistics.pstdev(fitnesses)
+    return result
+
 
 from yane.core.genome import Genome
 from yane.core.node import Node, NodeType
@@ -33,6 +53,9 @@ class NeuroEvolution:
         self._n_workers: int = 1
         self._lamarck_steps: int = 0      # 0 = disabled; >0 = hill-climbing steps per genome
         self._lamarck_sigma: float = 1.0  # multiplier on genome.sigma_global (1.0 = unscaled)
+        self._n_evaluations: int = 1
+        self._eval_aggregation: str = "mean"
+        self._eval_sigma_penalty: float = 0.0
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -151,6 +174,39 @@ class NeuroEvolution:
     def set_efficiency_penalty(self, max_ms: float, penalty_per_ms: float) -> None:
         self._efficiency_penalty = EfficiencyPenalty(max_ms, penalty_per_ms)
 
+    def set_multi_eval(
+        self,
+        n: int,
+        aggregation: str = "mean",
+        sigma_penalty: float = 0.0,
+    ) -> None:
+        """Evaluate each genome n times per generation and aggregate results.
+
+        Useful for stochastic environments where a single episode is too noisy.
+
+        aggregation:
+            "mean"   — arithmetic mean (default)
+            "median" — statistical median; robust against outlier episodes
+            "min"    — worst-case fitness; most conservative
+
+        sigma_penalty:
+            Subtract sigma_penalty * std from the aggregated fitness.
+            Penalises high-variance genomes regardless of aggregation mode.
+            Has no effect when n=1 (std undefined).
+
+        Cost: n fitness-function calls per genome instead of 1.
+        Note: the manual loop (next_genome / submit_fitness) is not affected;
+              aggregate manually if needed.
+        """
+        if n < 1:
+            raise ValueError(f"n must be >= 1, got {n}")
+        valid = ("mean", "median", "min")
+        if aggregation not in valid:
+            raise ValueError(f"aggregation must be one of {valid}, got {aggregation!r}")
+        self._n_evaluations = n
+        self._eval_aggregation = aggregation
+        self._eval_sigma_penalty = max(0.0, sigma_penalty)
+
     def set_lamarck(self, n_steps: int = 5, sigma: float = 1.0) -> None:
         """Enable Lamarckian weight refinement after each NEAT mutation.
 
@@ -201,9 +257,7 @@ class NeuroEvolution:
             if lamarck:
                 self._lamarck_refine(genome, fitness_fn)
 
-            start = time.perf_counter()
-            fitness = fitness_fn(genome)
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            fitness, elapsed_ms = self._run_evaluations(genome, fitness_fn)
 
             if self._efficiency_penalty is not None:
                 fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)
@@ -278,6 +332,8 @@ class NeuroEvolution:
             "max_fitness": max((g.fitness for g in self._population._evaluated), default=0.0),
             "avg_fitness": (sum(g.fitness for g in self._population._evaluated)
                             / max(1, len(self._population._evaluated))),
+            "n_evaluations":    self._n_evaluations,
+            "eval_aggregation": self._eval_aggregation,
         }
 
     def set_target_species(self, n: int) -> None:
@@ -364,6 +420,29 @@ class NeuroEvolution:
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
+
+    def _run_evaluations(
+        self, genome: Genome, fitness_fn: Callable[[Genome], float]
+    ) -> tuple[float, float]:
+        """Evaluate genome (possibly multiple times) → (fitness, total_elapsed_ms).
+
+        With n_evaluations=1 (default), this is a direct call with no overhead.
+        """
+        if self._n_evaluations <= 1:
+            start = time.perf_counter()
+            fitness = fitness_fn(genome)
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            return fitness, elapsed_ms
+
+        fitnesses: list[float] = []
+        total_ms = 0.0
+        for _ in range(self._n_evaluations):
+            start = time.perf_counter()
+            f = fitness_fn(genome)
+            total_ms += (time.perf_counter() - start) * 1000.0
+            fitnesses.append(f)
+
+        return _aggregate_fitnesses(fitnesses, self._eval_aggregation, self._eval_sigma_penalty), total_ms
 
     def _lamarck_refine(self, genome: Genome, fitness_fn: Callable[[Genome], float]) -> None:
         """Hill-climb weights and biases for `_lamarck_steps` attempts.

@@ -428,7 +428,30 @@ genome.sigma_global * yane._lamarck_sigma
 
 Das ist Lamarckian, weil die verbesserten Gewichte direkt im Genom bleiben und weitervererbt werden.
 
-## 10. Fitness-Konventionen
+## 10. Mehrfachbewertung pro Genom
+
+Für stochastische Umgebungen kann jedes Genom mehrfach bewertet werden:
+
+```python
+yane.set_multi_eval(n=5, aggregation="mean", sigma_penalty=0.0)
+```
+
+Parameter:
+
+- `n`: Anzahl der Bewertungen pro Genom (Standard: `1`)
+- `aggregation`: wie die `n` Fitnesswerte zusammengefasst werden
+  - `"mean"`: arithmetisches Mittel (Standard)
+  - `"median"`: statistischer Median; robust gegen Ausreißer-Episoden
+  - `"min"`: Worst-Case-Fitness; konservativste Wahl
+- `sigma_penalty`: subtrahiert `sigma_penalty × Standardabweichung` vom aggregierten Wert; bestraft hochvariante Genome unabhängig von der Aggregationsmethode; bei `n=1` oder Standardabweichung `0` wirkungslos
+
+Die `elapsed_ms` für die Effizienzbewertung ist die Summe aller `n` Einzelmessungen. Da alle Genome dieselbe Anzahl Bewertungen erhalten, bleiben die relativen Effizienzscores korrekt.
+
+Kosten: `n` Fitnessfunktionsaufrufe pro Genom. Wenn Lamarckian Refinement aktiv ist, gilt `n_steps + 2` wie ohne Mehrfachbewertung — Lamarck nutzt nur Single-Evals für den Hill-Climb; die Mehrfachbewertung gilt nur für die abschließende „offizielle" Fitness.
+
+Der manuelle Loop (`next_genome()` / `submit_fitness()`) ist nicht betroffen; dort aggregiert der Nutzer selbst.
+
+## 11. Fitness-Konventionen
 
 YANE gibt keine feste Fitness-Skala vor. Die Beispiele nutzen zwei Muster:
 
@@ -437,7 +460,7 @@ YANE gibt keine feste Fitness-Skala vor. Die Beispiele nutzen zwei Muster:
 
 Für Regressions- und Klassifikationsbeispiele wird häufig `genome.reset()` zwischen Samples aufgerufen. Für Sequenzen und Episoden wird nur am Anfang zurückgesetzt, damit Memory wirken kann.
 
-## 11. Beispielkonfigurationen
+## 12. Beispielkonfigurationen
 
 Dieser Abschnitt beschreibt die aktuellen Beispiele aus `examples/` und `gui/examples.py`.
 
@@ -659,7 +682,7 @@ predicted_label = outputs.index(max(outputs))
 
 Hinweis: Dieses Beispiel ist deutlich größer als die kleinen Dataset-Beispiele und benötigt die externe CSV-Datei.
 
-## 12. GUI-/Gymnasium-Beispiele
+## 13. GUI-/Gymnasium-Beispiele
 
 Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importierbar ist.
 
@@ -820,7 +843,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
   - `+30` bei Pickup
   - `+50` bei erfolgreicher Lieferung
 
-## 13. API-Server
+## 14. API-Server
 
 FastAPI-App:
 
@@ -846,7 +869,7 @@ Trainingsablauf per HTTP:
 4. `POST /population/fitness`
 5. Wiederholen
 
-## 14. Grenzen und Hinweise
+## 15. Grenzen und Hinweise
 
 - YANE ist stochastisch. Gleiche Einstellungen können je nach Seed unterschiedlich schnell konvergieren.
 - Große Aufgaben wie MNIST oder pixelbasierte Kontrolle sind deutlich schwerer als die kleinen Dataset-Beispiele.
@@ -855,9 +878,9 @@ Trainingsablauf per HTTP:
 - Für Sequenzen und Episoden sollte `genome.reset()` nur am Episodenstart aufgerufen werden.
 - Normalisierung ist oft entscheidend, weil Aktivierungsfunktionen und Mutationsschrittweiten sonst in ungünstigen Skalen arbeiten.
 
-## 15. Weitere öffentliche API-Methoden
+## 16. Weitere öffentliche API-Methoden
 
-### 15.1 Populationsgröße und Species
+### 16.1 Populationsgröße und Species
 
 ```python
 yane.set_population_size(n)   # Standard: 100
@@ -866,7 +889,7 @@ yane.set_target_species(n)    # Standard: 5
 
 `set_population_size(n)` legt die maximale Anzahl von Genomen in der Population fest. Kleinere Populationen trainieren schneller, finden aber öfter lokale Optima. `set_target_species(n)` setzt die Zielanzahl der Species; der Kompatibilitätsschwellwert wird automatisch angepasst. Höhere Werte erhalten mehr strukturelle Diversität.
 
-### 15.2 Batch-Evaluation
+### 16.2 Batch-Evaluation
 
 ```python
 genomes = yane.next_genome_batch(n=4)
@@ -876,7 +899,7 @@ yane.submit_fitness_batch(results)
 
 Für manuelle Parallelisierung: `next_genome_batch(n)` gibt `n` unbewertete Genome zurück (spawnt bei Bedarf Nachkommen). `submit_fitness_batch(results)` reicht Fitnesswerte für eine Liste von `(Genom, Fitness)`-Paaren ein. Optional sind auch `(Genom, Fitness, Bewertungszeit_ms)`-Tupel möglich, damit die automatische Effizienzbewertung in eigenen Batch-Loops greift. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
 
-### 15.3 Speicherverwaltung
+### 16.3 Speicherverwaltung
 
 ```python
 yane.trim_memory()
@@ -884,7 +907,7 @@ yane.trim_memory()
 
 Gibt freigegebene Heap-Seiten explizit ans Betriebssystem zurück (ruft `malloc_trim` auf Linux auf). Nützlich nach langen Trainingsläufen oder nach `set_resource_limits(max_process_gb=...)`.
 
-## 16. Testabdeckung
+## 17. Testabdeckung
 
 Die Tests decken unter anderem ab:
 

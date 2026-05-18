@@ -206,6 +206,19 @@ yane.set_target_species(5)      # Standard: 5
 - `set_population_size(n)`: Größe der Population.
 - `set_target_species(n)`: Zielanzahl Species; der Kompatibilitätsschwellwert wird automatisch angepasst. Höhere Werte schützen mehr strukturelle Nischen (besonders nützlich für XOR-artige Aufgaben).
 
+### Mehrfachbewertung
+
+```python
+yane.set_multi_eval(n=5, aggregation="mean", sigma_penalty=0.0)
+```
+
+Für stochastische Umgebungen, in denen eine einzelne Episode zu verrauscht ist. YANE bewertet jedes Genom `n`-mal und aggregiert die Ergebnisse.
+
+- `aggregation`: `"mean"` (Standard), `"median"` (robust gegen Ausreißer) oder `"min"` (konservativster Worst-Case)
+- `sigma_penalty`: zieht `sigma_penalty × Standardabweichung` vom Ergebnis ab; bestraft hochvariante Genome unabhängig von der Aggregationsmethode
+- Kosten: `n` Fitnessfunktionsaufrufe pro Genom statt 1
+- Wirkt automatisch in `train()` und allen GUI-Worker-Pfaden; der manuelle Loop (`next_genome` / `submit_fitness`) ist nicht betroffen
+
 ### Lamarckian Refinement
 
 ```python
