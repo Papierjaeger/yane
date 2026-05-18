@@ -91,6 +91,12 @@ class Genome:
         # the fast path can skip the full O(species) search.
         self._last_species_id: int | None = None
 
+        # Dirty flag for lazy species re-assignment.
+        # Set True whenever the topology changes (_invalidate_topology).
+        # Weight-only mutations leave this False so _assign_species() can skip
+        # the full compatibility check and restore the genome to its last species.
+        self._species_stale: bool = True
+
     # -------------------------------------------------------------------------
     # Tick mode
     # -------------------------------------------------------------------------
@@ -543,8 +549,9 @@ class Genome:
             self.allow_memory = state.get('allow_output_memory', True)
         # Drop the obsolete attribute if it leaked in.
         self.__dict__.pop('allow_output_memory', None)
-        # Backward compat: old pickles won't have this attribute.
+        # Backward compat: old pickles won't have these attributes.
         self.__dict__.setdefault('_last_species_id', None)
+        self.__dict__.setdefault('_species_stale', True)
 
     # -------------------------------------------------------------------------
     # Diagnostics
@@ -596,6 +603,7 @@ class Genome:
         self._compiled_forward = None
         self._forward_dispatch = None
         self._innov_cache = None
+        self._species_stale = True  # topology changed → needs species re-assignment
 
     @property
     def connection_count(self) -> int:

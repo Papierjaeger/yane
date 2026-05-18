@@ -194,6 +194,13 @@ class Population:
         self._best_topology: tuple[int, int] = (0, 0)  # (n_nodes, n_connections)
         self._topology_stagnation_count: int = 0
 
+        # Lazy species-assignment: only re-assign structurally-changed genomes each
+        # spawn cycle.  Weight-only mutations restore the genome to its last species
+        # without running _compatibility().  Every _force_full_assign_interval spawns
+        # a full rebuild is forced to prevent drift accumulation.  0 = never force.
+        self._spawn_count: int = 0
+        self._force_full_assign_interval: int = 50
+
         # Cached minimum shared_fitness — updated by _compute_shared_fitness() so
         # _spawn_offspring() can read it in O(1) instead of scanning all genomes.
         self._min_shared_fitness: float = 0.0
@@ -471,34 +478,50 @@ class Population:
         for genome in self._evaluated:
             placed = False
 
-            # Fast path: try last-known species first — avoids full search for
-            # stable genomes that haven't drifted away from their cluster.
-            last_sp_id = genome._last_species_id   # direct attr access; initialized in Genome.__init__
-            if last_sp_id is not None:
-                sp = species_by_id.get(last_sp_id)
-                if sp is not None and _compatibility(genome, sp.representative) < threshold:
-                    sp.members.append(genome)
-                    # Maintain incremental best so sp.best() is O(1) after assignment.
-                    if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
-                        sp._cached_best = genome
-                    placed = True
-
-            if not placed:
-                for sp in self._species:
-                    if _compatibility(genome, sp.representative) < threshold:
+            # Lazy fast-path: if the genome's topology hasn't changed since its
+            # last assignment (_species_stale is False), restore it to its last
+            # species without running _compatibility().  Weight-only mutations
+            # never set _species_stale, so this skips most compatibility calls.
+            if not genome._species_stale:
+                last_sp_id = genome._last_species_id
+                if last_sp_id is not None:
+                    sp = species_by_id.get(last_sp_id)
+                    if sp is not None:
                         sp.members.append(genome)
                         if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                             sp._cached_best = genome
-                        genome._last_species_id = id(sp)
                         placed = True
-                        break
+
             if not placed:
-                new_sp = Species(genome)
-                new_sp.members.append(genome)
-                new_sp._cached_best = genome
-                self._species.append(new_sp)
-                species_by_id[id(new_sp)] = new_sp
-                genome._last_species_id = id(new_sp)
+                # Full assignment for stale or unplaced genomes.
+                genome._species_stale = False
+
+                # Fast path: try last-known species first — avoids full search.
+                last_sp_id = genome._last_species_id
+                if last_sp_id is not None:
+                    sp = species_by_id.get(last_sp_id)
+                    if sp is not None and _compatibility(genome, sp.representative) < threshold:
+                        sp.members.append(genome)
+                        if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
+                            sp._cached_best = genome
+                        placed = True
+
+                if not placed:
+                    for sp in self._species:
+                        if _compatibility(genome, sp.representative) < threshold:
+                            sp.members.append(genome)
+                            if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
+                                sp._cached_best = genome
+                            genome._last_species_id = id(sp)
+                            placed = True
+                            break
+                if not placed:
+                    new_sp = Species(genome)
+                    new_sp.members.append(genome)
+                    new_sp._cached_best = genome
+                    self._species.append(new_sp)
+                    species_by_id[id(new_sp)] = new_sp
+                    genome._last_species_id = id(new_sp)
 
         self._species = [sp for sp in self._species if sp.members]
         for sp in self._species:
@@ -670,6 +693,16 @@ class Population:
             self._topology_stagnation_count = 0
             self._inject_structural_diversity()
             return
+
+        self._spawn_count += 1
+        # Periodic forced full rebuild: every _force_full_assign_interval spawns
+        # mark all genomes stale so _assign_species() re-checks every genome.
+        # This prevents weight-drift from permanently misassigning genomes.
+        # 0 = never force a full rebuild (pure lazy assignment).
+        if (self._force_full_assign_interval > 0
+                and self._spawn_count % self._force_full_assign_interval == 0):
+            for g in self._evaluated:
+                g._species_stale = True
 
         self._assign_species()
         self._compute_shared_fitness()
