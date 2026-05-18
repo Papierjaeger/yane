@@ -18,6 +18,31 @@ _MEMORY_CHECK_EVERY = 500    # check resource limits every N iterations
 _GC_EVERY           = 5000   # force gc.collect() + malloc_trim every N iterations
 
 # ---------------------------------------------------------------------------
+# Worker-count formula
+# ---------------------------------------------------------------------------
+
+def _optimal_workers(eval_ms: float, batch_size: int, overhead_ms: float, cap: int) -> int:
+    """Return the worker count that minimises wall time for a batch.
+
+    Cost model:
+        sequential:  batch_size × eval_ms
+        w workers:   batch_size × eval_ms / w  +  overhead_ms
+
+    MP beats sequential iff  seq_time > overhead_ms.  When it does, the
+    minimum beneficial w is  ⌈seq_time / (seq_time − overhead_ms)⌉  and
+    the optimal w (where per-worker work equals overhead) is
+    seq_time / overhead_ms.  Returns 1 when sequential is always faster.
+    """
+    seq_time = batch_size * eval_ms
+    if seq_time <= overhead_ms:
+        return 1
+    min_beneficial = math.ceil(seq_time / (seq_time - overhead_ms))
+    min_beneficial = max(2, min_beneficial)
+    optimal = max(min_beneficial, int(seq_time / overhead_ms))
+    return min(cap, optimal)
+
+
+# ---------------------------------------------------------------------------
 # Multiprocessing helpers — must be at module level to be picklable
 # ---------------------------------------------------------------------------
 
@@ -267,17 +292,7 @@ class TrainingWorker(QThread):
         #   w_opt = seq_time / overhead  (real-valued; round up to nearest int ≥ min_beneficial)
         _OVERHEAD_MS = 16.0
         batch_size   = self._yane._population.max_size
-        seq_time     = batch_size * eval_ms   # ms if evaluated sequentially
-
-        if seq_time <= _OVERHEAD_MS:
-            # Even with unlimited workers the per-batch overhead dominates.
-            optimal = 1
-        else:
-            min_beneficial = math.ceil(seq_time / (seq_time - _OVERHEAD_MS))
-            min_beneficial = max(2, min_beneficial)
-            optimal = max(min_beneficial, int(seq_time / _OVERHEAD_MS))
-
-        chosen = min(n_workers, optimal)
+        chosen       = _optimal_workers(eval_ms, batch_size, _OVERHEAD_MS, n_workers)
 
         if auto:
             if chosen <= 1:
@@ -367,13 +382,7 @@ class TrainingWorker(QThread):
                     eval_ema = (1 - _ALPHA) * eval_ema + _ALPHA * est
 
                     if auto and batch_count % _RESCALE_EVERY == 0:
-                        _seq = batch_size * eval_ema
-                        if _seq <= _OVERHEAD_MS:
-                            _new_raw = 1
-                        else:
-                            _min_b = math.ceil(_seq / (_seq - _OVERHEAD_MS))
-                            _new_raw = max(max(2, _min_b), int(_seq / _OVERHEAD_MS))
-                        new_opt = min(n_workers_max, _new_raw)
+                        new_opt = _optimal_workers(eval_ema, batch_size, _OVERHEAD_MS, n_workers_max)
                         if abs(new_opt - n_workers) >= 2:
                             pool.terminate(); pool.join()
                             n_workers  = new_opt
