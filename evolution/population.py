@@ -496,12 +496,13 @@ class Population:
             sp.update_stagnation(best)
 
         # Adapt threshold so species count converges to target_species.
-        # Step 0.005 keeps adaptation smooth relative to δ range [0, ~0.15].
+        # Step 0.02: 4× larger than the original 0.005 so the species count
+        # converges to target_species faster (reducing compatibility calls).
         n = len(self._species)
         if n > self._target_species:
-            self._compat_threshold = min(1.5, self._compat_threshold + 0.005)
+            self._compat_threshold = min(1.5, self._compat_threshold + 0.02)
         elif n < self._target_species:
-            self._compat_threshold = max(0.01, self._compat_threshold - 0.005)
+            self._compat_threshold = max(0.01, self._compat_threshold - 0.02)
 
     def _compute_shared_fitness(self) -> None:
         # No parsimony penalty: even a tiny coefficient causes evolution to
