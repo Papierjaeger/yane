@@ -226,15 +226,26 @@ def _make_cliffwalking_eval(max_steps: int = 200):
             done = False
             steps = 0
             prev_dist = abs(obs // 12 - goal_row) + abs(obs % 12 - goal_col)
+            best_dist = prev_dist
             while not done and steps < cap:
                 row, col = obs // 12, obs % 12
                 inputs = [row / 3.0, col / 11.0]
                 out = genome.forward(inputs)
                 action = out.index(max(out))
                 obs, reward, terminated, truncated, _ = env.step(action)
-                new_dist = abs(obs // 12 - goal_row) + abs(obs % 12 - goal_col)
-                # Shaping: +0.5 when moving toward goal, -0.5 away
-                total += reward + 0.5 * (prev_dist - new_dist)
+                new_row, new_col = obs // 12, obs % 12
+                new_dist = abs(new_row - goal_row) + abs(new_col - goal_col)
+                # Stronger shaping: +1.0 toward goal, -0.5 away (asymmetric)
+                delta = prev_dist - new_dist
+                shape = 1.0 * delta if delta > 0 else 0.5 * delta
+                total += reward + shape
+                # Bonus for reaching new closest position (encourages exploration)
+                if new_dist < best_dist:
+                    total += 2.0
+                    best_dist = new_dist
+                # Big reward for actually reaching the goal
+                if new_row == goal_row and new_col == goal_col:
+                    total += 50.0
                 prev_dist = new_dist
                 done = terminated or truncated
                 steps += 1
@@ -320,25 +331,36 @@ def _make_taxi_eval(max_steps: int = 500):
             total = 0.0
             done = False
             steps = 0
+            prev_pass_in_taxi = False
             while not done and steps < cap:
                 row, col, pass_loc, dest = _decode(obs)
                 inputs = [row / 4.0, col / 4.0, pass_loc / 4.0, dest / 3.0]
                 out = genome.forward(inputs)
                 action = out.index(max(out))
-                prev_row, prev_col = row, col
+                prev_row, prev_col, prev_pass_loc = row, col, pass_loc
                 obs, reward, terminated, truncated, _ = env.step(action)
-                row, col, pass_loc_new, dest_new = _decode(obs)
+                row, col, pass_loc_new, _dest_new = _decode(obs)
 
                 # Reward shaping: encourage moving toward passenger or destination
-                if pass_loc < 4:   # passenger not yet in taxi
-                    pr, pc = _locs[pass_loc]
+                if prev_pass_loc < 4:   # passenger not yet in taxi
+                    pr, pc = _locs[prev_pass_loc]
                     prev_d = abs(prev_row - pr) + abs(prev_col - pc)
                     new_d  = abs(row - pr) + abs(col - pc)
-                else:              # passenger in taxi → head for destination
+                else:                   # passenger in taxi → head for destination
                     dr, dc = _locs[dest]
                     prev_d = abs(prev_row - dr) + abs(prev_col - dc)
                     new_d  = abs(row - dr) + abs(col - dc)
-                total += reward + 0.5 * (prev_d - new_d)
+                # Asymmetric shaping: +1.0 toward, -0.5 away
+                delta = prev_d - new_d
+                shape = 1.0 * delta if delta > 0 else 0.5 * delta
+                total += reward + shape
+                # Big bonus the moment the passenger is picked up
+                if pass_loc_new == 4 and not prev_pass_in_taxi:
+                    total += 30.0
+                    prev_pass_in_taxi = True
+                # Strong terminal bonus when delivery succeeds (terminated=True only on legal dropoff)
+                if terminated:
+                    total += 50.0
                 done = terminated or truncated
                 steps += 1
                 if _hooks: _hooks(total, env)
@@ -636,7 +658,7 @@ def load_examples() -> list[ExampleConfig]:
             description="Lernt eine kontinuierliche 3→3 Abbildung (8 Samples) — nichtlinear.",
             n_inputs=_REG33_NI, n_outputs=_REG33_NO,
             max_nodes=30, max_connections=120,
-            n_initial_hidden=6,    # 3 outputs × 2 hidden each
+            n_initial_hidden=9,    # 3 outputs × 3 hidden each — increase capacity for seed-robustness
             make_eval=_reg33_make_eval,
             target_fitness=_REG33_FIT,
             category="Dataset",
@@ -762,12 +784,13 @@ def load_examples() -> list[ExampleConfig]:
                 description=(
                     "Navigiere über ein 4×12-Gitter ohne in die Klippe zu fallen.\n"
                     "Inputs: Zeile/3, Spalte/11. Strafe: -1/Schritt, -100 Klippe.\n"
-                    "Ziel: Fitness ≥ -50 (optimal: -37)."
+                    "Reward-Shaping + Bonus für neue Distanz-Bestmarken und Zielerreichung."
                 ),
                 n_inputs=2, n_outputs=4,
-                max_nodes=20, max_connections=60,
+                max_nodes=30, max_connections=100,
+                n_initial_hidden=4,
                 make_eval=_make_cliffwalking_eval(max_steps=200),
-                target_fitness=-50.0,
+                target_fitness=0.0,
                 category="Toy Text",
                 supports_render=True,
             ),
@@ -796,7 +819,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=40, max_connections=150,
                 n_initial_hidden=6,    # 6 actions × full input visibility needed
                 make_eval=_make_taxi_eval(max_steps=500),
-                target_fitness=-170.0,    # baseline ≈ -200; -170 = meaningful shaping progress
+                target_fitness=-120.0,    # requires pickup + significant progress toward destination
                 category="Toy Text",
                 supports_render=True,
             ),
