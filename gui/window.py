@@ -621,6 +621,44 @@ class TrainingTab(QWidget):
             "3–5 = gut für Regression/Supervised Learning\n"
             "0 = empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!)")
 
+        self.spin_multi_eval = QSpinBox()
+        self.spin_multi_eval.setRange(1, 50)
+        self.spin_multi_eval.setValue(1)
+        self.spin_multi_eval.setSpecialValueText("—")
+        self.spin_multi_eval.setToolTip(
+            "Mehrfachbewertung: Anzahl Evaluierungen pro Genome.\n\n"
+            "Bei stochastischen Umgebungen ist eine einzelne Episode oft zu verrauscht.\n"
+            "Mit n > 1 wird jedes Genome n-mal bewertet und die Ergebnisse aggregiert.\n\n"
+            "1 = deaktiviert (Standard)\n"
+            "3–10 = gut für rauschige Gym-Umgebungen\n\n"
+            "Kosten: n-facher Zeitaufwand pro Genome!")
+
+        self.combo_aggregation = QComboBox()
+        self.combo_aggregation.addItems(["mean", "median", "min"])
+        self.combo_aggregation.setToolTip(
+            "Aggregationsmethode für Mehrfachbewertung:\n\n"
+            "mean   — Mittelwert (Standard, empfohlen)\n"
+            "median — Median; robust gegen einzelne Ausreißer-Episoden\n"
+            "min    — Worst-Case; konservativste Wahl, selektiert auf Robustheit")
+        self.combo_aggregation.setEnabled(False)
+
+        self.dspin_sigma_penalty = QDoubleSpinBox()
+        self.dspin_sigma_penalty.setRange(0.0, 10.0)
+        self.dspin_sigma_penalty.setSingleStep(0.1)
+        self.dspin_sigma_penalty.setValue(0.0)
+        self.dspin_sigma_penalty.setDecimals(2)
+        self.dspin_sigma_penalty.setSpecialValueText("—")
+        self.dspin_sigma_penalty.setToolTip(
+            "Varianz-Strafe bei Mehrfachbewertung.\n\n"
+            "Endwert = aggregate(fitness) − sigma_penalty × std(fitness)\n\n"
+            "0   = keine Strafe (Standard)\n"
+            "0.5 = mäßige Strafe für inkonsistente Genome\n"
+            "1.0 = starke Strafe; ein Genome mit std=2 verliert 2 Fitnesspunkte\n\n"
+            "Nützlich wenn robuste Policies gewünscht sind, nicht nur gute Mittelwerte.")
+        self.dspin_sigma_penalty.setEnabled(False)
+
+        self.spin_multi_eval.valueChanged.connect(self._on_multi_eval_changed)
+
         import multiprocessing as _mp
         _ncpu = _mp.cpu_count()
         self.spin_workers = QSpinBox()
@@ -694,6 +732,9 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Workers:", workers_row)
         cfg_form.addRow("Zielarten:",      self.spin_species)
         cfg_form.addRow("Lamarck steps:",  self.spin_lamarck)
+        cfg_form.addRow("Mehrfachbew.:",   self.spin_multi_eval)
+        cfg_form.addRow("Aggregation:",    self.combo_aggregation)
+        cfg_form.addRow("Sigma-Strafe:",   self.dspin_sigma_penalty)
         cfg_form.addRow("Normalisierung:", self.chk_normalize)
         cfg_form.addRow("Gedächtnis:",     self.chk_memory)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
@@ -869,6 +910,11 @@ class TrainingTab(QWidget):
         self.btn_run_best.setEnabled(False)
         self.example_changed.emit(ex)
 
+    def _on_multi_eval_changed(self, value: int) -> None:
+        enabled = value > 1
+        self.combo_aggregation.setEnabled(enabled)
+        self.dspin_sigma_penalty.setEnabled(enabled)
+
     def _on_render_toggled(self, checked: bool) -> None:
         self.btn_render.setText("Render: On" if checked else "Render: Off")
         self._render_group.setVisible(checked)
@@ -898,6 +944,13 @@ class TrainingTab(QWidget):
             lamarck_steps = self.spin_lamarck.value()
             if lamarck_steps > 0:
                 self._yane.set_lamarck(n_steps=lamarck_steps)
+            n_eval = self.spin_multi_eval.value()
+            if n_eval > 1:
+                self._yane.set_multi_eval(
+                    n=n_eval,
+                    aggregation=self.combo_aggregation.currentText(),
+                    sigma_penalty=self.dspin_sigma_penalty.value(),
+                )
             self._yane.set_resource_limits(max_process_gb=self.dspin_mem.value())
             target = self.dspin_target.value()
             if target > -1e9:
