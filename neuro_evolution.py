@@ -352,8 +352,13 @@ class NeuroEvolution:
             self._population._target_species = n
 
     def set_n_workers(self, n: int) -> None:
-        """Number of parallel workers for evaluation (default 1 = sequential)."""
-        self._n_workers = max(1, n)
+        """Number of parallel workers for evaluation.
+
+        0 = Auto (GUI measures eval speed and picks the optimal count).
+        1 = sequential (default).
+        n > 1 = fixed worker count.
+        """
+        self._n_workers = max(0, n)
 
     # -------------------------------------------------------------------------
     # Manual loop (for complex multi-step evaluation)

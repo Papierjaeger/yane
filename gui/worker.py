@@ -138,11 +138,17 @@ class TrainingWorker(QThread):
         return self._iteration
 
     def run(self) -> None:
+        import sys
         self._running = True
         self._iteration = 0
         last_emit = 0.0
 
         n_workers = getattr(self._yane, '_n_workers', 1)
+        n_eval    = getattr(self._yane, '_n_evaluations', 1)
+        print(f"[WORKER-START] _n_workers={n_workers}  _n_evaluations={n_eval}  "
+              f"cpu_count={mp.cpu_count()}",
+              file=sys.stderr, flush=True)
+
         if n_workers == 0:
             # Auto: let _run_multiprocess measure eval speed and choose
             self._run_multiprocess(mp.cpu_count(), last_emit, auto=True)
@@ -151,6 +157,7 @@ class TrainingWorker(QThread):
             self._run_multiprocess(n_workers, last_emit, auto=False)
         else:
             self.workers_resolved.emit(1)
+            print(f"[WORKER-START] → _run_sequential (auto=False)", file=sys.stderr, flush=True)
             self._run_sequential(last_emit)
 
     def _run_sequential(self, last_emit: float, auto: bool = False) -> None:
@@ -181,9 +188,13 @@ class TrainingWorker(QThread):
                 # The first genome is often empty (no connections) and thus much
                 # faster than later genomes — this re-check catches the transition.
                 if auto and self._iteration % _MP_RECHECK_EVERY == 0:
+                    import sys
                     batch_size = self._yane._population.max_size
                     needed = _optimal_workers(elapsed_ms, batch_size, _OVERHEAD_MS,
                                              mp.cpu_count())
+                    print(f"[SEQ-RECHECK] iter={self._iteration}  elapsed_ms={elapsed_ms:.3f}  "
+                          f"batch={batch_size}  needed={needed}",
+                          file=sys.stderr, flush=True)
                     if needed >= 2:
                         _close_env(self._evaluate)
                         self.workers_resolved.emit(needed)
@@ -325,6 +336,12 @@ class TrainingWorker(QThread):
         chosen        = _optimal_workers(eval_ms, batch_size, _OVERHEAD_MS, n_workers)
         seq_time      = batch_size * eval_ms
 
+        import sys
+        print(f"[AUTO-DEBUG] bootstrap eval_ms={eval_ms:.3f}  batch={batch_size}  "
+              f"seq_time={seq_time:.1f}ms  overhead={_OVERHEAD_MS}ms  "
+              f"chosen={chosen}  n_workers_max={n_workers_max}  auto={auto}",
+              file=sys.stderr, flush=True)
+
         if auto:
             # In auto mode never fall back to sequential based on the bootstrap
             # alone: the first genome is often empty (no connections) and evaluates
@@ -407,9 +424,16 @@ class TrainingWorker(QThread):
                     # Update eval estimate and optionally rescale pool
                     est = max(0.01, (map_ms - _OVERHEAD_MS) * n_workers / len(genomes))
                     eval_ema = (1 - _ALPHA) * eval_ema + _ALPHA * est
+                    print(f"[EMA-DEBUG] batch={batch_count}  map_ms={map_ms:.1f}  "
+                          f"est={est:.3f}  eval_ema={eval_ema:.3f}  "
+                          f"n_workers={n_workers}  n_workers_max={n_workers_max}",
+                          file=sys.stderr, flush=True)
 
                     if auto and batch_count % _RESCALE_EVERY == 0:
                         new_opt = _optimal_workers(eval_ema, batch_size, _OVERHEAD_MS, n_workers_max)
+                        print(f"[RESCALE-DEBUG] batch={batch_count}  eval_ema={eval_ema:.3f}  "
+                              f"new_opt={new_opt}  current={n_workers}  max={n_workers_max}",
+                              file=sys.stderr, flush=True)
                         if new_opt <= 1:
                             # EMA has converged: sequential is faster.
                             # Switch to sequential (with auto=True so it can switch
