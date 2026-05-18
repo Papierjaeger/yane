@@ -319,9 +319,11 @@ class TrainingWorker(QThread):
         #
         # "Optimal" w (eval-work-per-worker equals overhead, diminishing returns):
         #   w_opt = seq_time / overhead  (real-valued; round up to nearest int ≥ min_beneficial)
-        _OVERHEAD_MS = 16.0
-        batch_size   = self._yane._population.max_size
-        chosen       = _optimal_workers(eval_ms, batch_size, _OVERHEAD_MS, n_workers)
+        _OVERHEAD_MS  = 16.0
+        batch_size    = self._yane._population.max_size
+        n_workers_max = n_workers   # preserve cpu_count cap before any override
+        chosen        = _optimal_workers(eval_ms, batch_size, _OVERHEAD_MS, n_workers)
+        seq_time      = batch_size * eval_ms
 
         if auto:
             # In auto mode never fall back to sequential based on the bootstrap
@@ -337,19 +339,17 @@ class TrainingWorker(QThread):
                 f"Auto → {n_workers} Worker "
                 f"({eval_ms:.2f}ms/Genome, EMA justiert laufend)"
             )
-        elif optimal <= 1:
+        elif chosen <= 1:
             self.workers_resolved.emit(1)
             self.info_message.emit(
                 f"MP-Overhead > Nutzen ({eval_ms:.2f}ms/Genome, "
-                f"seq={seq_time:.0f}ms < overhead={_OVERHEAD_MS:.0f}ms) "
+                f"seq={seq_time:.0f}ms ≤ overhead={_OVERHEAD_MS:.0f}ms) "
                 f"— Training läuft sequenziell."
             )
             self._run_sequential(0.0)
             return
         else:
             self.workers_resolved.emit(n_workers)
-
-        n_workers_max = n_workers   # ceiling for auto-mode rescaling
 
         def _make_pool(nw: int):
             return ctx.Pool(
