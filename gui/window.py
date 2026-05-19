@@ -2158,6 +2158,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("YANE — Yet Another Neuro Evolution")
         self.resize(1000, 700)
         self.setStyleSheet(_QSS)
+        self._best_fitness_for_dot: float = float('-inf')
 
         central = QWidget()
         root = QHBoxLayout(central)
@@ -2186,6 +2187,7 @@ class MainWindow(QMainWindow):
         self._training_tab.genome_updated.connect(self._on_genome_for_inspect)
         self._training_tab.example_changed.connect(self._inspect_tab.set_example)
         self._training_tab.training_started.connect(self._inspect_tab.reset_genome)
+        self._training_tab.training_started.connect(self._reset_best_fitness_for_dot)
         tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(tabs, stretch=1)
 
@@ -2203,8 +2205,13 @@ class MainWindow(QMainWindow):
 
     def _on_genome_for_inspect(self, genome, mem: dict, do_heavy: bool) -> None:
         self._inspect_tab.update_genome(genome, mem)
-        if self._tabs.currentWidget() is not self._inspect_tab:
+        if (genome.fitness > self._best_fitness_for_dot
+                and self._tabs.currentWidget() is not self._inspect_tab):
+            self._best_fitness_for_dot = genome.fitness
             self._tabs.setTabText(1, "  Inspect ●  ")
+
+    def _reset_best_fitness_for_dot(self) -> None:
+        self._best_fitness_for_dot = float('-inf')
 
     def _on_tab_changed(self, index: int) -> None:
         if self._tabs.widget(index) is self._inspect_tab:
