@@ -957,10 +957,6 @@ class TrainingTab(QWidget):
         # Init with first example
         self._on_example_changed(0)
 
-        # RAM refresh timer
-        self._ram_timer = QTimer()
-        self._ram_timer.timeout.connect(self._refresh_ram)
-        self._ram_timer.start(1000)
 
     # Category display order
     _CATEGORY_ORDER = ["Dataset", "Toy Text", "Classic Control", "Box2D", "Pixel", "Sonstiges"]
@@ -1238,6 +1234,7 @@ class TrainingTab(QWidget):
     def _on_error(self, msg: str) -> None:
         self._had_error = True
         self._reset_training_buttons()
+        self._update_ram_bar()
         self.status_lbl.setText("Error")
         QMessageBox.critical(self, "Training Error", msg)
 
@@ -1262,12 +1259,9 @@ class TrainingTab(QWidget):
                 self.genome_updated.emit(best, mem, True)  # full update on finish
             except Exception:
                 pass
+        self._update_ram_bar()
         self._worker = None
         self._yane = None
-
-    def _refresh_ram(self) -> None:
-        if self._worker and self._worker.isRunning():
-            self._update_ram_bar()
 
     def _update_ram_bar(self) -> None:
         from yane.util.resource_guard import ResourceGuard
@@ -1483,6 +1477,8 @@ class InspectTab(QWidget):
         self._seq_step: int = 0      # number of steps executed so far
         self._memory_labels: list[QLabel] = []
         self._mem_sig: tuple = ()    # (innovation,...) of current memory nodes
+        self._pending_genome = None
+        self._pending_mem: dict = {}
 
         # Outer layout + scroll area
         outer = QVBoxLayout(self)
@@ -1657,6 +1653,20 @@ class InspectTab(QWidget):
         self._update_seq_buttons()
 
     def update_genome(self, genome, mem: dict) -> None:
+        self._pending_genome = genome
+        self._pending_mem = mem
+        if not self.isVisible():
+            return
+        self._apply_genome_update(genome, mem)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._pending_genome is not None:
+            self._apply_genome_update(self._pending_genome, self._pending_mem)
+            self._pending_genome = None
+            self._pending_mem = {}
+
+    def _apply_genome_update(self, genome, mem: dict) -> None:
         self._no_genome_lbl.setVisible(False)
         if self._genome is not None and self._genome is not genome:
             self._genome._clear()
@@ -2117,7 +2127,6 @@ class MainWindow(QMainWindow):
         self.setStatusBar(bar)
 
     def closeEvent(self, event) -> None:
-        self._training_tab._ram_timer.stop()
         w = self._training_tab._worker
         if w and w.isRunning():
             self.setWindowTitle("YANE — Stopping…")

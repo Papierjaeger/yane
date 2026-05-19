@@ -51,15 +51,16 @@ def _force_layout(
             return h / 2.0
         return pad + (h - 2 * pad) * idx / (total - 1)
 
+    # Keys are node.innovation so positions survive genome.copy() across updates.
     pos: dict[int, list[float]] = {}
 
     # Fixed anchors
     x_in  = pad + _NODE_R
     x_out = w - pad - _NODE_R
     for i, n in enumerate(inputs):
-        pos[id(n)] = [x_in, spread_y(i, len(inputs))]
+        pos[n.innovation] = [x_in, spread_y(i, len(inputs))]
     for i, n in enumerate(outputs):
-        pos[id(n)] = [x_out, spread_y(i, len(outputs))]
+        pos[n.innovation] = [x_out, spread_y(i, len(outputs))]
 
     if not hidden:
         return pos
@@ -69,7 +70,7 @@ def _force_layout(
     cx, cy = (x_in + x_out) / 2.0, h / 2.0
     spread = min(w, h) * 0.15
     for n in hidden:
-        pos[id(n)] = [
+        pos[n.innovation] = [
             cx + rng.uniform(-spread, spread),
             cy + rng.uniform(-spread, spread),
         ]
@@ -78,10 +79,10 @@ def _force_layout(
     edges: list[tuple[int, int, float]] = []
     for src in nodes_all:
         for conn in src.connections:
-            if conn.target is not src and id(conn.target) in pos:
-                edges.append((id(src), id(conn.target), abs(conn.weight)))
+            if conn.target is not src and conn.target.innovation in pos:
+                edges.append((src.innovation, conn.target.innovation, abs(conn.weight)))
 
-    hidden_ids = {id(n) for n in hidden}
+    hidden_ids = {n.innovation for n in hidden}
     all_ids    = list(pos.keys())
 
     # Area-based optimal distance (Fruchterman-Reingold)
@@ -168,15 +169,30 @@ class NetworkCanvas(QWidget):
         self._genome = None
         self._pos_cache: dict = {}
         self._cached_size: tuple[int, int] = (0, 0)
+        self._topo_sig: tuple = ()
         self._last_repaint: float = 0.0
         self.setMinimumSize(260, 220)
+
+    @staticmethod
+    def _topology_sig(genome) -> tuple:
+        """Signature that changes only when topology changes, not when weights change."""
+        nodes = tuple(n.innovation for n in genome.nodes)
+        conns = tuple(
+            (src.innovation, conn.target.innovation)
+            for src in genome.nodes
+            for conn in src.connections
+        )
+        return nodes + conns
 
     def set_genome(self, genome) -> None:
         import time as _t
         # Do NOT call _clear() on the old genome — it is still owned by the
         # caller (Population); clearing it here would destroy its node data.
         self._genome = genome
-        self._pos_cache = {}
+        sig = self._topology_sig(genome)
+        if sig != self._topo_sig:
+            self._topo_sig = sig
+            self._pos_cache = {}
         now = _t.perf_counter()
         if now - self._last_repaint >= self._REPAINT_INTERVAL_S:
             self._last_repaint = now
@@ -244,11 +260,11 @@ class NetworkCanvas(QWidget):
             _pen = QPen(_conn_color, 1.0)
 
             for node in self._genome.nodes:
-                src = pos.get(id(node))
+                src = pos.get(node.innovation)
                 if src is None:
                     continue
                 for conn in node.connections:
-                    dst = pos.get(id(conn.target))
+                    dst = pos.get(conn.target.innovation)
                     if dst is None:
                         continue
 
@@ -287,7 +303,7 @@ class NetworkCanvas(QWidget):
             painter.setFont(font)
 
             for node in self._genome.nodes:
-                p = pos.get(id(node))
+                p = pos.get(node.innovation)
                 if p is None:
                     continue
 
