@@ -1,6 +1,7 @@
 from __future__ import annotations
 import math
 import random
+from heapq import nlargest
 from operator import attrgetter
 
 import numpy as np
@@ -323,7 +324,7 @@ class Population:
 
         # Best-genome topology history — one entry per fitness improvement.
         # Each entry: (total_submitted, n_nodes, n_connections, fitness)
-        # Capped at 200 entries so it never grows unboundedly.
+        self._topology_history_max: int = 200
         self._best_topology_history: list[tuple[int, int, int, float]] = []
         self._total_submitted: int = 0
 
@@ -401,8 +402,8 @@ class Population:
             self._best_topology_history.append(
                 (self._total_submitted, len(genome.nodes), _cc, fitness)
             )
-            if len(self._best_topology_history) > 200:
-                self._best_topology_history = self._best_topology_history[-200:]
+            if len(self._best_topology_history) > self._topology_history_max:
+                self._best_topology_history = self._best_topology_history[-self._topology_history_max:]
         else:
             self._stagnation_count += 1
             self._since_last_injection += 1
@@ -886,12 +887,11 @@ class Population:
         # ever leave the evaluated pool; the elite object itself is never modified.
         protected: set = set()
         if self.elite_count > 0:
-            for g in sorted(self._evaluated, key=_fitness_key, reverse=True)[:self.elite_count]:
+            for g in nlargest(self.elite_count, self._evaluated, key=_fitness_key):
                 protected.add(g)
         if self.species_elite_count > 0:
             for sp in self._species:
-                sp_best = sorted(sp.members, key=_fitness_key, reverse=True)
-                for g in sp_best[:self.species_elite_count]:
+                for g in nlargest(self.species_elite_count, sp.members, key=_fitness_key):
                     protected.add(g)
 
         while self._evaluated and len(self._evaluated) + len(self._unevaluated) > self.max_size:
