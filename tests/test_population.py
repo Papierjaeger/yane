@@ -155,6 +155,82 @@ class TestPopulation(unittest.TestCase):
         # At least one offspring was created
         self.assertGreater(after, before)
 
+    def test_elite_count_default_is_one(self):
+        pop = self._make_population(max_size=10)
+        self.assertEqual(pop.elite_count, 1)
+        self.assertEqual(pop.species_elite_count, 1)
+
+    def test_global_best_survives_many_spawn_cycles(self):
+        pop = self._make_population(max_size=5)
+        # Seed the population
+        for i in range(5):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+        best = pop.get_best()
+        best_fitness = best.fitness
+        # Run many spawn/prune cycles
+        for _ in range(30):
+            g = pop.select_for_evaluation()
+            pop.submit(g, -999.0)   # always worse than best
+        # Original best must still be present
+        self.assertIn(best, pop._evaluated)
+        self.assertAlmostEqual(best.fitness, best_fitness)
+
+    def test_elite_count_zero_disables_global_protection(self):
+        pop = self._make_population(max_size=3)
+        pop.elite_count = 0
+        pop.species_elite_count = 0
+        for i in range(3):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+        # With elite_count=0 the best can be pruned when the population is over limit
+        # Just verify it doesn't crash and stays bounded
+        for _ in range(10):
+            g = pop.select_for_evaluation()
+            pop.submit(g, -1.0)
+        self.assertLessEqual(pop.size, pop.max_size + 1)
+
+    def test_elite_count_three_protects_top_three(self):
+        pop = self._make_population(max_size=10)
+        pop.elite_count = 3
+        pop.species_elite_count = 0
+        fitnesses = [10.0, 8.0, 6.0, 4.0, 2.0]
+        genomes = []
+        for f in fitnesses:
+            g = pop.select_for_evaluation()
+            pop.submit(g, f)
+            genomes.append((g, f))
+        # Force many prune cycles with bad offspring
+        for _ in range(20):
+            g = pop.select_for_evaluation()
+            pop.submit(g, -999.0)
+        evaluated_fitnesses = sorted([g.fitness for g in pop._evaluated], reverse=True)
+        # Top-3 fitnesses must still be present
+        for f in [10.0, 8.0, 6.0]:
+            self.assertIn(f, evaluated_fitnesses,
+                msg=f"Elite fitness {f} should still be in population")
+
+    def test_species_elite_protects_single_member_species(self):
+        pop = self._make_population(max_size=5)
+        pop.species_elite_count = 1
+        # Submit enough genomes to fill pop
+        for i in range(5):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+        # Manually inject a species with one member
+        from yane.evolution.population import Species
+        unique_genome = pop._evaluated[-1]
+        sp = Species(unique_genome)
+        sp.members = [unique_genome]
+        pop._species = [sp]
+        # Now prune — the single-member champion should be protected
+        original_size = len(pop._evaluated)
+        # Add a bad genome to force pruning
+        g = pop.select_for_evaluation()
+        pop.submit(g, -999.0)
+        self.assertIn(unique_genome, pop._evaluated,
+            "Single-member species champion must be protected from pruning")
+
     def test_diversity_injection_counter_increments(self):
         pop = self._make_population(max_size=5)
         for i in range(3):

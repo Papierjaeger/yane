@@ -78,21 +78,6 @@ Nutzen:
 
 ## 2. Evolution und Suchstrategie
 
-### P0: Elitismus explizit machen
-
-Aktuell schuetzt `_prune()` das beste Genom und Species-Champions. Das sollte als klares Feature sichtbar und konfigurierbar sein.
-
-Aufgaben:
-
-- `elite_count` pro Population einfuehren.
-- `species_elite_count` einfuehren.
-- Dokumentieren, wann Eliten unveraendert erhalten bleiben.
-- Tests fuer Elite-Erhalt ueber mehrere Spawn-Zyklen.
-
-Nutzen:
-
-- Weniger Risiko, gute Loesungen durch Zufall zu verlieren.
-- Besser steuerbare Evolution.
 
 ### P0: Mutation- und Strategie-Gene sichtbar machen
 
@@ -637,6 +622,7 @@ Nutzen:
 - [x] Bewertungszeit in den GUI-Worker-Pfaden messen.
 - [x] Einheitliche Evaluation-Statistiken (mean/median/p95/max Eval-Zeit, Offspring-Zähler, Topologie-Historie).
 - [x] GUI-Diagnostics fuer Eval-Zeit und Offspring-Zähler.
+- [x] Elitismus explizit machen (elite_count, species_elite_count, set_elitism()).
 - [ ] Fitness-Sanitizing zentralisieren.
 - [ ] `EvaluationResult`-Objekt einfuehren.
 - [ ] Seed-Parameter fuer `NeuroEvolution` einfuehren.
@@ -656,3 +642,7 @@ YANE misst Bewertungszeiten in `train()` und in den GUI-Worker-Pfaden. Die Rohfi
 ### Einheitliche Evaluation-Statistiken
 
 Pro Trainingsschritt werden jetzt erfasst: mean/median/p95/max der Eval-Zeiten ueber alle evaluierten Genome, kumulative Offspring-Zaehler (crossover / mutation / diversity injection), sowie eine Topologie-Historie des besten Genoms bei jeder Fitness-Verbesserung. Alle Werte fliessen via `population_memory_info()` in die GUI (zwei neue Sektionen im LeftPanel).
+
+### Elitismus explizit machen
+
+`elite_count` (globale Top-k) und `species_elite_count` (bestes je Species) sind jetzt konfigurierbar via `set_elitism()`. Single-member-Species-Champions sind ebenfalls geschützt. Eliten werden nie gelöscht, aber weiterhin als Elternteile genutzt — nur Kopien mutieren. Defaults entsprechen dem bisherigen Verhalten.

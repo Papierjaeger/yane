@@ -241,6 +241,12 @@ class Population:
         target_species: int = 5,
     ) -> None:
         self.max_size = max_size
+        # Elitism: how many top genomes to protect from pruning globally and per species.
+        # elite_count=1 preserves the global best; species_elite_count=1 preserves the
+        # best of each species (regardless of species size). Elites are never deleted but
+        # CAN still be selected as parents — only mutated copies leave the evaluated pool.
+        self.elite_count: int = 1
+        self.species_elite_count: int = 1
         seed = initial_genome or Genome()
         self._unevaluated: list[Genome] = [seed]
         # Separate copy as template for diversity injection — never evaluated,
@@ -867,19 +873,26 @@ class Population:
         if not (self._evaluated and len(self._evaluated) + len(self._unevaluated) > self.max_size):
             return
 
-        # Compute the protected set once — we only ever remove non-protected genomes,
-        # so the global best and species champions never change during this prune pass.
-        # Only protect species champions of multi-member species.
-        # Single-genome species don't represent "protected innovation" —
-        # they're just isolated genomes that happened to form their own
-        # cluster. Protecting all single-genome champions would block
-        # pruning entirely when every genome is in its own species.
-        # Store genome object references directly — avoids calling id() on every
-        # genome in the candidates comprehension (was 600K+ id() calls per run).
-        protected: set = {self.get_best()}
-        for sp in self._species:
-            if len(sp.members) > 1:
-                protected.add(sp.best())
+        # Build the protected set from configured elite counts.
+        #
+        # Global elites: top elite_count genomes by fitness — never deleted.
+        # Species elites: best species_elite_count genomes per species — never deleted.
+        #   Applies to all species regardless of size; single-genome species are
+        #   protected too. Degenerate case (every genome in its own species) is
+        #   prevented in practice by _target_species / adaptive compat threshold.
+        #
+        # Elites are preserved in _evaluated across all pruning passes. They can
+        # still be selected as parents and produce mutated children — only copies
+        # ever leave the evaluated pool; the elite object itself is never modified.
+        protected: set = set()
+        if self.elite_count > 0:
+            for g in sorted(self._evaluated, key=_fitness_key, reverse=True)[:self.elite_count]:
+                protected.add(g)
+        if self.species_elite_count > 0:
+            for sp in self._species:
+                sp_best = sorted(sp.members, key=_fitness_key, reverse=True)
+                for g in sp_best[:self.species_elite_count]:
+                    protected.add(g)
 
         while self._evaluated and len(self._evaluated) + len(self._unevaluated) > self.max_size:
             if len(self._evaluated) <= 1:

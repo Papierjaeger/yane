@@ -82,6 +82,9 @@ class NeuroEvolution:
         self._n_evaluations: int = 1
         self._eval_aggregation: str = "mean"
         self._eval_sigma_penalty: float = 0.0
+        # Elitism (applied to population on configure())
+        self._elite_count: int = 1
+        self._species_elite_count: int = 1
         # Fitness sanitizing (disabled by default)
         self._sanitize: bool = False
         self._sanitize_fallback: float = 0.0
@@ -173,6 +176,8 @@ class NeuroEvolution:
             initial_genome=initial,
             tracker=tracker,
         )
+        self._population.elite_count = self._elite_count
+        self._population.species_elite_count = self._species_elite_count
 
     def set_min_fitness(self, value: float) -> None:
         self.min_fitness = value
@@ -396,6 +401,9 @@ class NeuroEvolution:
                             / max(1, len(self._population._evaluated))),
             "n_evaluations":    self._n_evaluations,
             "eval_aggregation": self._eval_aggregation,
+            # Elitism configuration
+            "elite_count":         self._population.elite_count,
+            "species_elite_count": self._population.species_elite_count,
             # Fitness sanitizing diagnostics
             "sanitize_enabled":    self._sanitize,
             "n_invalid_fitness":   self._n_invalid_fitness,
@@ -439,6 +447,37 @@ class NeuroEvolution:
         n = max(1, n)
         if self._population is not None:
             self._population._target_species = n
+
+    def set_elitism(
+        self,
+        elite_count: int = 1,
+        species_elite_count: int = 1,
+    ) -> None:
+        """Configure explicit elitism for the population.
+
+        elite_count:
+            Number of top-fitness genomes (globally) that are never removed
+            by pruning. Default 1 preserves the global best at all times.
+            Set to 0 to disable global elite protection.
+
+        species_elite_count:
+            Number of top-fitness genomes per species that are never removed
+            by pruning. Default 1 preserves each species' best genome,
+            regardless of species size — this protects structural innovations
+            even in single-genome species. Set to 0 to disable.
+
+        Elite genomes are preserved unchanged in the evaluated pool across
+        all generations. They CAN be selected as parents — mutated copies are
+        what enter the offspring pool, never the elite object itself.
+        """
+        elite_count = max(0, elite_count)
+        species_elite_count = max(0, species_elite_count)
+        if self._population is not None:
+            self._population.elite_count = elite_count
+            self._population.species_elite_count = species_elite_count
+        # Store so configure() picks them up if called after set_elitism()
+        self._elite_count = elite_count
+        self._species_elite_count = species_elite_count
 
     def set_n_workers(self, n: int) -> None:
         """Number of parallel workers for evaluation.
