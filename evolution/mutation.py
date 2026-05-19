@@ -66,7 +66,9 @@ class Mutation:
             self.value_delta = d if 1e-6 <= d <= self.MAX_DELTA else (1e-6 if d < 1e-6 else self.MAX_DELTA)
 
     def copy(self) -> 'Mutation':
-        m = Mutation()
+        # object.__new__ skips __init__ (avoids 6 redundant default assignments
+        # that are immediately overwritten).  ~60k calls per 2000-eval run.
+        m = object.__new__(Mutation)
         m.shift_rate = self.shift_rate
         m.custom_rate = self.custom_rate
         m.bool_rate = self.bool_rate

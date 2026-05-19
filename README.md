@@ -69,7 +69,7 @@ Der Trainingsablauf ist:
 
 Das Startgenom enthält Input- und Output-Nodes, aber standardmäßig **keine Connections**. Die erste vielfältige Population wird durch zufällige Strukturmutationen aufgebaut. Optional können mit `n_initial_hidden` von Anfang an Hidden Nodes eingefügt werden.
 
-YANE ist NEAT-inspiriert und erweitert den Ansatz um selbstadaptierende Mutationsraten, Novelty Search, Memory Nodes, optionales Lamarckian Weight Refinement und Ressourcenlimits.
+YANE ist NEAT-inspiriert und erweitert den Ansatz um selbstadaptierende Mutationsraten, sieben Strukturmutationsoperatoren (darunter Rewire und Disable/Enable), Novelty Search, Memory Nodes, optionales Lamarckian Weight Refinement und Ressourcenlimits.
 
 ## Minimales Python-Beispiel
 

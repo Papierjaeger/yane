@@ -929,8 +929,15 @@ class Population:
                 protected.add(g)
         if self.species_elite_count > 0:
             for sp in self._species:
-                for g in nlargest(self.species_elite_count, sp.members, key=_fitness_key):
-                    protected.add(g)
+                if not sp.members:
+                    continue
+                if self.species_elite_count == 1:
+                    # sp.best() uses _cached_best in O(1) when available (set by
+                    # _assign_species), avoiding a full O(n) scan per species.
+                    protected.add(sp.best())
+                else:
+                    for g in nlargest(self.species_elite_count, sp.members, key=_fitness_key):
+                        protected.add(g)
 
         while self._evaluated and len(self._evaluated) + len(self._unevaluated) > self.max_size:
             if len(self._evaluated) <= 1:

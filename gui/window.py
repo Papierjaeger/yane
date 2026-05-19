@@ -259,6 +259,29 @@ class LeftPanel(QWidget):
         pop_layout.addRow("Clipped fitness:",   self.lbl_clipped_fitness)
         layout.addWidget(pop)
 
+        # ── Lamarck ───────────────────────────────────────────────────────
+        lamarck_grp = QGroupBox("Lamarck Refinement")
+        lamarck_stat_layout = QFormLayout(lamarck_grp)
+        lamarck_stat_layout.setSpacing(4)
+        self.lbl_lamarck_mode    = _label("—", "statValue")
+        self.lbl_lamarck_applied = _label("—", "mutRate")
+        self.lbl_lamarck_steps   = _label("—", "mutRate")
+        self.lbl_lamarck_mode.setToolTip(
+            "Aktueller Lamarck-Modus:\n"
+            "  adaptive — läuft automatisch bei Stagnation\n"
+            "  explicit — feste Schrittzahl vor jeder Eval\n"
+            "  off      — deaktiviert")
+        self.lbl_lamarck_applied.setToolTip(
+            "Anzahl der Genome, für die Lamarck-Verfeinerung durchgeführt wurde\n"
+            "(kumulativ seit Trainingsstart).")
+        self.lbl_lamarck_steps.setToolTip(
+            "Gesamtzahl der Hill-Climbing-Schritte (kumulativ).\n"
+            "Ein Schritt = eine Fitnessmessung zum Testen einer Gewichtsänderung.")
+        lamarck_stat_layout.addRow("Modus:",          self.lbl_lamarck_mode)
+        lamarck_stat_layout.addRow("Angewendet:",     self.lbl_lamarck_applied)
+        lamarck_stat_layout.addRow("Schritte gesamt:", self.lbl_lamarck_steps)
+        layout.addWidget(lamarck_grp)
+
         # ── Evaluation timing ─────────────────────────────────────────────
         eval_grp = QGroupBox("Evaluation timing")
         eval_layout = QFormLayout(eval_grp)
@@ -502,6 +525,17 @@ class LeftPanel(QWidget):
             v = mem.get(key)
             lbl.setText(str(v) if v is not None else "—")
 
+        # Lamarck stats
+        lamarck_mode = mem.get("lamarck_mode")
+        if lamarck_mode is not None:
+            self.lbl_lamarck_mode.setText(lamarck_mode)
+        n_applied = mem.get("lamarck_n_applied")
+        if n_applied is not None:
+            self.lbl_lamarck_applied.setText(str(n_applied))
+        n_steps_total = mem.get("lamarck_n_steps_total")
+        if n_steps_total is not None:
+            self.lbl_lamarck_steps.setText(str(n_steps_total))
+
         # Structure mutations
         self.lbl_rate_add_node.setText(f"{genome.mutation_add_node.bool_rate:.4f}")
         self.lbl_rate_rem_node.setText(f"{genome.mutation_remove_node.bool_rate:.4f}")
@@ -681,21 +715,34 @@ class TrainingTab(QWidget):
             "— = kein Zielwert (Training läuft bis du Stop drückst).\n"
             "Beispiel: CartPole gilt als gelöst ab Fitness 500.")
 
+        self.combo_lamarck_mode = QComboBox()
+        self.combo_lamarck_mode.addItems(["Adaptiv (Standard)", "Explizit", "Aus"])
+        self.combo_lamarck_mode.setToolTip(
+            "Lamarck-Modus:\n\n"
+            "Adaptiv (Standard) — läuft automatisch bei Stagnation.\n"
+            "  Schrittanzahl steigt von 0 → max_steps proportional zum Stagnationsgrad.\n"
+            "  Nur die besten 20 % der Population werden verfeinert.\n"
+            "  Kein Setup nötig, empfohlen für die meisten Aufgaben.\n\n"
+            "Explizit — feste Schrittzahl vor jeder Fitnessbewertung.\n"
+            "  Schrittanzahl rechts wählen.\n"
+            "  Gut für Dataset-Aufgaben (XOR, Regression), wo jede Eval billig ist.\n"
+            "  Nicht empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!).\n\n"
+            "Aus — Lamarck komplett deaktiviert.")
+
         self.spin_lamarck = QSpinBox()
-        self.spin_lamarck.setRange(0, 20)
-        self.spin_lamarck.setValue(0)
-        self.spin_lamarck.setSpecialValueText("Aus")
+        self.spin_lamarck.setRange(1, 20)
+        self.spin_lamarck.setValue(5)
+        self.spin_lamarck.setEnabled(False)
         self.spin_lamarck.setToolTip(
-            "Lamarck-Gewichtsoptimierung: Anzahl Hill-Climbing-Schritte pro Offspring.\n\n"
+            "Anzahl expliziter Hill-Climbing-Schritte pro Genome (nur im Modus 'Explizit').\n\n"
             "Was passiert pro Schritt:\n"
             "  1. Alle Gewichte + Biases mit Gauß-Rauschen perturbieren\n"
             "  2. Fitness messen\n"
             "  3. Besser → behalten,  Schlechter → zurücksetzen\n\n"
-            "Schrittgröße = sigma_global des Genoms (evolviert sich selbst automatisch).\n"
-            "Kein manuelles sigma nötig.\n\n"
-            "0 = deaktiviert\n"
-            "3–5 = gut für Regression/Supervised Learning\n"
-            "0 = empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!)")
+            "Schrittgröße = sigma_global des Genoms.\n"
+            "3–5 = empfohlen für Regression / Supervised Learning.")
+
+        self.combo_lamarck_mode.currentIndexChanged.connect(self._on_lamarck_mode_changed)
 
         self.spin_multi_eval = QSpinBox()
         self.spin_multi_eval.setRange(1, 50)
@@ -807,7 +854,13 @@ class TrainingTab(QWidget):
         workers_lay.addWidget(self.lbl_workers_active)
         cfg_form.addRow("Workers:", workers_row)
         cfg_form.addRow("Zielarten:",      self.spin_species)
-        cfg_form.addRow("Lamarck steps:",  self.spin_lamarck)
+        lamarck_row = QWidget()
+        lamarck_lay = QHBoxLayout(lamarck_row)
+        lamarck_lay.setContentsMargins(0, 0, 0, 0)
+        lamarck_lay.setSpacing(4)
+        lamarck_lay.addWidget(self.combo_lamarck_mode, stretch=1)
+        lamarck_lay.addWidget(self.spin_lamarck)
+        cfg_form.addRow("Lamarck:",        lamarck_row)
         cfg_form.addRow("Mehrfachbew.:",   self.spin_multi_eval)
         cfg_form.addRow("Aggregation:",    self.combo_aggregation)
         cfg_form.addRow("Sigma-Strafe:",   self.dspin_sigma_penalty)
@@ -986,6 +1039,9 @@ class TrainingTab(QWidget):
         self.btn_run_best.setEnabled(False)
         self.example_changed.emit(ex)
 
+    def _on_lamarck_mode_changed(self, index: int) -> None:
+        self.spin_lamarck.setEnabled(index == 1)  # only enabled for "Explizit"
+
     def _on_multi_eval_changed(self, value: int) -> None:
         enabled = value > 1
         self.combo_aggregation.setEnabled(enabled)
@@ -1017,9 +1073,11 @@ class TrainingTab(QWidget):
             # 0 = Auto (worker determines optimal count at runtime)
             self._yane.set_n_workers(self.spin_workers.value())
             self._yane.set_target_species(self.spin_species.value())
-            lamarck_steps = self.spin_lamarck.value()
-            if lamarck_steps > 0:
-                self._yane.set_lamarck(n_steps=lamarck_steps)
+            lamarck_mode = self.combo_lamarck_mode.currentText()
+            if lamarck_mode == "Explizit":
+                self._yane.set_lamarck(n_steps=self.spin_lamarck.value())
+            elif lamarck_mode == "Aus":
+                self._yane.set_lamarck_adaptive(max_steps=0)
             n_eval = self.spin_multi_eval.value()
             if n_eval > 1:
                 self._yane.set_multi_eval(

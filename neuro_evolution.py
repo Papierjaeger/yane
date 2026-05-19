@@ -709,9 +709,10 @@ class NeuroEvolution:
         evaluated = pop._evaluated
         if evaluated and self._lamarck_top_k < 1.0:
             k = max(1, int(len(evaluated) * self._lamarck_top_k))
-            # Partial sort is cheaper than full sort for large pools.
+            # List comprehension is faster than a generator here: sorted() exhausts
+            # generators lazily (per-yield overhead); a flat float list is cheaper.
             threshold = sorted(
-                (g.fitness for g in evaluated), reverse=True
+                [g.fitness for g in evaluated], reverse=True
             )[min(k - 1, len(evaluated) - 1)]
             if fitness < threshold:
                 return 0

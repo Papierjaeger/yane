@@ -202,7 +202,24 @@ Strukturmutationen liegen in `evolution/smart_mutation.py`.
 
 `remove_connection`:
 
-- entfernt eine zufällige Connection
+- wählt bevorzugt Connections mit kleinem absolutem Gewicht aus (Soft-Min-Sampling: Wahrscheinlichkeit ∝ 1 / (|Gewicht| + ε))
+- entfernt die gewählte Connection
+
+`rewire_connection`:
+
+- wählt eine Connection aus dem unteren Viertel nach absolutem Gewicht (Soft-Min-Sampling)
+- entfernt diese Connection und fügt sofort eine neue zufällige Connection ein
+- die Topologiegröße bleibt gleich; die Suchrichtung ändert sich
+
+`disable_connection`:
+
+- deaktiviert eine Connection (Soft-Min-Sampling nach absolutem Gewicht)
+- die Connection bleibt im Genom gespeichert, wird aber beim Forward Pass übergangen
+- reversibel durch `enable_connection`
+
+`enable_connection`:
+
+- reaktiviert eine zufällig gewählte deaktivierte Connection
 
 ### 6.2 Node- und Connection-Mutationen
 
@@ -319,7 +336,7 @@ Mit:
 - `c2 = 1.0`
 - `c3 = 0.4`
 
-Der Kompatibilitätsschwellwert startet bei `0.2` und wird automatisch angepasst, um ungefähr die Zielzahl von Species zu halten. Standardziel ist `5`, per `set_target_species(n)` änderbar.
+Der Kompatibilitätsschwellwert startet bei `0.2` und wird automatisch angepasst, um ungefähr die Zielzahl von Species zu halten. Standardziel ist `5`, per `set_target_species(n)` änderbar. Der Schwellwert liegt stets zwischen `0.01` und `1.5`. Um Oszillation zu vermeiden, greift die Anpassung nur, wenn die tatsächliche Anzahl um mehr als `1` vom Ziel abweicht (Dead-Band von ±1).
 
 ### 8.5 Fitness Sharing
 
@@ -350,7 +367,7 @@ Deskriptoren, deren Novelty den Schwellwert `0.3` überschreiten, werden in ein 
 
 ### 8.7 Stagnation und Diversity Injection
 
-Wenn lange keine Fitnessverbesserung entsteht, injiziert YANE neue Diversität:
+Wenn `max_size` Bewertungen lang keine Fitnessverbesserung eintritt, injiziert YANE neue Diversität:
 
 - expandierte Kopien des besten Genoms
 - reine Gewichtsmutationen des besten Genoms
@@ -400,6 +417,80 @@ efficiency_factor = 1 - efficiency_weight * (1 - efficiency_score)
 ```
 
 Die bestehende feste `EfficiencyPenalty` bleibt separat verfügbar. Sie reduziert direkt die Fitness, wenn `set_efficiency_penalty(max_ms, penalty_per_ms)` gesetzt wurde. Die automatische Effizienzbewertung ist dagegen eine eigene Variable und wirkt nur in der Elternauswahl.
+
+### 8.10 Detaillierter Spawning-Ablauf
+
+Jedes Mal, wenn `select_for_evaluation()` aufgerufen wird und keine unbewerteten Genome vorhanden sind, erzeugt `_spawn_offspring()` ein neues Kandidatengenom. Dabei greift eine von vier Logiken.
+
+**Erste Generation:**
+
+Solange noch kein Genom bewertet wurde, füllt `_bootstrap_initial_population()` die Population. Das Template-Genom wird `max_size`-mal kopiert. Jede Kopie erhält eine zufällige Anzahl neuer Connections, gleichmäßig gezogen aus dem Bereich:
+
+```text
+[n_outputs, min(n_inputs × n_outputs, max(n_inputs, 50))]
+```
+
+**Diversitätsinjektion bei Fitness-Stagnation:**
+
+Wenn seit `max_size` Bewertungen keine Fitnessverbesserung eingetreten ist, injiziert `_inject_fresh_genome()` ein neues Genom. Vier Strategien mit gleicher Wahrscheinlichkeit:
+
+| Strategie | Beschreibung |
+|---|---|
+| 0 | Kopie des besten Genoms → 1–3 neue Connections → 1–3 weitere Mutationen |
+| 1 | Kopie des besten Genoms → alle Gewichte mit gaußschem Rauschen (`sigma_global`) stören |
+| 2 | Frisches Template → zufällige Connections (n_out bis min(n_in × n_out, 50)) → Gewichte neu initialisieren |
+| 3 | Frisches Template → 3–8 vollständige Mutationen |
+
+**Strukturelle Diversitätsinjektion:**
+
+Wenn die Topologie (Anzahl Nodes und Connections) des besten Genoms seit `3 × max_size` Bewertungen unverändert ist, injiziert `_inject_structural_diversity()` gezielt eine strukturell abweichende Variante. Drei Strategien:
+
+| Strategie | Beschreibung |
+|---|---|
+| 0 | Kopie des besten Genoms → 2–5 neue Connections zwingen |
+| 1 | Kopie des besten Genoms → `add_node` → 1–3 weitere Connections |
+| 2 | Frisches Template → zufällige Connections → Gewichte neu initialisieren |
+
+**Normales Spawning:**
+
+1. `_assign_species()` ordnet alle bewerteten Genome Species zu.
+2. `_compute_shared_fitness()` berechnet Shared Fitness für alle Mitglieder.
+3. `_compute_efficiency_scores()` normalisiert Bewertungszeiten, falls sich die Spannweite geändert hat.
+4. Novelty wird neu berechnet, wenn seit der letzten Berechnung mindestens `max_size / 2` Bewertungen vergangen sind.
+5. **Tournament Selection (k=3):** Drei zufällige Genome aus `_evaluated` werden per `selection_score` verglichen; das beste wird als Elternteil gewählt.
+6. **Crossover oder Kopie:** Mit Wahrscheinlichkeit `crossover_prob` des Elternteils wird ein zweites Elternteil aus derselben Species gewählt. Gibt es dort keine anderen Genome, wird aus der gesamten Population gewählt. Das fittere der beiden Genome ruft `crossover(weaker)` auf. Andernfalls wird das erste Elternteil kopiert.
+7. Das Kind wird mutiert (Abschnitt 6).
+8. Das Kind erhält Fitness `0.0` und landet in `_unevaluated`.
+
+### 8.11 Spezies-Lebenszyklus
+
+**Spezies entsteht:**
+
+In jedem Spawning-Zyklus ruft `_spawn_offspring()` die Funktion `_assign_species()` auf. Jedes bewertete Genome wird gegen die Repräsentanten aller bestehenden Species geprüft. Ist die Kompatibilitätsdistanz zu allen Repräsentanten ≥ Schwellwert, entsteht eine neue `Species`. Das Genome wird ihr erstes Mitglied und gleichzeitig ihr Repräsentant.
+
+**Spezies wächst:**
+
+Jedes weitere Genome mit einer Kompatibilitätsdistanz < Schwellwert zum Repräsentanten wird der Species zugewiesen. Nach jeder vollständigen Zuweisung wird der Repräsentant auf das aktuell fitteste Mitglied der Species aktualisiert.
+
+**Spezies werden zusammengeführt:**
+
+Wenn nach der Zuweisung die Anzahl der Species über `target_species` liegt, prüft `_assign_species()`, ob zwei Species-Repräsentanten selbst kompatibel sind (Distanz < Schwellwert). In diesem Fall wird die kleinere Species in die größere aufgenommen. Das Zusammenführen stoppt, sobald die Zielzahl erreicht ist, um kein Über-Merging zu verursachen.
+
+**Spezies stirbt:**
+
+`_prune()` wird nach jeder Fitnesseingabe aufgerufen, sobald die Population `max_size` übersteigt. Es wird das Genome mit der schlechtesten Fitness entfernt — sofern es nicht geschützt ist:
+
+- **Global geschützt:** Die top-`elite_count` Genome nach Fitness (Standard: 1).
+- **Species-geschützt:** Das jeweils fitteste Genome jeder Species (Standard: 1 pro Species).
+
+Für jedes entfernte Genome:
+
+1. Das Genome wird aus `_evaluated` und aus dem Behavior-Archiv gelöscht.
+2. Es wird aus seiner Species entfernt.
+3. Wenn die Species dadurch keine Mitglieder mehr hat, gilt sie als leer.
+4. Am Ende jedes Speziation-Zyklus werden leere Species endgültig aus `_species` entfernt.
+
+Species-Stagnation (wie viele Zyklen kein Fitnessfortschritt innerhalb der Species) wird für Diagnosezwecke getrackt, aber aktuell nicht als Auslöser für das Entfernen ganzer Species verwendet.
 
 ## 9. Lamarckian Refinement
 
@@ -464,7 +555,7 @@ Für Regressions- und Klassifikationsbeispiele wird häufig `genome.reset()` zwi
 
 Dieser Abschnitt beschreibt die aktuellen Beispiele aus `examples/` und `gui/examples.py`.
 
-### 11.1 XOR
+### 12.1 XOR
 
 Ziel: XOR von zwei binären Eingaben lernen.
 
@@ -498,7 +589,7 @@ Fitness:
 fitness = -sum(abs(output - target))
 ```
 
-### 11.2 Multiplication
+### 12.2 Multiplication
 
 Ziel: Multiplikationstabelle `0..9 * 0..9`.
 
@@ -537,7 +628,7 @@ fitness = -sum(abs(normalized_output - normalized_target))
 
 `-5.0` bedeutet über 100 Samples im Schnitt maximal ca. `0.05` normalisierter Fehler.
 
-### 11.3 Regression 2->2
+### 12.3 Regression 2->2
 
 Ziel: eine kleine kontinuierliche 2-zu-2-Abbildung mit XOR-artigem Muster.
 
@@ -574,7 +665,7 @@ fitness = -sum(abs(output_i - target_i))
 
 `-0.4` entspricht bei 4 Samples und 2 Outputs einem durchschnittlichen Fehler von ca. `0.05` pro Output.
 
-### 11.4 Regression 3->3
+### 12.4 Regression 3->3
 
 Ziel: eine nichtlineare 3-zu-3-Abbildung über alle binären 3-Bit-Eingaben.
 
@@ -602,7 +693,7 @@ GUI-Konfiguration:
 
 Die GUI gibt dem Beispiel mehr Hidden-Kapazität, weil drei Outputs parallel nichtlineare Teilfunktionen lernen müssen.
 
-### 11.5 Sequence: Pi-Ziffern
+### 12.5 Sequence: Pi-Ziffern
 
 Ziel: aus der aktuellen Pi-Ziffer die nächste Ziffer vorhersagen.
 
@@ -646,7 +737,7 @@ Fitness:
 fitness = -sum(abs(normalized_output - normalized_target))
 ```
 
-### 11.6 MNIST
+### 12.6 MNIST
 
 Ziel: handgeschriebene Ziffern klassifizieren.
 
@@ -686,7 +777,7 @@ Hinweis: Dieses Beispiel ist deutlich größer als die kleinen Dataset-Beispiele
 
 Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importierbar ist.
 
-### 12.1 CartPole
+### 13.1 CartPole
 
 - Environment: `CartPole-v1`
 - Inputs: 4 Zustandswerte
@@ -697,7 +788,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - Action: Index des maximalen Outputs
 - Reset: am Episodenanfang
 
-### 12.2 Acrobot
+### 13.2 Acrobot
 
 - Environment: `Acrobot-v1`
 - Inputs: 6
@@ -708,7 +799,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - Action: Index des maximalen Outputs
 - Reward-Shaping: maximale Endeffektorhöhe plus `10.0`, wenn gelöst
 
-### 12.3 MountainCar Continuous
+### 13.3 MountainCar Continuous
 
 - Environment: `MountainCarContinuous-v0`
 - Inputs: 2
@@ -719,7 +810,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - Action-Skalierung: `output * 2 - 1`, geklemmt auf `[-1, 1]`
 - Fitness: maximale Position plus `10.0`, wenn gelöst
 
-### 12.4 MountainCar Discrete
+### 13.4 MountainCar Discrete
 
 - Environment: `MountainCar-v0`
 - Inputs: 2
@@ -730,7 +821,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - Action: Index des maximalen Outputs
 - Fitness: maximale Position plus `10.0`, wenn gelöst
 
-### 12.5 Pendulum
+### 13.5 Pendulum
 
 - Environment: `Pendulum-v1`
 - Inputs: 3
@@ -741,7 +832,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - `target_fitness=-400`
 - Action-Skalierung: `output * 4 - 2`, geklemmt auf `[-2, 2]`
 
-### 12.6 LunarLander
+### 13.6 LunarLander
 
 - Environment: `LunarLander-v3`
 - Inputs: 8
@@ -752,7 +843,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - `early_stop=-200`
 - Action: Index des maximalen Outputs
 
-### 12.7 BipedalWalker
+### 13.7 BipedalWalker
 
 - Environment: `BipedalWalker-v3`
 - Inputs: 24
@@ -764,7 +855,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - `early_stop=-50`
 - Action-Skalierung: pro Output `output * 2 - 1`, geklemmt auf `[-1, 1]`
 
-### 12.8 CarRacing
+### 13.8 CarRacing
 
 - Environment: `CarRacing-v3`
 - Rohbeobachtung: `96x96x3` Pixel
@@ -779,7 +870,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
   - Gas: `output[1]`, geklemmt auf `[0, 1]`
   - Brake: `output[2]`, geklemmt auf `[0, 1]`
 
-### 12.9 Blackjack
+### 13.9 Blackjack
 
 - Environment: `Blackjack-v1`
 - Inputs:
@@ -792,7 +883,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - `target_fitness=-0.05`
 - Fitness: durchschnittlicher Reward über 500 Episoden, in Demo 20 Episoden
 
-### 12.10 Cliff Walking
+### 13.10 Cliff Walking
 
 - Environment: `CliffWalking-v1`
 - Grid: `4x12`
@@ -810,7 +901,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
   - Bonus für neue beste Distanz
   - großer Bonus bei Zielerreichung
 
-### 12.11 Frozen Lake
+### 13.11 Frozen Lake
 
 - Environment: `FrozenLake-v1`
 - `is_slippery=False`
@@ -825,7 +916,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - Fitness: Mittelwert über 20 Episoden, in Demo 5 Episoden
 - Reward-Shaping: `0.1` pro Schritt näher ans Ziel
 
-### 12.12 Taxi
+### 13.12 Taxi
 
 - Environment: `Taxi-v4`
 - Inputs:
