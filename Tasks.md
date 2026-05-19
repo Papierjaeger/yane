@@ -12,37 +12,6 @@ Legende:
 
 ## 1. Fitness, Evaluation und Training
 
-### P0: Fitness-Sanitizing zentralisieren
-
-Aktuell muss jede Fitnessfunktion selbst robust sein. Degenerative Netze koennen `nan`, `inf` oder extreme Werte erzeugen.
-
-Aufgaben:
-
-- Zentrale Funktion `sanitize_fitness(value)` einfuehren.
-- `nan` und `inf` defensiv behandeln.
-- Optional Fitness-Clipping konfigurierbar machen.
-- Warnungen/Diagnose bei invaliden Fitnesswerten sammeln.
-
-Nutzen:
-
-- Mehr Stabilitaet bei grossen Suchraeumen.
-- Weniger Abbrueche durch einzelne kaputte Genome.
-
-### P1: Mehrfachbewertung pro Genom
-
-Bei stochastischen Umgebungen ist eine einzelne Episode oft zu verrauscht.
-
-Aufgaben:
-
-- Optional `n_evaluations_per_genome` unterstuetzen.
-- Mittelwert, Median oder Worst-Case als Fitness erlauben.
-- Varianz als zusaetzliche Strafe verwenden.
-- GUI/API konfigurierbar machen.
-
-Nutzen:
-
-- Robustere Policies.
-- Weniger Overfitting auf zufaellige Episoden.
 
 ### P1: Curriculum Learning
 
@@ -95,21 +64,20 @@ Nutzen:
 - Bessere Diagnose von Stagnation.
 - Man sieht, ob Evolution eher Struktur oder Gewichte erforscht.
 
-### P1: Adaptive Strukturmutation verbessern
+### P1: Adaptive Strukturmutation — Restaufgaben
 
-Aktuell gibt es feste Strukturmutationstypen mit selbstadaptierenden Raten.
+Erste Verbesserungen implementiert (siehe Erledigte). Offen:
 
 Aufgaben:
 
-- Erfolgsrate einzelner Mutationstypen messen.
-- Mutationstypen gewichten nach historischem Nutzen.
+- Erfolgsrate einzelner Mutationstypen messen und anzeigen.
+- Mutationstypen populationsweit nach historischem Nutzen gewichten.
 - Unterschiedliche Mutationstendenzen je Species erlauben.
-- Strukturwachstum bei Stagnation aggressiver steuern.
 
 Nutzen:
 
-- Weniger blinde Mutation.
-- Bessere Skalierung bei grossen Topologien.
+- Weniger blinde Mutation bei komplexen Aufgaben.
+- Bessere Diagnose, welche Strukturmutation tatsaechlich hilft.
 
 ### P1: Speciation robuster machen
 
@@ -192,21 +160,6 @@ Nutzen:
 
 - Bessere Balance zwischen Ausdrucksstaerke und Geschwindigkeit.
 
-### P1: Connection Enable/Disable statt Loeschen
-
-NEAT nutzt oft deaktivierbare Gene. Aktuell werden Connections entfernt.
-
-Aufgaben:
-
-- `enabled`-Flag fuer Connections einfuehren.
-- Mutation zum Aktivieren/Deaktivieren.
-- Crossover-Regeln fuer deaktivierte Gene.
-- Forward ignoriert deaktivierte Connections.
-
-Nutzen:
-
-- Struktur kann temporaer ausgeschaltet werden, ohne historische Information zu verlieren.
-- Crossover wird stabiler.
 
 ### P1: Normalisierung als Framework-Feature
 
@@ -274,21 +227,20 @@ Nutzen:
 
 ## 4. Optimierung und Hybrid-Training
 
-### P0: Lamarckian Refinement besser integrieren
+### P1: Lamarckian Refinement — Restaufgaben
 
-Das vorhandene Lamarckian Refinement ist stark, aber teuer.
+Adaptive Integration implementiert (siehe Erledigte). Offen:
 
 Aufgaben:
 
-- Refinement-Zeit messen und anzeigen.
-- Nur Top-K-Genome refinieren.
-- Refinement adaptiv bei Stagnation aktivieren.
-- Separate Sigma-Strategie fuer Lamarck-Schritte.
+- Refinement-Zeit pro Schritt messen und in Statistiken anzeigen.
+- Separate Sigma-Strategie fuer Lamarck (unabhaengig von sigma_global).
 - Tests fuer Zusammenspiel mit Strukturstagnation.
 
 Nutzen:
 
-- Schnellere Gewichtsanpassung ohne zu hohe Kosten.
+- Bessere Diagnose des Lamarck-Overheads.
+- Feinere Kontrolle der Schrittweite.
 
 ### P1: Lokale Optimierer fuer Gewichte
 
@@ -623,7 +575,12 @@ Nutzen:
 - [x] Einheitliche Evaluation-Statistiken (mean/median/p95/max Eval-Zeit, Offspring-Zähler, Topologie-Historie).
 - [x] GUI-Diagnostics fuer Eval-Zeit und Offspring-Zähler.
 - [x] Elitismus explizit machen (elite_count, species_elite_count, set_elitism()).
-- [ ] Fitness-Sanitizing zentralisieren.
+- [x] Fitness-Sanitizing zentralisieren (nan/inf/clipping, Diagnose-Zähler).
+- [x] Mehrfachbewertung pro Genom (set_multi_eval, mean/median/min, sigma-Penalty).
+- [x] Species-Explosion beheben (aktives Mergen + Dead-band-Hysterese).
+- [x] Connection Enable/Disable (reversibles Deaktivieren, Forward-Filter, forward-Pfad compile-time).
+- [x] Adaptive Strukturmutation (weight-biased remove, Spike-Mutation, Rewiring).
+- [x] Adaptives Lamarckian Refinement (Top-K, stagnationsbasiert, 0→max_steps).
 - [ ] `EvaluationResult`-Objekt einfuehren.
 - [ ] Seed-Parameter fuer `NeuroEvolution` einfuehren.
 - [ ] Checkpoint-Speicherung fuer Population und InnovationTracker.
@@ -646,3 +603,30 @@ Pro Trainingsschritt werden jetzt erfasst: mean/median/p95/max der Eval-Zeiten u
 ### Elitismus explizit machen
 
 `elite_count` (globale Top-k) und `species_elite_count` (bestes je Species) sind jetzt konfigurierbar via `set_elitism()`. Single-member-Species-Champions sind ebenfalls geschützt. Eliten werden nie gelöscht, aber weiterhin als Elternteile genutzt — nur Kopien mutieren. Defaults entsprechen dem bisherigen Verhalten.
+
+### Fitness-Sanitizing zentralisieren
+
+Zentrale `_apply_sanitize()`-Funktion in `NeuroEvolution`. Behandelt `nan` und `inf` defensiv (Fallback-Wert konfigurierbar), optionales Fitness-Clipping (clip_low, clip_high), Diagnose-Zaehler fuer invalide und geclippte Werte (`n_invalid_fitness`, `n_clipped_fitness`). Konfigurierbar via `set_fitness_sanitizing()`.
+
+### Mehrfachbewertung pro Genom
+
+`set_multi_eval(n, aggregation, sigma_penalty)` erlaubt mehrere Episoden pro Genom. Aggregation: mean / median / min. Sigma-Penalty subtrahiert ein Vielfaches der Standardabweichung. Automatische Worker-Anpassung beruecksichtigt den Mehraufwand. GUI konfigurierbar.
+
+### Species-Explosion beheben
+
+Die "try last species first"-Optimierung in `_assign_species()` verhinderte, dass ein steigender Kompatibilitaets-Threshold Species zusammenfuehren konnte — Genome landeten immer in ihrer alten Species. Fix: Aktives Mergen von Species-Paaren nach der Zuweisung (wenn zwei Repraesentanten naeher als der Threshold liegen), kombiniert mit Dead-band ±1 in der Threshold-Anpassung (verhindert sofortiges Rueckpendeln). Species-Anzahl stabilisiert sich jetzt bei ~Ziel statt bei 36+ einzufrieren.
+
+### Connection Enable/Disable statt Loeschen
+
+`enabled`-Flag auf `Connection`. Deaktivierte Verbindungen bleiben im Genom (reversibel), werden aber im Forward-Pass uebergangen. Compile-time-Filter in allen Forward-Pfaden (acyclisch: Snapshot bei Compile, kein Runtime-Overhead; cyclisch: `if conn.enabled` in `fire()`). Selbst-adaptive Mutations-Raten (`mutation_disable_connection`, `mutation_enable_connection`, initial 3% um Add/Remove-Balance nicht zu stoeren). Crossover und Pickle unterstuetzen das Flag.
+
+### Adaptive Strukturmutation (A, 4, 5)
+
+Drei neue Mutationsmechanismen, alle selbst-adaptiv:
+- **A — Gewichtsbasiertes remove_connection**: Soft-min Sampling (Wahrscheinlichkeit ~ 1/|w|) bevorzugt das Entfernen unwichtiger Verbindungen.
+- **4 — Spike-Mutation**: Jede Connection kann ihr Gewicht komplett neu initialisieren (N(0, sigma_global)) statt nur zu perturbieren. Rate adaptiert sich via `rate_mutation_rate`.
+- **5 — Rewiring**: Atomisches Remove-dann-Add; Netzgroesse stabil, Topologie wird exploriert. Kein `_STRUCT_FLOOR` — rein selbst-adaptiv.
+
+### Adaptives Lamarckian Refinement
+
+Lamarck feuert jetzt automatisch ohne manuelle Konfiguration. Anzahl der Hill-Climbing-Schritte skaliert linear mit Stagnation (0 bei gutem Fortschritt → max_steps bei voller Stagnation). Nur Top-20% des evaluierten Pools werden verfeinert. Expliziter Modus (`set_lamarck(n_steps>0`) bleibt fuer Override-Faelle erhalten. Benchmark Acrobot: 2x schneller geloest, bessere Endfitness, 5% Eval-Overhead.
