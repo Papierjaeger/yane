@@ -1,5 +1,6 @@
 from __future__ import annotations
 import gc
+import math
 import random
 import statistics
 import time
@@ -313,7 +314,7 @@ class NeuroEvolution:
         total_connections = sum(i["connections"] for i in infos)
         max_nodes = max(i["nodes"] for i in infos)
         max_connections = max(i["connections"] for i in infos)
-        return {
+        info = {
             "total_genomes": len(all_genomes),
             "total_nodes": total_nodes,
             "total_connections": total_connections,
@@ -334,7 +335,30 @@ class NeuroEvolution:
                             / max(1, len(self._population._evaluated))),
             "n_evaluations":    self._n_evaluations,
             "eval_aggregation": self._eval_aggregation,
+            # Offspring counters
+            "n_crossover":           self._population._n_crossover,
+            "n_mutation_only":       self._population._n_mutation_only,
+            "n_diversity_injection": self._population._n_diversity_injection,
+            # Best genome topology history: list of (total_submitted, n_nodes, n_conn, fitness)
+            "best_topology_history": self._population._best_topology_history,
         }
+
+        # Eval-time statistics (computed on demand from current evaluated genomes)
+        eval_times = [
+            g.eval_time_ms
+            for g in self._population._evaluated
+            if g.eval_time_ms is not None and math.isfinite(g.eval_time_ms)
+        ]
+        if eval_times:
+            sorted_times = sorted(eval_times)
+            n = len(sorted_times)
+            p95_idx = min(int(math.ceil(0.95 * n)) - 1, n - 1)
+            info["eval_time_mean_ms"]   = statistics.mean(sorted_times)
+            info["eval_time_median_ms"] = statistics.median(sorted_times)
+            info["eval_time_p95_ms"]    = sorted_times[max(0, p95_idx)]
+            info["eval_time_max_ms"]    = sorted_times[-1]
+
+        return info
 
     def set_target_species(self, n: int) -> None:
         """Set the target number of species the population tries to maintain.

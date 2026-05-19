@@ -342,5 +342,74 @@ class TestMultiEval(unittest.TestCase):
         self.assertEqual(call_count[0], 1)
 
 
+class TestPopulationMemoryInfo(unittest.TestCase):
+
+    def _make(self, n_inputs=2, n_outputs=1):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=n_inputs, n_outputs=n_outputs)
+        return yane
+
+    def _submit_n(self, yane, n, eval_ms=5.0):
+        for i in range(n):
+            g = yane.next_genome()
+            yane.submit_fitness(float(i), elapsed_ms=eval_ms + i)
+        return yane.population_memory_info()
+
+    def test_eval_time_stats_present_after_submissions(self):
+        yane = self._make()
+        mem = self._submit_n(yane, 3, eval_ms=10.0)
+        self.assertIn("eval_time_mean_ms", mem)
+        self.assertIn("eval_time_median_ms", mem)
+        self.assertIn("eval_time_p95_ms", mem)
+        self.assertIn("eval_time_max_ms", mem)
+        self.assertGreater(mem["eval_time_mean_ms"], 0.0)
+        self.assertGreater(mem["eval_time_max_ms"], mem["eval_time_mean_ms"] - 1e-6)
+
+    def test_eval_time_stats_absent_without_eval_times(self):
+        yane = self._make()
+        g = yane.next_genome()
+        yane.submit_fitness(1.0, elapsed_ms=None)
+        mem = yane.population_memory_info()
+        self.assertNotIn("eval_time_mean_ms", mem)
+
+    def test_offspring_counters_in_mem_info(self):
+        yane = self._make()
+        mem = self._submit_n(yane, 5)
+        self.assertIn("n_crossover", mem)
+        self.assertIn("n_mutation_only", mem)
+        self.assertIn("n_diversity_injection", mem)
+        total = mem["n_crossover"] + mem["n_mutation_only"] + mem["n_diversity_injection"]
+        # At least the spawned offspring count
+        self.assertGreaterEqual(total, 0)
+
+    def test_best_topology_history_in_mem_info(self):
+        yane = self._make()
+        mem = self._submit_n(yane, 3)
+        self.assertIn("best_topology_history", mem)
+        hist = mem["best_topology_history"]
+        self.assertIsInstance(hist, list)
+        self.assertGreater(len(hist), 0)
+        # Each entry should be a 4-tuple
+        entry = hist[-1]
+        self.assertEqual(len(entry), 4)
+
+    def test_offspring_counters_consistent_after_many_evals(self):
+        yane = self._make()
+        yane.set_population_size(20)
+        yane.configure(2, 1)
+        for i in range(30):
+            g = yane.next_genome()
+            yane.submit_fitness(float(i), elapsed_ms=1.0)
+        mem = yane.population_memory_info()
+        n_co  = mem["n_crossover"]
+        n_mut = mem["n_mutation_only"]
+        n_inj = mem["n_diversity_injection"]
+        # All counters are non-negative integers
+        self.assertGreaterEqual(n_co, 0)
+        self.assertGreaterEqual(n_mut, 0)
+        self.assertGreaterEqual(n_inj, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

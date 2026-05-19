@@ -310,6 +310,17 @@ class Population:
         # _compute_efficiency_scores() actually needs to rescale all stored scores.
         self._efficiency_dirty: bool = False
 
+        # Offspring counters — cumulative over the population's lifetime.
+        self._n_crossover: int = 0
+        self._n_mutation_only: int = 0
+        self._n_diversity_injection: int = 0
+
+        # Best-genome topology history — one entry per fitness improvement.
+        # Each entry: (total_submitted, n_nodes, n_connections, fitness)
+        # Capped at 200 entries so it never grows unboundedly.
+        self._best_topology_history: list[tuple[int, int, int, float]] = []
+        self._total_submitted: int = 0
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -322,6 +333,7 @@ class Population:
     def submit(self, genome: Genome, fitness: float, elapsed_ms: float | None = None) -> None:
         if genome not in self._unevaluated:
             return
+        self._total_submitted += 1
         genome.fitness = fitness
         genome.shared_fitness = fitness
         genome.eval_time_ms = elapsed_ms
@@ -379,6 +391,12 @@ class Population:
                 # Fitness improved but topology unchanged (typical Lamarck effect):
                 # still count as structural stagnation.
                 self._topology_stagnation_count += 1
+            # Record topology at each fitness improvement.
+            self._best_topology_history.append(
+                (self._total_submitted, len(genome.nodes), _cc, fitness)
+            )
+            if len(self._best_topology_history) > 200:
+                self._best_topology_history = self._best_topology_history[-200:]
         else:
             self._stagnation_count += 1
             self._since_last_injection += 1
@@ -672,6 +690,7 @@ class Population:
         base.fitness = 0.0
         base.shared_fitness = 0.0
         self._unevaluated.append(base)
+        self._n_diversity_injection += 1
         # Do NOT reset _since_last_injection — this injection is structural, not
         # fitness-stagnation-based; the two counters are independent.
 
@@ -723,6 +742,7 @@ class Population:
         base.fitness = 0.0
         base.shared_fitness = 0.0
         self._unevaluated.append(base)
+        self._n_diversity_injection += 1
         self._since_last_injection = 0  # pace injections; stagnation_count untouched
 
     def _bootstrap_initial_population(self) -> None:
@@ -830,8 +850,10 @@ class Population:
             other = random.choice(candidates)
             fitter, weaker = (parent, other) if parent.fitness >= other.fitness else (other, parent)
             child = fitter.crossover(weaker)
+            self._n_crossover += 1
         else:
             child = parent.copy()
+            self._n_mutation_only += 1
 
         child.mutate(self._tracker)
         child.fitness = 0.0

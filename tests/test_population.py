@@ -103,5 +103,69 @@ class TestPopulation(unittest.TestCase):
         self.assertGreater(g1.selection_score, g2.selection_score)
 
 
+    def test_offspring_counters_start_at_zero(self):
+        pop = self._make_population(max_size=10)
+        self.assertEqual(pop._n_crossover, 0)
+        self.assertEqual(pop._n_mutation_only, 0)
+        self.assertEqual(pop._n_diversity_injection, 0)
+
+    def test_total_submitted_increments(self):
+        pop = self._make_population(max_size=10)
+        self.assertEqual(pop._total_submitted, 0)
+        g = pop.select_for_evaluation()
+        pop.submit(g, 1.0)
+        self.assertEqual(pop._total_submitted, 1)
+        g2 = pop.select_for_evaluation()
+        pop.submit(g2, 2.0)
+        self.assertEqual(pop._total_submitted, 2)
+
+    def test_best_topology_history_records_improvement(self):
+        pop = self._make_population(max_size=10)
+        self.assertEqual(len(pop._best_topology_history), 0)
+        g1 = pop.select_for_evaluation()
+        pop.submit(g1, 1.0)
+        self.assertEqual(len(pop._best_topology_history), 1)
+        entry = pop._best_topology_history[0]
+        self.assertEqual(len(entry), 4)  # (total_submitted, n_nodes, n_conn, fitness)
+        self.assertAlmostEqual(entry[3], 1.0)
+
+    def test_best_topology_history_only_grows_on_improvement(self):
+        pop = self._make_population(max_size=10)
+        g1 = pop.select_for_evaluation()
+        pop.submit(g1, 5.0)
+        prev_len = len(pop._best_topology_history)
+        g2 = pop.select_for_evaluation()
+        pop.submit(g2, 3.0)  # worse — no new entry
+        self.assertEqual(len(pop._best_topology_history), prev_len)
+        g3 = pop.select_for_evaluation()
+        pop.submit(g3, 7.0)  # better — new entry
+        self.assertEqual(len(pop._best_topology_history), prev_len + 1)
+
+    def test_mutation_only_counter_increments(self):
+        pop = self._make_population(max_size=10)
+        # Evaluate enough genomes to trigger spawn
+        for i in range(5):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+        before = pop._n_mutation_only + pop._n_crossover + pop._n_diversity_injection
+        # Force a spawn cycle
+        pop._unevaluated.clear()
+        pop._spawn_offspring()
+        after = pop._n_mutation_only + pop._n_crossover + pop._n_diversity_injection
+        # At least one offspring was created
+        self.assertGreater(after, before)
+
+    def test_diversity_injection_counter_increments(self):
+        pop = self._make_population(max_size=5)
+        for i in range(3):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+        before = pop._n_diversity_injection
+        pop._inject_fresh_genome()
+        self.assertEqual(pop._n_diversity_injection, before + 1)
+        pop._inject_structural_diversity()
+        self.assertEqual(pop._n_diversity_injection, before + 2)
+
+
 if __name__ == "__main__":
     unittest.main()

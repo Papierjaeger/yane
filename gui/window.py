@@ -250,6 +250,48 @@ class LeftPanel(QWidget):
         pop_layout.addRow("Effizienz-Relevanz:", self.lbl_eff_weight)
         layout.addWidget(pop)
 
+        # ── Evaluation timing ─────────────────────────────────────────────
+        eval_grp = QGroupBox("Evaluation timing")
+        eval_layout = QFormLayout(eval_grp)
+        eval_layout.setSpacing(4)
+        self.lbl_eval_mean   = _label("—", "statValue")
+        self.lbl_eval_median = _label("—", "mutRate")
+        self.lbl_eval_p95    = _label("—", "mutRate")
+        self.lbl_eval_max    = _label("—", "mutRate")
+        _eval_tip = (
+            "Auswertungszeiten über alle aktuell evaluierten Genomes.\n"
+            "Bei Mehrfachbewertung (n_evaluations > 1) ist dies die Summe aller Durchläufe.")
+        self.lbl_eval_mean.setToolTip(_eval_tip)
+        self.lbl_eval_median.setToolTip(_eval_tip)
+        self.lbl_eval_p95.setToolTip(
+            "95. Perzentil der Eval-Zeiten — zeigt die obere Grenze für 95% der Genomes.")
+        self.lbl_eval_max.setToolTip(
+            "Langsamste Eval-Zeit in der Population — möglicher Performance-Ausreißer.")
+        eval_layout.addRow("Mean:",   self.lbl_eval_mean)
+        eval_layout.addRow("Median:", self.lbl_eval_median)
+        eval_layout.addRow("p95:",    self.lbl_eval_p95)
+        eval_layout.addRow("Max:",    self.lbl_eval_max)
+        layout.addWidget(eval_grp)
+
+        # ── Offspring counters ────────────────────────────────────────────
+        off_grp = QGroupBox("Offspring (kumulativ)")
+        off_layout = QFormLayout(off_grp)
+        off_layout.setSpacing(4)
+        self.lbl_n_crossover  = _label("—", "mutRate")
+        self.lbl_n_mutation   = _label("—", "mutRate")
+        self.lbl_n_injection  = _label("—", "mutRate")
+        self.lbl_n_crossover.setToolTip(
+            "Anzahl Offspring, die durch Kreuzung zweier Elternteile entstanden sind.")
+        self.lbl_n_mutation.setToolTip(
+            "Anzahl Offspring, die durch reine Mutation (Kopie + Mutation) entstanden sind.")
+        self.lbl_n_injection.setToolTip(
+            "Anzahl Genome, die per Diversitäts-Injektion (Stagnation oder Topologie-Stagnation)\n"
+            "in die Population eingebracht wurden.")
+        off_layout.addRow("Crossover:",  self.lbl_n_crossover)
+        off_layout.addRow("Mutation:",   self.lbl_n_mutation)
+        off_layout.addRow("Injection:",  self.lbl_n_injection)
+        layout.addWidget(off_grp)
+
         # ── Structure mutations (best genome) ─────────────────────────────
         struct = QGroupBox("Structure mutations")
         struct_layout = QFormLayout(struct)
@@ -425,6 +467,25 @@ class LeftPanel(QWidget):
         ew = mem.get("efficiency_weight")
         if ew is not None:
             self.lbl_eff_weight.setText(f"{ew:.3f}")
+
+        # Eval-time statistics
+        for key, lbl in (
+            ("eval_time_mean_ms",   self.lbl_eval_mean),
+            ("eval_time_median_ms", self.lbl_eval_median),
+            ("eval_time_p95_ms",    self.lbl_eval_p95),
+            ("eval_time_max_ms",    self.lbl_eval_max),
+        ):
+            v = mem.get(key)
+            lbl.setText(f"{v:.2f} ms" if v is not None else "—")
+
+        # Offspring counters
+        for key, lbl in (
+            ("n_crossover",           self.lbl_n_crossover),
+            ("n_mutation_only",       self.lbl_n_mutation),
+            ("n_diversity_injection", self.lbl_n_injection),
+        ):
+            v = mem.get(key)
+            lbl.setText(str(v) if v is not None else "—")
 
         # Structure mutations
         self.lbl_rate_add_node.setText(f"{genome.mutation_add_node.bool_rate:.4f}")
