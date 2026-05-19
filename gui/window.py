@@ -962,12 +962,17 @@ class TrainingTab(QWidget):
         prog = QGroupBox("Progress")
         prog_layout = QVBoxLayout(prog)
 
-        self.lbl_iter    = _label("Iteration: —")
-        self.lbl_fitness = _label("Fitness: —")
-        self.lbl_speed   = _label("Speed: —")
-        prog_layout.addWidget(self.lbl_iter)
-        prog_layout.addWidget(self.lbl_fitness)
-        prog_layout.addWidget(self.lbl_speed)
+        prog_form = QWidget()
+        prog_form_layout = QFormLayout(prog_form)
+        prog_form_layout.setSpacing(3)
+        prog_form_layout.setContentsMargins(0, 0, 0, 0)
+        self.lbl_iter    = _label("—", "statValue")
+        self.lbl_fitness = _label("—", "statValue")
+        self.lbl_speed   = _label("—", "statValue")
+        prog_form_layout.addRow("Iteration:",      self.lbl_iter)
+        prog_form_layout.addRow("Current / Best:", self.lbl_fitness)
+        prog_form_layout.addRow("Speed:",          self.lbl_speed)
+        prog_layout.addWidget(prog_form)
 
         ram_row = QWidget()
         ram_layout = QHBoxLayout(ram_row)
@@ -1228,9 +1233,9 @@ class TrainingTab(QWidget):
         iter_s = iteration / elapsed if elapsed > 0 else 0.0
         mins, secs = divmod(int(elapsed), 60)
         elapsed_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
-        self.lbl_iter.setText(f"Iteration: {iteration}")
-        self.lbl_fitness.setText(f"Aktuell: {fitness:.4f}   Beste: {best_genome.fitness:.4f}")
-        self.lbl_speed.setText(f"Speed: {iter_s:.1f} iter/s   Laufzeit: {elapsed_str}")
+        self.lbl_iter.setText(str(iteration))
+        self.lbl_fitness.setText(f"{fitness:.4f}   /   {best_genome.fitness:.4f}")
+        self.lbl_speed.setText(f"{iter_s:.1f} iter/s   {elapsed_str}")
         self.chart.add_point(fitness)
 
         # Heavy widgets (species chart, weight histogram, network canvas) are
@@ -1671,7 +1676,12 @@ class InspectTab(QWidget):
         self._seq_rows_layout.setSpacing(1)
         seq_outer_layout.addWidget(self._seq_rows_container)
 
+        seq_outer_layout.addWidget(_divider())
         self._acc_fitness_lbl = _label("", "sectionTitle")
+        self._acc_fitness_lbl.setStyleSheet(
+            "font-family: monospace; font-size: 12px; color: #cdd6f4;"
+            " font-weight: bold; padding-top: 2px;"
+        )
         seq_outer_layout.addWidget(self._acc_fitness_lbl)
 
         layout.addWidget(self._seq_group)
@@ -1781,7 +1791,13 @@ class InspectTab(QWidget):
                                in_scale, out_scale, denorm)
             self._test_rows.append(row)
 
+        sep = _divider()
+        self._test_inner.addWidget(sep)
         self._test_sum_lbl = _label("", "sectionTitle")
+        self._test_sum_lbl.setStyleSheet(
+            "font-family: monospace; font-size: 12px; color: #cdd6f4;"
+            " font-weight: bold; padding-top: 2px;"
+        )
         self._test_inner.addWidget(self._test_sum_lbl)
 
     def _rebuild_input_widgets(self, n_inputs: int, n_outputs: int) -> None:
@@ -2156,8 +2172,9 @@ class MainWindow(QMainWindow):
         sep.setStyleSheet("background: #313244;")
         root.addWidget(sep)
 
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        tabs = self._tabs
         self._training_tab = TrainingTab()
         self._inspect_tab  = InspectTab()
         self._server_tab   = ServerTab()
@@ -2166,10 +2183,10 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._server_tab,   "  API Server  ")
 
         self._training_tab.genome_updated.connect(self._left.update_genome)
-        self._training_tab.genome_updated.connect(
-            lambda g, m, h: self._inspect_tab.update_genome(g, m))
+        self._training_tab.genome_updated.connect(self._on_genome_for_inspect)
         self._training_tab.example_changed.connect(self._inspect_tab.set_example)
         self._training_tab.training_started.connect(self._inspect_tab.reset_genome)
+        tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(tabs, stretch=1)
 
         # Initialise InspectTab with the already-selected example (signal was emitted
@@ -2183,6 +2200,15 @@ class MainWindow(QMainWindow):
         bar = QStatusBar()
         bar.showMessage("YANE ready — select an example and press Start.")
         self.setStatusBar(bar)
+
+    def _on_genome_for_inspect(self, genome, mem: dict, do_heavy: bool) -> None:
+        self._inspect_tab.update_genome(genome, mem)
+        if self._tabs.currentWidget() is not self._inspect_tab:
+            self._tabs.setTabText(1, "  Inspect ●  ")
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self._tabs.widget(index) is self._inspect_tab:
+            self._tabs.setTabText(1, "  Inspect  ")
 
     def closeEvent(self, event) -> None:
         w = self._training_tab._worker

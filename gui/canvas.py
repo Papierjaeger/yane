@@ -364,6 +364,26 @@ class NetworkCanvas(QWidget):
                                dot_r * 2, dot_r * 2)
                     )
 
+            # ── Legend ────────────────────────────────────────────────────
+            legend_font = QFont()
+            legend_font.setPointSize(6)
+            painter.setFont(legend_font)
+            dot_r = 4
+            ly = h - 6
+            lx = 6
+            for color, label in (
+                (_C_INPUT,  "Input"),
+                (_C_HIDDEN, "Hidden"),
+                (_C_OUTPUT, "Output"),
+                (_C_MEMORY, "Memory"),
+            ):
+                painter.setBrush(QBrush(color))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(QRectF(lx, ly - dot_r, dot_r * 2, dot_r * 2))
+                painter.setPen(QColor("#a6adc8"))
+                painter.drawText(lx + dot_r * 2 + 2, ly + dot_r - 1, label)
+                lx += dot_r * 2 + len(label) * 5 + 6
+
         finally:
             painter.end()
 
@@ -518,7 +538,17 @@ class FitnessChart(QWidget):
         painter.drawText(2, pad_t + 10, f"{hi:.3g}")
         painter.drawText(2, pad_t + int((h - pad_t - pad_b) * 0.5) + 5, f"{(lo + hi) / 2:.3g}")
         painter.drawText(2, h - pad_b,  f"{lo:.3g}")
+        # ── X-axis ticks (iteration labels at 25 %, 50 %, 75 %) ──────────
+        painter.setPen(QPen(_C_GRID, 1))
+        for frac in (0.25, 0.5, 0.75):
+            tx = int(pad_l + (w - pad_l - pad_r) * frac)
+            painter.drawLine(tx, h - pad_b, tx, h - pad_b + 3)
+        painter.setPen(_C_TEXT)
         painter.drawText(pad_l,          h - 5, "0")
+        for frac in (0.25, 0.5, 0.75):
+            tx = int(pad_l + (w - pad_l - pad_r) * frac)
+            label = str(int(n * frac))
+            painter.drawText(tx - len(label) * 3, h - 5, label)
         painter.drawText(w - pad_r - 26, h - 5, str(n))
 
         # ── Legend ────────────────────────────────────────────────────────
