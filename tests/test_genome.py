@@ -142,6 +142,57 @@ class TestGenomeForward(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertFalse(result[0] != result[0], "forward([]) must not produce NaN")
 
+    def test_forward_accepts_numpy_array(self):
+        """forward() must accept numpy arrays (gym observations) without crashing.
+
+        Gym environments (CartPole, LunarLander, …) return numpy.ndarray
+        observations.  Passing these directly must not propagate numpy.float64
+        through node.value slots, which would generate overflow/cast
+        RuntimeWarnings and can cause segfaults in long multi-eval runs.
+        """
+        import warnings
+        import numpy as np
+        from yane.core.connection import Connection
+
+        g = _make_genome(4, 2)
+        conn = Connection(g.output_nodes[0])
+        conn.weight = 0.5
+        g.input_nodes[0].connections.append(conn)
+        g._invalidate_topology()
+
+        obs = np.array([0.03, -0.02, 0.01, 0.04])  # typical CartPole observation
+
+        # Must produce no numpy overflow/cast warnings.
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error', category=RuntimeWarning)
+            result = g.forward(obs)
+
+        self.assertEqual(len(result), 2)
+        # Outputs must be plain Python floats, not numpy.float64.
+        for v in result:
+            self.assertIs(type(v), float,
+                f"forward() output must be Python float, got {type(v).__name__}")
+
+    def test_forward_numpy_result_matches_list_result(self):
+        """forward(numpy_array) must give the same result as forward(list)."""
+        import numpy as np
+        from yane.core.connection import Connection
+
+        g = _make_genome(3, 1)
+        conn = Connection(g.output_nodes[0])
+        conn.weight = 0.7
+        g.input_nodes[1].connections.append(conn)
+        g._invalidate_topology()
+
+        data_list  = [0.1, 0.5, -0.3]
+        data_numpy = np.array(data_list)
+
+        result_list  = g.forward(data_list)
+        result_numpy = g.forward(data_numpy)
+
+        self.assertAlmostEqual(result_list[0], result_numpy[0], places=12,
+            msg="numpy array input must produce identical result to list input")
+
     def test_invalidate_topology_is_idempotent(self):
         """Calling _invalidate_topology multiple times must not corrupt state."""
         from yane import NeuroEvolution
