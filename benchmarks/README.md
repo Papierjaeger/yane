@@ -26,3 +26,4 @@ zukünftigen Änderungen, um Regressionen und Verbesserungen zu erkennen.
 | 2026-05-19 | MountainCar Cont. | 3 Min | Ja (Iter 3907) | 10.514 | c7bef0d |
 | 2026-05-19 | MountainCar Cont. | 30 Min | Ja (Iter 7255) | 10.514 | c7bef0d |
 | 2026-05-19 | LunarLander-v3 | 30 Min | Nein | 135.54 | c7bef0d |
+| 2026-05-19 | BipedalWalker-v3 | 30 Min | Ja (Iter ~4551, ~16 Min) | 4.67 | 515ca96 |
