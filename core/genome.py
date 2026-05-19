@@ -49,6 +49,7 @@ class Genome:
         self._compiled_forward = None         # cached closure; avoids attribute lookup in hot loop
         self._forward_dispatch = None         # set after first forward(); direct call from then on
         self._innov_cache: tuple | None = None  # (innov_dict, max_innov); cleared by _invalidate_topology
+        self._values_arr = None               # np.float64 array — reused node-value buffer for forward()
 
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
@@ -129,37 +130,190 @@ class Genome:
         self._triggered.clear()
         for node in self.nodes:
             node.value = 0.0
+        if self._values_arr is not None:
+            self._values_arr.fill(0.0)
 
     # -------------------------------------------------------------------------
     # Forward mode (full pass with cycle protection)
     # -------------------------------------------------------------------------
 
+    # Connections-per-node threshold for switching from Python loop to NumPy.
+    # Below: loop over pre-compiled (target_idx, conn) pairs — fast for
+    #        small/medium networks (conn._weight is a direct slot read).
+    # Above: np.multiply into pre-allocated scratch + fancy scatter-add via
+    #        wt_arr (kept live by the Connection.weight property setter).
+    # Crossover measured at ~12 connections per node.
+    _FIRE_NUMPY_THRESHOLD: int = 30  # see docstring below
+
     def _compile_forward(self):
-        """Build a closure that captures node lists so forward() makes zero attribute lookups.
+        """Build an optimised closure for the acyclic forward pass.
 
-        Between-step reset strategy:
-        - Output nodes: zeroed every step (fresh accumulation).
-        - Non-persistent hidden nodes: zeroed by fire_simple() after firing.
-        - Persistent hidden nodes (memory nodes): NOT zeroed — they carry their
-          activated value to the next step, enabling recurrent memory.
-        - Input nodes: overwritten by data, never need explicit reset.
+        Selects between two implementations at compile time:
 
-        Call genome.reset() at episode start to clear ALL values including memory.
+        Small-network path (all nodes have < _FIRE_NUMPY_THRESHOLD connections):
+          Uses fire_simple() via the original compiled approach.  Avoids
+          values_arr overhead; conn._weight is a direct slot read (not property).
+
+        Large-network path (any node has >= _FIRE_NUMPY_THRESHOLD connections):
+          Pre-allocates a float64 _values_arr buffer shared across calls.
+          Per-node dispatch:
+            < threshold : Python loop, conn._weight slot read.
+            >= threshold: np.multiply into pre-alloc scratch + scatter-add.
+          wt_arr kept live by the Connection.weight property setter.
         """
+        import numpy as _np
         from yane.util.activation import ActivationType
         from yane.core.node import NodeType as _NT
-        reset_nodes = [n for n in self.output_nodes]   # only output nodes reset per step
-        self._reset_nodes = reset_nodes
-        exec_order = self._exec_order
+        _thr = self._FIRE_NUMPY_THRESHOLD
+
+        exec_order   = self._exec_order
         output_nodes = self.output_nodes
 
-        # Split input nodes: trivial (LINEAR + bias=0 + non-persistent) vs general.
-        trivial_inputs = []   # (node, connections_list) for direct propagation
-        general_inputs = []   # full fire_simple path
+        # ── Decide which path to use ─────────────────────────────────────────
+        max_conns = 0
+        for n in exec_order:
+            c = len(n.connections)
+            if c > max_conns:
+                max_conns = c
+        for n in self.input_nodes:
+            c = len(n.connections)
+            if c > max_conns:
+                max_conns = c
+
+        if max_conns < _thr:
+            return self._compile_forward_small()
+
+        # ── Large-network path ─────────────────────────────────────────────
+        all_nodes = self.nodes
+        N = len(all_nodes)
+        node_to_idx = {id(n): i for i, n in enumerate(all_nodes)}
+
+        if self._values_arr is None or len(self._values_arr) != N:
+            self._values_arr = _np.zeros(N, dtype=_np.float64)
+        values = self._values_arr
+
+        def _build(node):
+            ni    = node_to_idx[id(node)]
+            conns = node.connections
+            n_c   = len(conns)
+            if n_c >= _thr:
+                tgt_arr = _np.array([node_to_idx[id(c.target)] for c in conns],
+                                     dtype=_np.int32)
+                wt_arr  = _np.empty(n_c, dtype=_np.float64)
+                scratch = _np.empty(n_c, dtype=_np.float64)
+                for j, conn in enumerate(conns):
+                    wt_arr[j]        = conn._weight
+                    conn._weight_arr = wt_arr
+                    conn._weight_idx = j
+                return (ni, None, tgt_arr, wt_arr, scratch, True)
+            elif n_c > 0:
+                return (ni, [(node_to_idx[id(c.target)], c) for c in conns],
+                        None, None, None, False)
+            else:
+                return (ni, None, None, None, None, False)
+
+        trivial_data  = []
+        general_data  = []
+        for node in self.input_nodes:
+            entry = _build(node)
+            if (node._activation is ActivationType.LINEAR
+                    and node.bias == 0.0
+                    and not node._persist_value):
+                trivial_data.append((node,) + entry)
+            else:
+                general_data.append((node,) + entry)
+
+        exec_compiled = [(n,) + _build(n) for n in exec_order]
+        output_idx    = [node_to_idx[id(n)] for n in output_nodes]
+        persistent_hidden = [
+            (n, node_to_idx[id(n)])
+            for n in exec_order
+            if n.type is _NT.HIDDEN and n._persist_value
+        ]
+        self._reset_nodes = list(output_nodes)
+
+        def _forward(data: list[float]) -> list[float]:
+            n_data = len(data)
+            for idx in output_idx:
+                values[idx] = 0.0
+
+            for node, ni, pairs, tgt_arr, wt_arr, scratch, use_np in trivial_data:
+                val = (data[node.input_index] * node.input_scale
+                       if node.input_index < n_data else 0.0)
+                if use_np:
+                    _np.multiply(wt_arr, val, out=scratch)
+                    values[tgt_arr] += scratch
+                elif pairs:
+                    for tgt, conn in pairs:
+                        values[tgt] += conn._weight * val
+                values[ni] = 0.0
+
+            for node, ni, pairs, tgt_arr, wt_arr, scratch, use_np in general_data:
+                val = (data[node.input_index] * node.input_scale
+                       if node.input_index < n_data else 0.0)
+                values[ni] = val
+                v = val + node.bias
+                try:
+                    activated = node._activate_fn(v)
+                except (ValueError, OverflowError):
+                    activated = 0.0
+                if use_np:
+                    _np.multiply(wt_arr, activated, out=scratch)
+                    values[tgt_arr] += scratch
+                elif pairs:
+                    for tgt, conn in pairs:
+                        values[tgt] += conn._weight * activated
+                if node._retain_value:
+                    values[ni] = activated
+                else:
+                    values[ni] = 0.0
+
+            for node, ni, pairs, tgt_arr, wt_arr, scratch, use_np in exec_compiled:
+                v = values[ni] + node.bias
+                try:
+                    activated = node._activate_fn(v)
+                except (ValueError, OverflowError):
+                    activated = 0.0
+                if use_np:
+                    _np.multiply(wt_arr, activated, out=scratch)
+                    values[tgt_arr] += scratch
+                elif pairs:
+                    for tgt, conn in pairs:
+                        values[tgt] += conn._weight * activated
+                if node._retain_value:
+                    values[ni] = activated
+                else:
+                    values[ni] = 0.0
+
+            for node, idx in persistent_hidden:
+                node.value = float(values[idx])
+            result = []
+            for node, idx in zip(output_nodes, output_idx):
+                v = float(values[idx])
+                node.value = v
+                result.append(v)
+            return result
+
+        return _forward
+
+    def _compile_forward_small(self):
+        """Original fast-path for small networks (all nodes < _FIRE_NUMPY_THRESHOLD).
+
+        Uses fire_simple() which reads conn._weight directly (slot, no property).
+        No values_arr overhead — node.value is the primary state.
+        """
+        from yane.util.activation import ActivationType
+        reset_nodes  = list(self.output_nodes)
+        self._reset_nodes = reset_nodes
+        exec_order   = self._exec_order
+        output_nodes = self.output_nodes
+
+        trivial_inputs = []
+        general_inputs = []
         for node in self.input_nodes:
             if (node._activation is ActivationType.LINEAR
                     and node.bias == 0.0
-                    and not node.persist_value):
+                    and not node._persist_value):
                 trivial_inputs.append((node, node.connections))
             else:
                 general_inputs.append(node)
@@ -170,12 +324,11 @@ class Genome:
                     node.value = 0.0
                 n = len(data)
                 for node, conns in trivial_inputs:
-                    # node.input_scale is read live (not captured) so mutations take effect
                     val = (data[node.input_index] * node.input_scale
                            if node.input_index < n else 0.0)
                     for conn in conns:
-                        conn.target.value += conn.weight * val
-                    node.value = 0.0   # mirror fire_simple: non-persistent → zero after push
+                        conn.target.value += conn._weight * val
+                    node.value = 0.0
                 for node in general_inputs:
                     node.value = (data[node.input_index] * node.input_scale
                                   if node.input_index < n else 0.0)
@@ -192,13 +345,14 @@ class Genome:
                     val = (data[node.input_index] * node.input_scale
                            if node.input_index < n else 0.0)
                     for conn in conns:
-                        conn.target.value += conn.weight * val
-                    node.value = 0.0   # non-persistent → zero after push
+                        conn.target.value += conn._weight * val
+                    node.value = 0.0
                 for node in exec_order:
                     node.fire_simple()
                 return [node.value for node in output_nodes]
 
         return _forward
+
 
     def _build_exec_order(self) -> list[Node] | None:
         """Topological sort (Kahn's algorithm) for acyclic networks.
@@ -522,6 +676,7 @@ class Genome:
         genome._compiled_forward = None
         genome._forward_dispatch = None
         genome._has_cycles = self._has_cycles
+        genome._values_arr = None   # fresh buffer; allocated on first forward()
         return genome
 
     # -------------------------------------------------------------------------
@@ -540,6 +695,7 @@ class Genome:
         state = self.__dict__.copy()
         state['_compiled_forward'] = None
         state['_forward_dispatch'] = None
+        state['_values_arr'] = None   # numpy buffer; rebuilt on first forward() in subprocess
         return state
 
     def __setstate__(self, state: dict) -> None:
@@ -552,6 +708,7 @@ class Genome:
         # Backward compat: old pickles won't have these attributes.
         self.__dict__.setdefault('_last_species_id', None)
         self.__dict__.setdefault('_species_stale', True)
+        self.__dict__.setdefault('_values_arr', None)
 
     # -------------------------------------------------------------------------
     # Diagnostics
@@ -609,6 +766,12 @@ class Genome:
         self._forward_dispatch = None
         self._innov_cache = None
         self._species_stale = True  # topology changed → needs species re-assignment
+        self._values_arr = None     # will be reallocated in next _compile_forward()
+        # Disconnect all connections from their weight arrays so stale array
+        # references don't survive recompilation.
+        for node in self.nodes:
+            for conn in node.connections:
+                conn._weight_arr = None
 
     @property
     def connection_count(self) -> int:

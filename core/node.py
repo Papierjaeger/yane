@@ -117,7 +117,7 @@ class Node:
         except (ValueError, OverflowError):
             activated = 0.0
         for conn in self.connections:
-            conn.target.value += conn.weight * activated
+            conn.target.value += conn._weight * activated   # _weight slot, not property
             next_triggered.add(conn.target)
         # _retain_value is pre-computed from `type is OUTPUT or persist_value`,
         # avoiding the compound check on every fire() call.
@@ -134,7 +134,7 @@ class Node:
         except (ValueError, OverflowError):
             activated = 0.0
         for conn in self.connections:
-            conn.target.value += conn.weight * activated
+            conn.target.value += conn._weight * activated   # _weight slot, not property
         if self._retain_value:
             self.value = activated
         else:
