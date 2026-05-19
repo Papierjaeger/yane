@@ -436,6 +436,14 @@ class Genome:
         return self.get_outputs()
 
     def forward(self, data: list[float]) -> list[float]:
+        # Guard: gym environments (CartPole, etc.) return numpy arrays as observations.
+        # numpy.float64 values propagate through node.value slots, causing spurious
+        # numpy overflow/cast warnings and potential instability.  Convert to a plain
+        # Python list of floats once, at the boundary, so the rest of the network
+        # always sees Python floats.
+        if type(data) is not list:
+            data = [float(x) for x in data]
+
         # _forward_dispatch is set once after topology is resolved:
         # either to the compiled fast-path closure or to _bfs_forward.
         # After the first call, this is a direct 1-attribute-read + 1-call.
