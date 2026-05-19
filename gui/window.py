@@ -118,6 +118,84 @@ def _divider() -> QFrame:
     return f
 
 
+class _CollapsibleGroup(QWidget):
+    """A titled section that can be expanded/collapsed by clicking the header."""
+
+    _BTN_QSS = (
+        "QPushButton {"
+        "  text-align: left; padding: 5px 8px;"
+        "  font-weight: bold; font-size: 13px; color: #a6adc8;"
+        "  background: #313244; border: 1px solid #313244;"
+        "  border-radius: 6px;"
+        "}"
+        "QPushButton:hover { background: #3b3d54; }"
+    )
+    _BTN_OPEN_QSS = (
+        "QPushButton {"
+        "  text-align: left; padding: 5px 8px;"
+        "  font-weight: bold; font-size: 13px; color: #a6adc8;"
+        "  background: #313244; border: 1px solid #313244;"
+        "  border-radius: 6px 6px 0 0;"
+        "}"
+        "QPushButton:hover { background: #3b3d54; }"
+    )
+    _PANEL_QSS = (
+        "QWidget#collapsiblePanel {"
+        "  border: 1px solid #313244; border-top: none;"
+        "  border-radius: 0 0 6px 6px;"
+        "}"
+    )
+
+    def __init__(self, title: str, use_form: bool = True,
+                 collapsed: bool = False, parent=None) -> None:
+        super().__init__(parent)
+        self._title = title
+        self._collapsed = collapsed
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 4, 0, 0)
+        outer.setSpacing(0)
+
+        self._btn = QPushButton()
+        self._btn.setFlat(False)
+        self._btn.clicked.connect(self._toggle)
+        outer.addWidget(self._btn)
+
+        self._panel = QWidget()
+        self._panel.setObjectName("collapsiblePanel")
+        self._panel.setStyleSheet(self._PANEL_QSS)
+        if use_form:
+            self._inner: QFormLayout | QVBoxLayout = QFormLayout(self._panel)
+            self._inner.setSpacing(4)
+        else:
+            self._inner = QVBoxLayout(self._panel)
+        self._inner.setContentsMargins(8, 6, 8, 8)
+        outer.addWidget(self._panel)
+
+        self._update_state()
+
+    def _update_state(self) -> None:
+        arrow = "▶" if self._collapsed else "▼"
+        self._btn.setText(f"  {arrow}  {self._title}")
+        self._btn.setStyleSheet(
+            self._BTN_QSS if self._collapsed else self._BTN_OPEN_QSS
+        )
+        self._panel.setVisible(not self._collapsed)
+
+    def _toggle(self) -> None:
+        self._collapsed = not self._collapsed
+        self._update_state()
+
+    def addRow(self, *args) -> None:
+        self._inner.addRow(*args)  # type: ignore[union-attr]
+
+    def addWidget(self, widget: QWidget) -> None:
+        self._inner.addWidget(widget)
+
+    def setToolTip(self, tip: str) -> None:  # noqa: N802
+        self._btn.setToolTip(tip)
+
+
 # ---------------------------------------------------------------------------
 # Left panel — network + population stats
 # ---------------------------------------------------------------------------
@@ -154,9 +232,7 @@ class LeftPanel(QWidget):
         layout.setSpacing(6)
 
         # ── Best Genome ────────────────────────────────────────────────────
-        best = QGroupBox("Best Genome")
-        best_layout = QFormLayout(best)
-        best_layout.setSpacing(4)
+        best = _CollapsibleGroup("Best Genome", collapsed=False)
         self.lbl_nodes        = _label("—", "statValue")
         self.lbl_connections  = _label("—", "statValue")
         self.lbl_best_fit     = _label("—", "statValue")
@@ -186,18 +262,16 @@ class LeftPanel(QWidget):
             "ABS=Betrag   GAU=Gauß    CUB=Kubik  SIN=Sinus  COS=Kosinus\n"
             "ELU=ELU  SWI=Swish  SOF=Softplus  LEA=Leaky ReLU  BIN=Binär\n"
             "Zeigt was das Netz selbst entdeckt hat.")
-        best_layout.addRow("Nodes:",          self.lbl_nodes)
-        best_layout.addRow("Connections:",    self.lbl_connections)
-        best_layout.addRow("Fitness:",        self.lbl_best_fit)
-        best_layout.addRow("Shared fitness:", self.lbl_shared_fit)
-        best_layout.addRow("Efficiency:",    self.lbl_efficiency)
-        best_layout.addRow("Activations:", self.lbl_activations)
+        best.addRow("Nodes:",          self.lbl_nodes)
+        best.addRow("Connections:",    self.lbl_connections)
+        best.addRow("Fitness:",        self.lbl_best_fit)
+        best.addRow("Shared fitness:", self.lbl_shared_fit)
+        best.addRow("Efficiency:",     self.lbl_efficiency)
+        best.addRow("Activations:",    self.lbl_activations)
         layout.addWidget(best)
 
         # ── Population ────────────────────────────────────────────────────
-        pop = QGroupBox("Population")
-        pop_layout = QFormLayout(pop)
-        pop_layout.setSpacing(4)
+        pop = _CollapsibleGroup("Population", collapsed=False)
         self.lbl_population  = _label("—", "statValue")
         self.lbl_species     = _label("—", "statValue")
         self.lbl_avg_nodes   = _label("—", "statValue")
@@ -244,25 +318,23 @@ class LeftPanel(QWidget):
             "ersetzt wurden (nur aktiv wenn set_fitness_sanitizing() gesetzt ist).")
         self.lbl_clipped_fitness.setToolTip(
             "Anzahl Fitnesswerte, die am konfigurierten clip_low / clip_high begrenzt wurden.")
-        pop_layout.addRow("Genomes:",           self.lbl_population)
-        pop_layout.addRow("Species:",           self.lbl_species)
-        pop_layout.addRow("Avg nodes:",         self.lbl_avg_nodes)
-        pop_layout.addRow("Avg conns:",         self.lbl_avg_conns)
-        pop_layout.addRow("Min fitness:",       self.lbl_pop_min)
-        pop_layout.addRow("Avg fitness:",       self.lbl_pop_avg)
-        pop_layout.addRow("Max fitness:",       self.lbl_pop_max)
-        pop_layout.addRow("Stagnation (total):", self.lbl_stagnation)
-        pop_layout.addRow("Next injection:",    self.lbl_next_injection)
-        pop_layout.addRow("Novelty weight:",    self.lbl_novelty_weight)
-        pop_layout.addRow("Efficiency weight:", self.lbl_eff_weight)
-        pop_layout.addRow("Invalid fitness:",   self.lbl_invalid_fitness)
-        pop_layout.addRow("Clipped fitness:",   self.lbl_clipped_fitness)
+        pop.addRow("Genomes:",           self.lbl_population)
+        pop.addRow("Species:",           self.lbl_species)
+        pop.addRow("Avg nodes:",         self.lbl_avg_nodes)
+        pop.addRow("Avg conns:",         self.lbl_avg_conns)
+        pop.addRow("Min fitness:",       self.lbl_pop_min)
+        pop.addRow("Avg fitness:",       self.lbl_pop_avg)
+        pop.addRow("Max fitness:",       self.lbl_pop_max)
+        pop.addRow("Stagnation (total):", self.lbl_stagnation)
+        pop.addRow("Next injection:",    self.lbl_next_injection)
+        pop.addRow("Novelty weight:",    self.lbl_novelty_weight)
+        pop.addRow("Efficiency weight:", self.lbl_eff_weight)
+        pop.addRow("Invalid fitness:",   self.lbl_invalid_fitness)
+        pop.addRow("Clipped fitness:",   self.lbl_clipped_fitness)
         layout.addWidget(pop)
 
         # ── Lamarck ───────────────────────────────────────────────────────
-        lamarck_grp = QGroupBox("Lamarck Refinement")
-        lamarck_stat_layout = QFormLayout(lamarck_grp)
-        lamarck_stat_layout.setSpacing(4)
+        lamarck_grp = _CollapsibleGroup("Lamarck Refinement", collapsed=True)
         self.lbl_lamarck_mode    = _label("—", "statValue")
         self.lbl_lamarck_applied = _label("—", "mutRate")
         self.lbl_lamarck_steps   = _label("—", "mutRate")
@@ -277,15 +349,13 @@ class LeftPanel(QWidget):
         self.lbl_lamarck_steps.setToolTip(
             "Gesamtzahl der Hill-Climbing-Schritte (kumulativ).\n"
             "Ein Schritt = eine Fitnessmessung zum Testen einer Gewichtsänderung.")
-        lamarck_stat_layout.addRow("Mode:",         self.lbl_lamarck_mode)
-        lamarck_stat_layout.addRow("Applied:",      self.lbl_lamarck_applied)
-        lamarck_stat_layout.addRow("Steps total:",  self.lbl_lamarck_steps)
+        lamarck_grp.addRow("Mode:",        self.lbl_lamarck_mode)
+        lamarck_grp.addRow("Applied:",     self.lbl_lamarck_applied)
+        lamarck_grp.addRow("Steps total:", self.lbl_lamarck_steps)
         layout.addWidget(lamarck_grp)
 
         # ── Evaluation timing ─────────────────────────────────────────────
-        eval_grp = QGroupBox("Evaluation timing")
-        eval_layout = QFormLayout(eval_grp)
-        eval_layout.setSpacing(4)
+        eval_grp = _CollapsibleGroup("Evaluation timing", collapsed=True)
         self.lbl_eval_mean   = _label("—", "statValue")
         self.lbl_eval_median = _label("—", "mutRate")
         self.lbl_eval_p95    = _label("—", "mutRate")
@@ -299,16 +369,14 @@ class LeftPanel(QWidget):
             "95. Perzentil der Eval-Zeiten — zeigt die obere Grenze für 95% der Genomes.")
         self.lbl_eval_max.setToolTip(
             "Langsamste Eval-Zeit in der Population — möglicher Performance-Ausreißer.")
-        eval_layout.addRow("Mean:",   self.lbl_eval_mean)
-        eval_layout.addRow("Median:", self.lbl_eval_median)
-        eval_layout.addRow("p95:",    self.lbl_eval_p95)
-        eval_layout.addRow("Max:",    self.lbl_eval_max)
+        eval_grp.addRow("Mean:",   self.lbl_eval_mean)
+        eval_grp.addRow("Median:", self.lbl_eval_median)
+        eval_grp.addRow("p95:",    self.lbl_eval_p95)
+        eval_grp.addRow("Max:",    self.lbl_eval_max)
         layout.addWidget(eval_grp)
 
         # ── Offspring counters ────────────────────────────────────────────
-        off_grp = QGroupBox("Offspring (cumulative)")
-        off_layout = QFormLayout(off_grp)
-        off_layout.setSpacing(4)
+        off_grp = _CollapsibleGroup("Offspring (cumulative)", collapsed=True)
         self.lbl_n_crossover  = _label("—", "mutRate")
         self.lbl_n_mutation   = _label("—", "mutRate")
         self.lbl_n_injection  = _label("—", "mutRate")
@@ -319,15 +387,13 @@ class LeftPanel(QWidget):
         self.lbl_n_injection.setToolTip(
             "Anzahl Genome, die per Diversitäts-Injektion (Stagnation oder Topologie-Stagnation)\n"
             "in die Population eingebracht wurden.")
-        off_layout.addRow("Crossover:",  self.lbl_n_crossover)
-        off_layout.addRow("Mutation:",   self.lbl_n_mutation)
-        off_layout.addRow("Injection:",  self.lbl_n_injection)
+        off_grp.addRow("Crossover:", self.lbl_n_crossover)
+        off_grp.addRow("Mutation:",  self.lbl_n_mutation)
+        off_grp.addRow("Injection:", self.lbl_n_injection)
         layout.addWidget(off_grp)
 
         # ── Structure mutations (best genome) ─────────────────────────────
-        struct = QGroupBox("Structure mutations")
-        struct_layout = QFormLayout(struct)
-        struct_layout.setSpacing(3)
+        struct = _CollapsibleGroup("Structure mutations", collapsed=True)
         self.lbl_rate_add_node  = _label("—", "mutRate")
         self.lbl_rate_rem_node  = _label("—", "mutRate")
         self.lbl_rate_add_conn  = _label("—", "mutRate")
@@ -349,17 +415,15 @@ class LeftPanel(QWidget):
             "Beim Entfernen einer Node N: Wahrscheinlichkeit, für jedes Paar A→N→B\n"
             "eine Direktverbindung A→B zu erzeugen (Bypass).\n"
             "Bypass-Gewicht = w(A→N) × w(N→B) — erhält den Signalfluss näherungsweise.")
-        struct_layout.addRow("Add node:",    self.lbl_rate_add_node)
-        struct_layout.addRow("Rem node:",    self.lbl_rate_rem_node)
-        struct_layout.addRow("Add conn:",    self.lbl_rate_add_conn)
-        struct_layout.addRow("Rem conn:",    self.lbl_rate_rem_conn)
-        struct_layout.addRow("Bypass prob:", self.lbl_bypass)
+        struct.addRow("Add node:",    self.lbl_rate_add_node)
+        struct.addRow("Rem node:",    self.lbl_rate_rem_node)
+        struct.addRow("Add conn:",    self.lbl_rate_add_conn)
+        struct.addRow("Rem conn:",    self.lbl_rate_rem_conn)
+        struct.addRow("Bypass prob:", self.lbl_bypass)
         layout.addWidget(struct)
 
         # ── Strategy genes (best genome) ──────────────────────────────────
-        strat = QGroupBox("Strategy genes")
-        strat_layout = QFormLayout(strat)
-        strat_layout.setSpacing(3)
+        strat = _CollapsibleGroup("Strategy genes", collapsed=True)
         self.lbl_crossover_prob   = _label("—", "mutRate")
         self.lbl_offspring_factor = _label("—", "mutRate")
         self.lbl_compat_thresh    = _label("—", "mutRate")
@@ -381,16 +445,14 @@ class LeftPanel(QWidget):
             "Globale Schrittgröße für Gewichts- und Bias-Mutationen (ähnlich CMA-ES).\n"
             "Kleiner = feineres Tuning, größer = weiterer Sprung im Gewichtsraum.\n"
             "Evolviert sich selbst und wird auch von Lamarck als Suchradius genutzt.")
-        strat_layout.addRow("Crossover prob:",   self.lbl_crossover_prob)
-        strat_layout.addRow("Offspring factor:", self.lbl_offspring_factor)
-        strat_layout.addRow("Compat threshold:", self.lbl_compat_thresh)
-        strat_layout.addRow("Sigma global:",     self.lbl_sigma_global)
+        strat.addRow("Crossover prob:",   self.lbl_crossover_prob)
+        strat.addRow("Offspring factor:", self.lbl_offspring_factor)
+        strat.addRow("Compat threshold:", self.lbl_compat_thresh)
+        strat.addRow("Sigma global:",     self.lbl_sigma_global)
         layout.addWidget(strat)
 
         # ── Input scales (best genome) ────────────────────────────────────
-        iscale = QGroupBox("Input Scales  (×)")
-        iscale_layout = QFormLayout(iscale)
-        iscale_layout.setSpacing(3)
+        iscale = _CollapsibleGroup("Input Scales  (×)", collapsed=True)
         self.lbl_input_scales = _label("—", "mutRate")
         self.lbl_input_scales.setWordWrap(True)
         self.lbl_input_scales.setToolTip(
@@ -398,13 +460,11 @@ class LeftPanel(QWidget):
             "In0: ×0.12 bedeutet: roher Input-Wert wird intern mit 0.12 multipliziert.\n"
             "Ermöglicht automatische Normalisierung ohne manuelles Preprocessing.\n"
             "Startet bei ×1.0 (neutral) und evolviert sich mit der Zeit.")
-        iscale_layout.addRow(self.lbl_input_scales)
+        iscale.addRow(self.lbl_input_scales)
         layout.addWidget(iscale)
 
         # ── Weight / Node rates (avg over best genome) ────────────────────
-        wn = QGroupBox("Weight / Node rates  (avg)")
-        wn_layout = QFormLayout(wn)
-        wn_layout.setSpacing(3)
+        wn = _CollapsibleGroup("Weight / Node rates  (avg)", collapsed=True)
         self.lbl_weight_rate  = _label("—", "mutRate")
         self.lbl_weight_delta = _label("—", "mutRate")
         self.lbl_bias_rate    = _label("—", "mutRate")
@@ -425,24 +485,22 @@ class LeftPanel(QWidget):
         self.lbl_activ_rate.setToolTip(
             "Durchschnittliche Wahrscheinlichkeit, dass eine Node ihre\n"
             "Aktivierungsfunktion pro Mutation wechselt (custom_rate).")
-        wn_layout.addRow("Weight rate:", self.lbl_weight_rate)
-        wn_layout.addRow("Weight Δ:",    self.lbl_weight_delta)
-        wn_layout.addRow("Bias rate:",   self.lbl_bias_rate)
-        wn_layout.addRow("Bias Δ:",      self.lbl_bias_delta)
-        wn_layout.addRow("Activation:",  self.lbl_activ_rate)
+        wn.addRow("Weight rate:", self.lbl_weight_rate)
+        wn.addRow("Weight Δ:",    self.lbl_weight_delta)
+        wn.addRow("Bias rate:",   self.lbl_bias_rate)
+        wn.addRow("Bias Δ:",      self.lbl_bias_delta)
+        wn.addRow("Activation:",  self.lbl_activ_rate)
         layout.addWidget(wn)
 
         # ── Weight distribution histogram ─────────────────────────────────
-        whist = QGroupBox("Weight Distribution")
+        whist = _CollapsibleGroup("Weight Distribution", use_form=False, collapsed=False)
         whist.setToolTip(
             "Histogramm der Verbindungsgewichte im besten Netz.\n"
             "Schmal = Gewichte sind konvergiert (ähnliche Werte).\n"
             "Breit = viel Variation, Netz exploriert noch.\n"
             "Die gestrichelte Linie zeigt Gewicht = 0.")
-        whist_layout = QVBoxLayout(whist)
-        whist_layout.setContentsMargins(4, 4, 4, 4)
         self.weight_hist = WeightHistogram()
-        whist_layout.addWidget(self.weight_hist)
+        whist.addWidget(self.weight_hist)
         layout.addWidget(whist)
 
         layout.addStretch()
