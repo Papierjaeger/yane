@@ -624,13 +624,51 @@ class Population:
             sp.representative = best
             sp.update_stagnation(best)
 
+        # Active species merging: if two species' representatives are closer
+        # than the current threshold they should belong to the same species.
+        # The lazy assignment fast-path prevents this from happening naturally
+        # (genomes always land in their home species first), so we merge
+        # explicitly. Stop as soon as target_species is reached so we never
+        # over-merge below the target.
+        n_active = len(self._species)
+        changed = True
+        while changed and n_active > self._target_species:
+            changed = False
+            for i in range(len(self._species)):
+                if not self._species[i].members:
+                    continue
+                for j in range(i + 1, len(self._species)):
+                    if not self._species[j].members:
+                        continue
+                    sp_a, sp_b = self._species[i], self._species[j]
+                    if _compatibility(sp_a.representative, sp_b.representative) < threshold:
+                        bigger, smaller = (
+                            (sp_a, sp_b) if len(sp_a.members) >= len(sp_b.members)
+                            else (sp_b, sp_a)
+                        )
+                        for g in smaller.members:
+                            g._last_species_id = id(bigger)
+                        bigger.members.extend(smaller.members)
+                        if (smaller._cached_best is not None and (
+                                bigger._cached_best is None or
+                                smaller._cached_best.fitness > bigger._cached_best.fitness)):
+                            bigger._cached_best = smaller._cached_best
+                        bigger.representative = bigger._cached_best or bigger.representative
+                        smaller.members = []
+                        n_active -= 1
+                        changed = True
+                        break
+                if changed:
+                    break
+        self._species = [sp for sp in self._species if sp.members]
+
         # Adapt threshold so species count converges to target_species.
-        # Step 0.02: 4× larger than the original 0.005 so the species count
-        # converges to target_species faster (reducing compatibility calls).
+        # Dead-band of ±1 around target prevents the threshold from oscillating
+        # immediately after a merge brings the count to the target.
         n = len(self._species)
-        if n > self._target_species:
+        if n > self._target_species + 1:
             self._compat_threshold = min(1.5, self._compat_threshold + 0.02)
-        elif n < self._target_species:
+        elif n < self._target_species - 1:
             self._compat_threshold = max(0.01, self._compat_threshold - 0.02)
 
     def _compute_shared_fitness(self) -> None:
