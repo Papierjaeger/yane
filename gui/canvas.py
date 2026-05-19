@@ -565,7 +565,7 @@ class SpeciesChart(QWidget):
 
             if len(self._history) < 2:
                 painter.setPen(_C_TEXT)
-                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Warte auf Daten…")
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for data…")
                 return
 
             n = len(self._history)
@@ -587,7 +587,7 @@ class SpeciesChart(QWidget):
             painter.drawText(2, pad_t + 8, str(hi))
             painter.drawText(2, h - pad_b + 1, "0")
             painter.setPen(self._C_LINE)
-            painter.drawText(pad_l + 4, pad_t + 9, f"Arten: {self._history[-1]}")
+            painter.drawText(pad_l + 4, pad_t + 9, f"Species: {self._history[-1]}")
         finally:
             painter.end()
 
@@ -624,7 +624,7 @@ class WeightHistogram(QWidget):
 
             if not self._weights:
                 painter.setPen(_C_TEXT)
-                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Keine Gewichte")
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No weights")
                 return
 
             lo, hi_val = min(self._weights), max(self._weights)
@@ -659,6 +659,6 @@ class WeightHistogram(QWidget):
             painter.drawText(pad_l, h - 2, f"{lo:.2f}")
             tw = len(f"{hi_val:.2f}") * 5
             painter.drawText(w - pad_r - tw, h - 2, f"{hi_val:.2f}")
-            painter.drawText(pad_l + 2, pad_t + 8, f"Gewichte ({len(self._weights)})")
+            painter.drawText(pad_l + 2, pad_t + 8, f"Weights ({len(self._weights)})")
         finally:
             painter.end()

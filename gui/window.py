@@ -190,8 +190,8 @@ class LeftPanel(QWidget):
         best_layout.addRow("Connections:",    self.lbl_connections)
         best_layout.addRow("Fitness:",        self.lbl_best_fit)
         best_layout.addRow("Shared fitness:", self.lbl_shared_fit)
-        best_layout.addRow("Effizienz:",       self.lbl_efficiency)
-        best_layout.addRow("Aktivierungen:",  self.lbl_activations)
+        best_layout.addRow("Efficiency:",    self.lbl_efficiency)
+        best_layout.addRow("Activations:", self.lbl_activations)
         layout.addWidget(best)
 
         # ── Population ────────────────────────────────────────────────────
@@ -251,10 +251,10 @@ class LeftPanel(QWidget):
         pop_layout.addRow("Min fitness:",       self.lbl_pop_min)
         pop_layout.addRow("Avg fitness:",       self.lbl_pop_avg)
         pop_layout.addRow("Max fitness:",       self.lbl_pop_max)
-        pop_layout.addRow("Stagn. (gesamt):",   self.lbl_stagnation)
-        pop_layout.addRow("Nächste Injection:", self.lbl_next_injection)
+        pop_layout.addRow("Stagnation (total):", self.lbl_stagnation)
+        pop_layout.addRow("Next injection:",    self.lbl_next_injection)
         pop_layout.addRow("Novelty weight:",    self.lbl_novelty_weight)
-        pop_layout.addRow("Effizienz-Relevanz:", self.lbl_eff_weight)
+        pop_layout.addRow("Efficiency weight:", self.lbl_eff_weight)
         pop_layout.addRow("Invalid fitness:",   self.lbl_invalid_fitness)
         pop_layout.addRow("Clipped fitness:",   self.lbl_clipped_fitness)
         layout.addWidget(pop)
@@ -277,9 +277,9 @@ class LeftPanel(QWidget):
         self.lbl_lamarck_steps.setToolTip(
             "Gesamtzahl der Hill-Climbing-Schritte (kumulativ).\n"
             "Ein Schritt = eine Fitnessmessung zum Testen einer Gewichtsänderung.")
-        lamarck_stat_layout.addRow("Modus:",          self.lbl_lamarck_mode)
-        lamarck_stat_layout.addRow("Angewendet:",     self.lbl_lamarck_applied)
-        lamarck_stat_layout.addRow("Schritte gesamt:", self.lbl_lamarck_steps)
+        lamarck_stat_layout.addRow("Mode:",         self.lbl_lamarck_mode)
+        lamarck_stat_layout.addRow("Applied:",      self.lbl_lamarck_applied)
+        lamarck_stat_layout.addRow("Steps total:",  self.lbl_lamarck_steps)
         layout.addWidget(lamarck_grp)
 
         # ── Evaluation timing ─────────────────────────────────────────────
@@ -306,7 +306,7 @@ class LeftPanel(QWidget):
         layout.addWidget(eval_grp)
 
         # ── Offspring counters ────────────────────────────────────────────
-        off_grp = QGroupBox("Offspring (kumulativ)")
+        off_grp = QGroupBox("Offspring (cumulative)")
         off_layout = QFormLayout(off_grp)
         off_layout.setSpacing(4)
         self.lbl_n_crossover  = _label("—", "mutRate")
@@ -433,7 +433,7 @@ class LeftPanel(QWidget):
         layout.addWidget(wn)
 
         # ── Weight distribution histogram ─────────────────────────────────
-        whist = QGroupBox("Gewichtsverteilung")
+        whist = QGroupBox("Weight Distribution")
         whist.setToolTip(
             "Histogramm der Verbindungsgewichte im besten Netz.\n"
             "Schmal = Gewichte sind konvergiert (ähnliche Werte).\n"
@@ -492,7 +492,7 @@ class LeftPanel(QWidget):
             self.lbl_stagnation.setText(str(stag))
         if since is not None and thr is not None:
             remaining = max(0, thr - since)
-            self.lbl_next_injection.setText(f"{since} / {thr}  (noch {remaining})")
+            self.lbl_next_injection.setText(f"{since} / {thr}  ({remaining} left)")
         nw = mem.get("novelty_weight")
         if nw is not None:
             self.lbl_novelty_weight.setText(f"{nw:.3f}")
@@ -853,7 +853,7 @@ class TrainingTab(QWidget):
             "oder entspricht dem manuell gewählten Wert.")
         workers_lay.addWidget(self.lbl_workers_active)
         cfg_form.addRow("Workers:", workers_row)
-        cfg_form.addRow("Zielarten:",      self.spin_species)
+        cfg_form.addRow("Target species:", self.spin_species)
         lamarck_row = QWidget()
         lamarck_lay = QHBoxLayout(lamarck_row)
         lamarck_lay.setContentsMargins(0, 0, 0, 0)
@@ -861,11 +861,11 @@ class TrainingTab(QWidget):
         lamarck_lay.addWidget(self.combo_lamarck_mode, stretch=1)
         lamarck_lay.addWidget(self.spin_lamarck)
         cfg_form.addRow("Lamarck:",        lamarck_row)
-        cfg_form.addRow("Mehrfachbew.:",   self.spin_multi_eval)
-        cfg_form.addRow("Aggregation:",    self.combo_aggregation)
-        cfg_form.addRow("Sigma-Strafe:",   self.dspin_sigma_penalty)
-        cfg_form.addRow("Normalisierung:", self.chk_normalize)
-        cfg_form.addRow("Gedächtnis:",     self.chk_memory)
+        cfg_form.addRow("Multi-eval:",     self.spin_multi_eval)
+        cfg_form.addRow("Aggregation:",   self.combo_aggregation)
+        cfg_form.addRow("Sigma penalty:", self.dspin_sigma_penalty)
+        cfg_form.addRow("Normalization:", self.chk_normalize)
+        cfg_form.addRow("Memory:",        self.chk_memory)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
         layout.addWidget(cfg)
@@ -928,7 +928,7 @@ class TrainingTab(QWidget):
         self.chart = FitnessChart()
         prog_layout.addWidget(self.chart)
 
-        prog_layout.addWidget(QLabel("Artenanzahl:"))
+        prog_layout.addWidget(QLabel("Species count:"))
         self.species_chart = SpeciesChart()
         prog_layout.addWidget(self.species_chart)
 
@@ -1161,9 +1161,9 @@ class TrainingTab(QWidget):
 
     def _on_workers_resolved(self, n: int) -> None:
         if n <= 1:
-            self.lbl_workers_active.setText("→ sequenziell")
+            self.lbl_workers_active.setText("→ sequential")
         else:
-            self.lbl_workers_active.setText(f"→ {n} Prozesse")
+            self.lbl_workers_active.setText(f"→ {n} processes")
 
     def _on_iteration(self, iteration: int, fitness: float, best_genome, mem: dict) -> None:
         elapsed = _time.perf_counter() - self._start_time
@@ -1502,7 +1502,7 @@ class InspectTab(QWidget):
         self._denorm_row = QWidget()
         denorm_layout = QHBoxLayout(self._denorm_row)
         denorm_layout.setContentsMargins(0, 0, 0, 4)
-        self.chk_denormalize = QCheckBox("Werte denormalisieren (Rohwerte anzeigen)")
+        self.chk_denormalize = QCheckBox("Denormalize values (show raw units)")
         self.chk_denormalize.setChecked(True)
         self.chk_denormalize.setToolTip(
             "Aus: Werte werden im normalisierten [0,1]-Bereich angezeigt.\n"
@@ -1537,7 +1537,7 @@ class InspectTab(QWidget):
         btn_row_layout = QHBoxLayout(btn_row)
         btn_row_layout.setContentsMargins(0, 0, 0, 0)
         btn_row_layout.setSpacing(8)
-        self.btn_reset_mem = QPushButton("↺  Gedächtnis zurücksetzen")
+        self.btn_reset_mem = QPushButton("↺  Reset memory")
         self.btn_reset_mem.setEnabled(False)
         self.btn_reset_mem.setToolTip(
             "Setzt den internen Zustand zurück (genome.reset()).\n"
@@ -1553,13 +1553,13 @@ class InspectTab(QWidget):
         manual_layout.addWidget(btn_row)
 
         # Outputs
-        self._output_group = QGroupBox("Ausgaben")
+        self._output_group = QGroupBox("Outputs")
         self._output_layout = QFormLayout(self._output_group)
         self._output_labels: list[QLabel] = []
         manual_layout.addWidget(self._output_group)
 
         # Memory state display (hidden until memory nodes exist)
-        self._memory_group = QGroupBox("Gedächtniszustand")
+        self._memory_group = QGroupBox("Memory state")
         self._memory_form  = QFormLayout(self._memory_group)
         self._memory_group.setVisible(False)
         manual_layout.addWidget(self._memory_group)
@@ -1567,7 +1567,7 @@ class InspectTab(QWidget):
         layout.addWidget(manual)
 
         # ── Sequence Trace ─────────────────────────────────────────────────
-        self._seq_group = QGroupBox("Sequenz-Trace")
+        self._seq_group = QGroupBox("Sequence Trace")
         seq_outer_layout = QVBoxLayout(self._seq_group)
         self._seq_group.setVisible(False)
 
@@ -1576,10 +1576,10 @@ class InspectTab(QWidget):
         seq_btn_layout = QHBoxLayout(seq_btn_row)
         seq_btn_layout.setContentsMargins(0, 0, 0, 0)
         seq_btn_layout.setSpacing(6)
-        self.btn_seq_prev  = QPushButton("◀  Zurück")
-        self.btn_seq_next  = QPushButton("▶  Nächster Schritt")
-        self.btn_seq_all   = QPushButton("⏭  Alle ausführen")
-        self.btn_seq_reset = QPushButton("↺  Zurücksetzen")
+        self.btn_seq_prev  = QPushButton("◀  Back")
+        self.btn_seq_next  = QPushButton("▶  Next step")
+        self.btn_seq_all   = QPushButton("⏭  Run all")
+        self.btn_seq_reset = QPushButton("↺  Reset")
         for b in (self.btn_seq_prev, self.btn_seq_next,
                   self.btn_seq_all, self.btn_seq_reset):
             b.setEnabled(False)
@@ -1595,8 +1595,8 @@ class InspectTab(QWidget):
         seq_hdr_layout = QHBoxLayout(seq_hdr)
         seq_hdr_layout.setContentsMargins(2, 0, 2, 0)
         seq_hdr_layout.setSpacing(6)
-        for txt, w, fixed in [("#", 24, True), ("Input", 75, False), ("Erwartet", 75, False),
-                               ("Ausgabe", 75, False), ("Δ", 52, False), ("", 22, True)]:
+        for txt, w, fixed in [("#", 24, True), ("Input", 75, False), ("Expected", 75, False),
+                               ("Output", 75, False), ("Δ", 52, False), ("", 22, True)]:
             lbl = _label(txt, "sectionTitle")
             if fixed:
                 lbl.setFixedWidth(w)
@@ -1806,7 +1806,7 @@ class InspectTab(QWidget):
             self._memory_labels.append(val_lbl)
 
         n = len(mem_nodes)
-        self._memory_group.setTitle(f"Gedächtniszustand  ({n} Knoten)")
+        self._memory_group.setTitle(f"Memory state  ({n} nodes)")
 
     def _update_memory_display(self) -> None:
         if self._genome is None:
@@ -1849,7 +1849,7 @@ class InspectTab(QWidget):
                            if not r._denormalized else r._delta == 0.0))
         n       = len(self._test_rows)
         self._test_sum_lbl.setText(
-            f"Σ Δ: {total:.4f}  |  {correct}/{n} korrekt"
+            f"Σ Δ: {total:.4f}  |  {correct}/{n} correct"
         )
 
     def _update_acc_fitness(self) -> None:
@@ -1865,7 +1865,7 @@ class InspectTab(QWidget):
         done    = len(deltas)
         self._acc_fitness_lbl.setText(
             f"Σ Δ: {total:.4f}  |  Fitness: {-total:.4f}  |  "
-            f"{correct}/{done} korrekt"
+            f"{correct}/{done} correct"
         )
 
     # ── Sequence step navigation ───────────────────────────────────────
