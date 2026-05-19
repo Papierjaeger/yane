@@ -1319,6 +1319,7 @@ class _TestCaseRow:
         self._input_scale   = input_scale
         self._output_scale  = output_scale
         self._denormalized  = denormalized
+        self._delta: float | None = None
 
         row = QWidget()
         rlay = QHBoxLayout(row)
@@ -1343,6 +1344,7 @@ class _TestCaseRow:
 
     def update(self, genome) -> None:
         if genome is None:
+            self._delta = None
             self._out_lbl.setText("—")
             self._delta_lbl.setText("—")
             self._tick.setText("?")
@@ -1351,6 +1353,7 @@ class _TestCaseRow:
         try:
             outputs = genome.forward(self._inputs)
         except Exception:
+            self._delta = None
             self._out_lbl.setText("err")
             self._delta_lbl.setText("—")
             self._tick.setText("✗")
@@ -1374,6 +1377,7 @@ class _TestCaseRow:
         if self._denormalized and self._output_scale:
             diffs = [d * s for d, s in zip(diffs, self._output_scale)]
         total = sum(abs(d) for d in diffs)
+        self._delta = total
         self._delta_lbl.setText(f"{total:.2f}" if self._denormalized else f"{total:.3f}")
 
         tick, color = ("✓", "#a6e3a1") if correct else ("✗", "#f38ba8")
@@ -1515,6 +1519,7 @@ class InspectTab(QWidget):
         self._test_inner.addWidget(self._denorm_row)
         self._placeholder = _label("Select an example to see test cases.", "sectionTitle")
         self._test_inner.addWidget(self._placeholder)
+        self._test_sum_lbl: QLabel | None = None
         layout.addWidget(self._test_group)
 
         # ── Manual Forward Pass ────────────────────────────────────────────
@@ -1640,6 +1645,7 @@ class InspectTab(QWidget):
         self.btn_reset_mem.setEnabled(False)
         for row in self._test_rows:
             row.update(None)
+        self._update_test_sum()
         self._memory_group.setVisible(False)
         self._mem_sig = ()
         self._memory_labels.clear()
@@ -1665,6 +1671,7 @@ class InspectTab(QWidget):
             genome.reset()
         for row in self._test_rows:
             row.update(genome)
+        self._update_test_sum()
         if self._seq_samples:
             self._seq_run_all()
         else:
@@ -1705,6 +1712,9 @@ class InspectTab(QWidget):
             row = _TestCaseRow(self._test_inner, inputs, expected,
                                in_scale, out_scale, denorm)
             self._test_rows.append(row)
+
+        self._test_sum_lbl = _label("", "sectionTitle")
+        self._test_inner.addWidget(self._test_sum_lbl)
 
     def _rebuild_input_widgets(self, n_inputs: int, n_outputs: int) -> None:
         while self._inputs_form_layout.rowCount():
@@ -1815,6 +1825,22 @@ class InspectTab(QWidget):
         self.btn_seq_next.setEnabled(has_genome and has_samples and not at_end)
         self.btn_seq_all.setEnabled(has_genome and has_samples)
         self.btn_seq_reset.setEnabled(has_genome and has_samples)
+
+    def _update_test_sum(self) -> None:
+        if self._test_sum_lbl is None:
+            return
+        deltas = [r._delta for r in self._test_rows if r._delta is not None]
+        if not deltas:
+            self._test_sum_lbl.setText("")
+            return
+        total   = sum(deltas)
+        correct = sum(1 for r in self._test_rows if r._delta is not None
+                      and (r._delta < _TOL_NORMALIZED * len(r._expected)
+                           if not r._denormalized else r._delta == 0.0))
+        n       = len(self._test_rows)
+        self._test_sum_lbl.setText(
+            f"Σ Δ: {total:.4f}  |  {correct}/{n} korrekt"
+        )
 
     def _update_acc_fitness(self) -> None:
         if not self._seq_rows:
