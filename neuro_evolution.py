@@ -15,6 +15,31 @@ def _return_memory_to_os() -> None:
     except Exception:
         pass
 
+def sanitize_fitness(
+    value: float,
+    fallback: float = 0.0,
+    clip_low: float | None = None,
+    clip_high: float | None = None,
+) -> tuple[float, bool, bool]:
+    """Sanitize a raw fitness value.
+
+    Returns (sanitized_value, was_invalid, was_clipped).
+
+    was_invalid: True when value was nan or inf (replaced by fallback).
+    was_clipped: True when value was finite but outside [clip_low, clip_high].
+    """
+    if not math.isfinite(value):
+        return fallback, True, False
+    clipped = False
+    if clip_low is not None and value < clip_low:
+        value = clip_low
+        clipped = True
+    if clip_high is not None and value > clip_high:
+        value = clip_high
+        clipped = True
+    return value, False, clipped
+
+
 def _aggregate_fitnesses(fitnesses: list[float], aggregation: str, sigma_penalty: float) -> float:
     """Combine multiple fitness values into one.
 
@@ -57,6 +82,13 @@ class NeuroEvolution:
         self._n_evaluations: int = 1
         self._eval_aggregation: str = "mean"
         self._eval_sigma_penalty: float = 0.0
+        # Fitness sanitizing (disabled by default)
+        self._sanitize: bool = False
+        self._sanitize_fallback: float = 0.0
+        self._sanitize_clip_low: float | None = None
+        self._sanitize_clip_high: float | None = None
+        self._n_invalid_fitness: int = 0   # nan / inf seen
+        self._n_clipped_fitness: int = 0   # values clamped by clip bounds
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -208,6 +240,34 @@ class NeuroEvolution:
         self._eval_aggregation = aggregation
         self._eval_sigma_penalty = max(0.0, sigma_penalty)
 
+    def set_fitness_sanitizing(
+        self,
+        *,
+        fallback: float = 0.0,
+        clip_low: float | None = None,
+        clip_high: float | None = None,
+    ) -> None:
+        """Enable central fitness sanitizing.
+
+        Applied to every fitness value before it reaches the population —
+        in train(), submit_fitness(), and submit_fitness_batch().
+
+        fallback:  value used when fitness is nan or inf (default 0.0).
+        clip_low:  if set, fitness is clamped to at least this value.
+        clip_high: if set, fitness is clamped to at most this value.
+
+        Diagnostic counters (_n_invalid_fitness, _n_clipped_fitness) are
+        accessible via population_memory_info() and reset when configure()
+        is called.
+
+        Call without arguments to enable sanitizing with its defaults:
+            yane.set_fitness_sanitizing()
+        """
+        self._sanitize = True
+        self._sanitize_fallback = fallback
+        self._sanitize_clip_low = clip_low
+        self._sanitize_clip_high = clip_high
+
     def set_lamarck(self, n_steps: int = 5, sigma: float = 1.0) -> None:
         """Enable Lamarckian weight refinement after each NEAT mutation.
 
@@ -259,6 +319,7 @@ class NeuroEvolution:
                 self._lamarck_refine(genome, fitness_fn)
 
             fitness, elapsed_ms = self._run_evaluations(genome, fitness_fn)
+            fitness = self._apply_sanitize(fitness)
 
             if self._efficiency_penalty is not None:
                 fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)
@@ -335,6 +396,10 @@ class NeuroEvolution:
                             / max(1, len(self._population._evaluated))),
             "n_evaluations":    self._n_evaluations,
             "eval_aggregation": self._eval_aggregation,
+            # Fitness sanitizing diagnostics
+            "sanitize_enabled":    self._sanitize,
+            "n_invalid_fitness":   self._n_invalid_fitness,
+            "n_clipped_fitness":   self._n_clipped_fitness,
             # Offspring counters
             "n_crossover":           self._population._n_crossover,
             "n_mutation_only":       self._population._n_mutation_only,
@@ -397,7 +462,7 @@ class NeuroEvolution:
     def submit_fitness(self, fitness: float, elapsed_ms: float | None = None) -> None:
         if self._current_genome is None:
             raise RuntimeError("Call next_genome() before submit_fitness().")
-        self._population.submit(self._current_genome, fitness, elapsed_ms)
+        self._population.submit(self._current_genome, self._apply_sanitize(fitness), elapsed_ms)
         self._current_genome = None
 
     def next_genome_batch(self, n: int) -> list[Genome]:
@@ -424,7 +489,7 @@ class NeuroEvolution:
             else:
                 genome, fitness = item
                 elapsed_ms = None
-            self._population.submit(genome, fitness, elapsed_ms)
+            self._population.submit(genome, self._apply_sanitize(fitness), elapsed_ms)
 
     # -------------------------------------------------------------------------
     # Tick mode (operates on current_genome)
@@ -449,6 +514,28 @@ class NeuroEvolution:
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
+
+    def _apply_sanitize(self, fitness: float) -> float:
+        """Apply configured sanitizing; count and log anomalies. No-op when disabled."""
+        if not self._sanitize:
+            return fitness
+        clean, invalid, clipped = sanitize_fitness(
+            fitness,
+            fallback=self._sanitize_fallback,
+            clip_low=self._sanitize_clip_low,
+            clip_high=self._sanitize_clip_high,
+        )
+        if invalid:
+            self._n_invalid_fitness += 1
+            from yane.util.logger import get_logger
+            get_logger().warning(
+                "sanitize_fitness: invalid value %r replaced with fallback %r "
+                "(total invalid: %d)",
+                fitness, self._sanitize_fallback, self._n_invalid_fitness,
+            )
+        elif clipped:
+            self._n_clipped_fitness += 1
+        return clean
 
     def _run_evaluations(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]

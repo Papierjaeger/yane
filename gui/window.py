@@ -237,6 +237,13 @@ class LeftPanel(QWidget):
             "Wie stark Effizienz aktuell in die Elternauswahl einfließt.\n"
             "Hoch bei Fortschritt, niedrig bei Stagnation.\n"
             "Dadurch werden schnelle Netze bevorzugt, solange die Aufgabe gut vorankommt.")
+        self.lbl_invalid_fitness = _label("—", "mutRate")
+        self.lbl_clipped_fitness = _label("—", "mutRate")
+        self.lbl_invalid_fitness.setToolTip(
+            "Anzahl Fitnesswerte, die nan oder inf waren und durch den Fallback-Wert\n"
+            "ersetzt wurden (nur aktiv wenn set_fitness_sanitizing() gesetzt ist).")
+        self.lbl_clipped_fitness.setToolTip(
+            "Anzahl Fitnesswerte, die am konfigurierten clip_low / clip_high begrenzt wurden.")
         pop_layout.addRow("Genomes:",           self.lbl_population)
         pop_layout.addRow("Species:",           self.lbl_species)
         pop_layout.addRow("Avg nodes:",         self.lbl_avg_nodes)
@@ -248,6 +255,8 @@ class LeftPanel(QWidget):
         pop_layout.addRow("Nächste Injection:", self.lbl_next_injection)
         pop_layout.addRow("Novelty weight:",    self.lbl_novelty_weight)
         pop_layout.addRow("Effizienz-Relevanz:", self.lbl_eff_weight)
+        pop_layout.addRow("Invalid fitness:",   self.lbl_invalid_fitness)
+        pop_layout.addRow("Clipped fitness:",   self.lbl_clipped_fitness)
         layout.addWidget(pop)
 
         # ── Evaluation timing ─────────────────────────────────────────────
@@ -467,6 +476,12 @@ class LeftPanel(QWidget):
         ew = mem.get("efficiency_weight")
         if ew is not None:
             self.lbl_eff_weight.setText(f"{ew:.3f}")
+        if mem.get("sanitize_enabled"):
+            self.lbl_invalid_fitness.setText(str(mem.get("n_invalid_fitness", 0)))
+            self.lbl_clipped_fitness.setText(str(mem.get("n_clipped_fitness", 0)))
+        else:
+            self.lbl_invalid_fitness.setText("—")
+            self.lbl_clipped_fitness.setText("—")
 
         # Eval-time statistics
         for key, lbl in (

@@ -12,35 +12,6 @@ Legende:
 
 ## 1. Fitness, Evaluation und Training
 
-### Erledigt: Automatische Effizienz in der Elternauswahl
-
-YANE misst Bewertungszeiten inzwischen in `train()` und in den GUI-Worker-Pfaden. Die Rohfitness bleibt unverändert; Effizienz wird als eigene Variable geführt und wirkt dynamisch nur auf die Elternauswahl. Bei Stagnation sinkt die Effizienz-Relevanz bis auf `0`.
-
-Offene Anschlussideen:
-
-- API um optionale Bewertungszeit erweitern.
-- GUI-Trends fuer Effizienz ueber Zeit plotten.
-- Feste `EfficiencyPenalty` optional in der GUI konfigurierbar machen.
-
-### P0: Einheitliche Evaluation-Statistiken
-
-YANE sollte pro Training mehr interne Messwerte erfassen.
-
-Aufgaben:
-
-- Durchschnittliche Eval-Zeit pro Genom speichern.
-- Median, p95 und Max-Eval-Zeit erfassen.
-- Nodes/Connections des besten Genoms historisieren.
-- Species-Zahl, Novelty-Gewicht, Kompatibilitaetsschwelle loggen.
-- Anzahl Crossover vs. Mutation vs. Diversity Injection erfassen.
-- GUI-Ansicht fuer diese Kennzahlen ergaenzen.
-
-Nutzen:
-
-- Man erkennt, warum ein Training stagniert.
-- Performance-Probleme werden sichtbar.
-- Groessere Experimente werden vergleichbarer.
-
 ### P0: Fitness-Sanitizing zentralisieren
 
 Aktuell muss jede Fitnessfunktion selbst robust sein. Degenerative Netze koennen `nan`, `inf` oder extreme Werte erzeugen.
@@ -664,11 +635,24 @@ Nutzen:
 
 - [x] Automatische Effizienzbewertung in der Elternauswahl anwenden.
 - [x] Bewertungszeit in den GUI-Worker-Pfaden messen.
-- [ ] `EvaluationResult`-Objekt einfuehren.
+- [x] Einheitliche Evaluation-Statistiken (mean/median/p95/max Eval-Zeit, Offspring-Zähler, Topologie-Historie).
+- [x] GUI-Diagnostics fuer Eval-Zeit und Offspring-Zähler.
 - [ ] Fitness-Sanitizing zentralisieren.
+- [ ] `EvaluationResult`-Objekt einfuehren.
 - [ ] Seed-Parameter fuer `NeuroEvolution` einfuehren.
 - [ ] Checkpoint-Speicherung fuer Population und InnovationTracker.
-- [ ] GUI-Diagnostics fuer Eval-Zeit, Species, Novelty und Topologie.
 - [ ] Benchmark-Suite mit mehreren Seeds erstellen.
 - [ ] Mutationsraten-Diagnostics implementieren.
 - [ ] API-`/configure` um wichtige Konfigurationsparameter erweitern.
+
+---
+
+## Erledigte Aufgaben
+
+### Automatische Effizienz in der Elternauswahl
+
+YANE misst Bewertungszeiten in `train()` und in den GUI-Worker-Pfaden. Die Rohfitness bleibt unveraendert; Effizienz wird als eigene Variable gefuehrt und wirkt dynamisch nur auf die Elternauswahl. Bei Stagnation sinkt die Effizienz-Relevanz bis auf `0`.
+
+### Einheitliche Evaluation-Statistiken
+
+Pro Trainingsschritt werden jetzt erfasst: mean/median/p95/max der Eval-Zeiten ueber alle evaluierten Genome, kumulative Offspring-Zaehler (crossover / mutation / diversity injection), sowie eine Topologie-Historie des besten Genoms bei jeder Fitness-Verbesserung. Alle Werte fliessen via `population_memory_info()` in die GUI (zwei neue Sektionen im LeftPanel).

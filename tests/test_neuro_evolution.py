@@ -342,6 +342,113 @@ class TestMultiEval(unittest.TestCase):
         self.assertEqual(call_count[0], 1)
 
 
+class TestFitnessSanitizing(unittest.TestCase):
+
+    def _make(self, sanitize=True, **kw):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=2, n_outputs=1)
+        if sanitize:
+            yane.set_fitness_sanitizing(**kw)
+        return yane
+
+    def test_sanitize_fitness_nan_replaced(self):
+        from yane.neuro_evolution import sanitize_fitness
+        val, invalid, clipped = sanitize_fitness(float("nan"), fallback=-1.0)
+        self.assertEqual(val, -1.0)
+        self.assertTrue(invalid)
+        self.assertFalse(clipped)
+
+    def test_sanitize_fitness_inf_replaced(self):
+        from yane.neuro_evolution import sanitize_fitness
+        val, invalid, clipped = sanitize_fitness(float("inf"), fallback=0.0)
+        self.assertEqual(val, 0.0)
+        self.assertTrue(invalid)
+
+    def test_sanitize_fitness_clip_low(self):
+        from yane.neuro_evolution import sanitize_fitness
+        val, invalid, clipped = sanitize_fitness(-5.0, clip_low=-1.0)
+        self.assertEqual(val, -1.0)
+        self.assertFalse(invalid)
+        self.assertTrue(clipped)
+
+    def test_sanitize_fitness_clip_high(self):
+        from yane.neuro_evolution import sanitize_fitness
+        val, invalid, clipped = sanitize_fitness(999.0, clip_high=100.0)
+        self.assertEqual(val, 100.0)
+        self.assertFalse(invalid)
+        self.assertTrue(clipped)
+
+    def test_sanitize_fitness_valid_passthrough(self):
+        from yane.neuro_evolution import sanitize_fitness
+        val, invalid, clipped = sanitize_fitness(3.14, clip_low=-10.0, clip_high=10.0)
+        self.assertAlmostEqual(val, 3.14)
+        self.assertFalse(invalid)
+        self.assertFalse(clipped)
+
+    def test_invalid_counter_increments(self):
+        yane = self._make(sanitize=True, fallback=0.0)
+        self.assertEqual(yane._n_invalid_fitness, 0)
+        g = yane.next_genome()
+        yane.submit_fitness(float("nan"))
+        self.assertEqual(yane._n_invalid_fitness, 1)
+        g = yane.next_genome()
+        yane.submit_fitness(float("-inf"))
+        self.assertEqual(yane._n_invalid_fitness, 2)
+
+    def test_clipped_counter_increments(self):
+        yane = self._make(sanitize=True, clip_low=0.0, clip_high=1.0)
+        g = yane.next_genome()
+        yane.submit_fitness(-5.0)
+        self.assertEqual(yane._n_clipped_fitness, 1)
+        g = yane.next_genome()
+        yane.submit_fitness(99.0)
+        self.assertEqual(yane._n_clipped_fitness, 2)
+
+    def test_sanitize_disabled_by_default(self):
+        yane = self._make(sanitize=False)
+        self.assertFalse(yane._sanitize)
+        # nan passes through unmodified when disabled
+        g = yane.next_genome()
+        yane.submit_fitness(float("nan"))
+        self.assertEqual(yane._n_invalid_fitness, 0)
+
+    def test_invalid_fitness_in_train(self):
+        yane = self._make(sanitize=True, fallback=-999.0)
+        yane.set_max_iterations(3)
+        call_count = [0]
+        def evaluate(genome):
+            call_count[0] += 1
+            return float("nan")
+        yane.train(evaluate)
+        self.assertEqual(yane._n_invalid_fitness, 3)
+        # Best genome should have fallback fitness, not nan
+        import math
+        self.assertTrue(math.isfinite(yane.get_best().fitness))
+
+    def test_sanitize_counters_in_mem_info(self):
+        yane = self._make(sanitize=True)
+        mem = yane.population_memory_info()
+        self.assertIn("sanitize_enabled", mem)
+        self.assertIn("n_invalid_fitness", mem)
+        self.assertIn("n_clipped_fitness", mem)
+        self.assertTrue(mem["sanitize_enabled"])
+
+    def test_sanitize_disabled_mem_info(self):
+        yane = self._make(sanitize=False)
+        mem = yane.population_memory_info()
+        self.assertFalse(mem["sanitize_enabled"])
+        self.assertEqual(mem["n_invalid_fitness"], 0)
+
+    def test_submit_fitness_batch_sanitizes(self):
+        yane = self._make(sanitize=True, fallback=0.0)
+        g1 = yane.next_genome()
+        yane.submit_fitness(1.0)  # first eval needed for batch
+        g2 = yane.next_genome_batch(1)
+        yane.submit_fitness_batch([(g2[0], float("nan"), None)])
+        self.assertEqual(yane._n_invalid_fitness, 1)
+
+
 class TestPopulationMemoryInfo(unittest.TestCase):
 
     def _make(self, n_inputs=2, n_outputs=1):
