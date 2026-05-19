@@ -383,6 +383,12 @@ class Population:
             self._behaviors[id(genome)] = arr
         self._novelty_evals_since_recompute += 1
 
+        # Assign to species immediately while fitness and topology are fresh.
+        # _prune() (called below) handles removal from sp.members if the genome
+        # turns out to be the worst and gets evicted right away.
+        if genome._species_stale:
+            self._assign_one_genome(genome)
+
         _cc = genome.connection_count   # cache property once; avoids descriptor overhead in the two reads below
         topo = (len(genome.nodes), _cc)
         if fitness > self._best_fitness_seen:
@@ -561,37 +567,78 @@ class Population:
     # Speciation & fitness sharing
     # ------------------------------------------------------------------
 
-    def _assign_species(self) -> None:
-        for sp in self._species:
-            sp.members = []
-            sp._cached_best = None   # reset incremental cache for this cycle
+    def _assign_one_genome(self, genome: Genome) -> None:
+        """Assign a single genome to its species immediately after evaluation.
 
+        Called from submit() so sp.members stays up-to-date without waiting
+        for the next _assign_species() call.  O(species) per call.
+
+        The genome's _species_stale flag is cleared here.  _prune() correctly
+        removes genomes that are evicted right after submission.
+        """
         threshold = self._compat_threshold
-        # Map id(species) → species for O(1) fast-path lookup.
-        species_by_id: dict[int, Species] = {id(sp): sp for sp in self._species}
+        placed = False
 
-        for genome in self._evaluated:
-            placed = False
-
-            # Lazy fast-path: if the genome's topology hasn't changed since its
-            # last assignment (_species_stale is False), restore it to its last
-            # species without running _compatibility().  Weight-only mutations
-            # never set _species_stale, so this skips most compatibility calls.
-            if not genome._species_stale:
-                last_sp_id = genome._last_species_id
-                if last_sp_id is not None:
-                    sp = species_by_id.get(last_sp_id)
-                    if sp is not None:
+        # Try last-known species first (O(1) id-match with small species list).
+        last_id = genome._last_species_id
+        if last_id is not None:
+            for sp in self._species:
+                if id(sp) == last_id:
+                    if (sp.representative is not None
+                            and _compatibility(genome, sp.representative) < threshold):
                         sp.members.append(genome)
                         if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                             sp._cached_best = genome
                         placed = True
+                    break   # found the remembered species — stop searching even if not placed
 
-            if not placed:
-                # Full assignment for stale or unplaced genomes.
+        if not placed:
+            for sp in self._species:
+                if (sp.representative is not None
+                        and _compatibility(genome, sp.representative) < threshold):
+                    sp.members.append(genome)
+                    if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
+                        sp._cached_best = genome
+                    genome._last_species_id = id(sp)
+                    placed = True
+                    break
+
+        if not placed:
+            new_sp = Species(genome)
+            new_sp.members.append(genome)
+            new_sp._cached_best = genome
+            self._species.append(new_sp)
+            genome._last_species_id = id(new_sp)
+
+        genome._species_stale = False
+
+    def _assign_species(self) -> None:
+        """Assign evaluated genomes to species.
+
+        Steady-state path (most calls): O(species) — sp.members is already
+        up-to-date because submit() calls _assign_one_genome() for every new
+        genome.  Only stale genomes (topology changed after last assignment, which
+        does not happen to genomes in _evaluated) need re-processing.
+
+        Periodic full-rebuild path (every _force_full_assign_interval spawns):
+        clears and rebuilds sp.members for all genomes to prevent any drift that
+        could accumulate from the incremental path over many generations.
+        """
+        threshold = self._compat_threshold
+
+        if (self._force_full_assign_interval > 0
+                and self._spawn_count % self._force_full_assign_interval == 0):
+            # Full rebuild: clear all member lists and re-assign every genome.
+            for sp in self._species:
+                sp.members = []
+                sp._cached_best = None
+
+            species_by_id: dict[int, Species] = {id(sp): sp for sp in self._species}
+
+            for genome in self._evaluated:
                 genome._species_stale = False
+                placed = False
 
-                # Fast path: try last-known species first — avoids full search.
                 last_sp_id = genome._last_species_id
                 if last_sp_id is not None:
                     sp = species_by_id.get(last_sp_id)
@@ -610,6 +657,7 @@ class Population:
                             genome._last_species_id = id(sp)
                             placed = True
                             break
+
                 if not placed:
                     new_sp = Species(genome)
                     new_sp.members.append(genome)
@@ -618,18 +666,50 @@ class Population:
                     species_by_id[id(new_sp)] = new_sp
                     genome._last_species_id = id(new_sp)
 
+        else:
+            # Incremental path: only re-process genuinely stale genomes.
+            # In steady state this list is empty — evaluated genomes never change
+            # topology after evaluation, so _species_stale stays False.
+            stale = [g for g in self._evaluated if g._species_stale]
+            for genome in stale:
+                # Remove from current species before re-assigning.
+                old_id = genome._last_species_id
+                if old_id is not None:
+                    for sp in self._species:
+                        if id(sp) == old_id:
+                            if genome in sp.members:
+                                sp.members.remove(genome)
+                                if sp._cached_best is genome:
+                                    sp._cached_best = None
+                            break
+
+                genome._species_stale = False
+                placed = False
+                for sp in self._species:
+                    if (sp.members and sp.representative is not None
+                            and _compatibility(genome, sp.representative) < threshold):
+                        sp.members.append(genome)
+                        if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
+                            sp._cached_best = genome
+                        genome._last_species_id = id(sp)
+                        placed = True
+                        break
+
+                if not placed:
+                    new_sp = Species(genome)
+                    new_sp.members.append(genome)
+                    new_sp._cached_best = genome
+                    self._species.append(new_sp)
+                    genome._last_species_id = id(new_sp)
+
         self._species = [sp for sp in self._species if sp.members]
         for sp in self._species:
-            best = sp.best()    # O(1) — returns _cached_best built above
+            best = sp.best()    # O(1) via _cached_best
             sp.representative = best
             sp.update_stagnation(best)
 
-        # Active species merging: if two species' representatives are closer
-        # than the current threshold they should belong to the same species.
-        # The lazy assignment fast-path prevents this from happening naturally
-        # (genomes always land in their home species first), so we merge
-        # explicitly. Stop as soon as target_species is reached so we never
-        # over-merge below the target.
+        # Active species merging: if two representatives are closer than the
+        # threshold they belong to the same species.  Stop once at target count.
         n_active = len(self._species)
         changed = True
         while changed and n_active > self._target_species:
@@ -663,8 +743,7 @@ class Population:
         self._species = [sp for sp in self._species if sp.members]
 
         # Adapt threshold so species count converges to target_species.
-        # Dead-band of ±1 around target prevents the threshold from oscillating
-        # immediately after a merge brings the count to the target.
+        # Dead-band ±1 prevents oscillation after a merge hits the target.
         n = len(self._species)
         if n > self._target_species + 1:
             self._compat_threshold = min(1.5, self._compat_threshold + 0.02)
@@ -830,15 +909,8 @@ class Population:
             return
 
         self._spawn_count += 1
-        # Periodic forced full rebuild: every _force_full_assign_interval spawns
-        # mark all genomes stale so _assign_species() re-checks every genome.
-        # This prevents weight-drift from permanently misassigning genomes.
-        # 0 = never force a full rebuild (pure lazy assignment).
-        if (self._force_full_assign_interval > 0
-                and self._spawn_count % self._force_full_assign_interval == 0):
-            for g in self._evaluated:
-                g._species_stale = True
-
+        # _assign_species() handles the periodic full rebuild internally
+        # (every _force_full_assign_interval spawns).  No stale-marking needed here.
         self._assign_species()
         self._compute_shared_fitness()
         self._compute_efficiency_scores()
