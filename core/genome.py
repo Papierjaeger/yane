@@ -14,6 +14,7 @@ _SCALAR_GENES = (
 _MUTATION_GENES = (
     'mutation_bypass', 'mutation_add_node', 'mutation_remove_node',
     'mutation_add_connection', 'mutation_remove_connection',
+    'mutation_rewire', 'mutation_disable_connection', 'mutation_enable_connection',
     'mutation_crossover', 'mutation_offspring',
     'mutation_sigma',
 )
@@ -63,6 +64,11 @@ class Genome:
         self.mutation_remove_node = Mutation()
         self.mutation_add_connection = Mutation()
         self.mutation_remove_connection = Mutation()
+        self.mutation_rewire = Mutation()
+        self.mutation_disable_connection = Mutation()
+        self.mutation_disable_connection.bool_rate = 0.03  # low initial rate — reversible op
+        self.mutation_enable_connection = Mutation()
+        self.mutation_enable_connection.bool_rate = 0.03
         self.bypass_connection_prob: float = 0.5
         self.mutation_bypass = Mutation()
 
@@ -194,7 +200,7 @@ class Genome:
 
         def _build(node):
             ni    = node_to_idx[id(node)]
-            conns = node.connections
+            conns = [c for c in node.connections if c.enabled]
             n_c   = len(conns)
             if n_c >= _thr:
                 tgt_arr = _np.array([node_to_idx[id(c.target)] for c in conns],
@@ -314,7 +320,9 @@ class Genome:
             if (node._activation is ActivationType.LINEAR
                     and node.bias == 0.0
                     and not node._persist_value):
-                trivial_inputs.append((node, node.connections))
+                # Snapshot only enabled connections at compile time — zero runtime
+                # overhead for disabled connections in the acyclic fast path.
+                trivial_inputs.append((node, [c for c in node.connections if c.enabled]))
             else:
                 general_inputs.append(node)
 
@@ -367,14 +375,14 @@ class Genome:
         in_degree: dict[Node, int] = {n: 0 for n in self.nodes if n not in inputs}
         for node in self.nodes:
             for conn in node.connections:
-                if conn.target in in_degree:
+                if conn.enabled and conn.target in in_degree:
                     in_degree[conn.target] += 1
 
         # Input nodes are "pre-processed" — decrement their targets immediately.
         queue: deque[Node] = deque()
         for inp in self.input_nodes:
             for conn in inp.connections:
-                if conn.target in in_degree:
+                if conn.enabled and conn.target in in_degree:
                     in_degree[conn.target] -= 1
                     if in_degree[conn.target] == 0:
                         queue.append(conn.target)
@@ -389,6 +397,8 @@ class Genome:
             node = queue.popleft()  # O(1) vs list.pop(0) O(n)
             order.append(node)
             for conn in node.connections:
+                if not conn.enabled:
+                    continue
                 t = conn.target
                 if t in in_degree:
                     in_degree[t] -= 1
@@ -487,6 +497,16 @@ class Genome:
             smart_mutation.add_connection(self, tracker)
         if self.mutation_remove_connection.mutate_bool(False) or random.random() < floor:
             smart_mutation.remove_connection(self, tracker)
+        # Rewire and disable/enable have no floor — purely self-adaptive.
+        # Rewire is net-neutral (remove + add) so it doesn't need a minimum
+        # exploration guarantee.  Disable/enable are reversible and should
+        # not skew the structural add/remove balance.
+        if self.mutation_rewire.mutate_bool(False):
+            smart_mutation.rewire_connection(self, tracker)
+        if self.mutation_disable_connection.mutate_bool(False):
+            smart_mutation.disable_connection(self)
+        if self.mutation_enable_connection.mutate_bool(False):
+            smart_mutation.enable_connection(self)
 
         sigma = self.sigma_global
         for node in self.nodes:

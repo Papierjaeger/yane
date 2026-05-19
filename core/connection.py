@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 class Connection:
     __slots__ = ('target', '_weight', 'mutation', 'innovation', '__weakref__',
-                 '_weight_arr', '_weight_idx')
+                 '_weight_arr', '_weight_idx', 'enabled', 'spike_rate')
 
     def __init__(self, target: Node, innovation: int = -1) -> None:
         self.target = target
@@ -23,6 +23,12 @@ class Connection:
         # rebuilding the array on each call.
         self._weight_arr = None   # np.ndarray | None
         self._weight_idx: int = 0
+        # Enabled flag — disabled connections remain in the genome but are
+        # excluded from the forward pass.  Allows reversible pruning.
+        self.enabled: bool = True
+        # Spike probability: occasionally re-initialise weight completely to
+        # escape weight-space local optima.  Self-adapts via mutation.rate_mutation_rate.
+        self.spike_rate: float = 0.05
 
     # ------------------------------------------------------------------
     # weight property — keeps _weight_arr in sync on every assignment
@@ -48,6 +54,7 @@ class Connection:
         return {
             'target': self.target, 'weight': self._weight,
             'mutation': self.mutation, 'innovation': self.innovation,
+            'enabled': self.enabled, 'spike_rate': self.spike_rate,
         }
 
     def __setstate__(self, state):
@@ -57,18 +64,30 @@ class Connection:
         self.innovation = state.get('innovation', -1)
         self._weight_arr = None
         self._weight_idx = 0
+        self.enabled    = state.get('enabled', True)
+        self.spike_rate = state.get('spike_rate', 0.05)
 
     # ------------------------------------------------------------------
     # Mutation / copy
     # ------------------------------------------------------------------
 
     def mutate(self, sigma: float = 1.0) -> None:
-        # Goes through the property setter — updates _weight_arr if linked.
-        self.weight = self.mutation.mutate_value(self._weight, sigma)
+        # Spike: occasionally re-initialise weight completely to escape local optima.
+        # Self-adapts: spike_rate is scaled by the same rate_mutation_rate used for
+        # all other per-connection rates, keeping the system fully self-adaptive.
+        if random.random() < self.spike_rate:
+            self.weight = random.gauss(0.0, sigma)
+        else:
+            self.weight = self.mutation.mutate_value(self._weight, sigma)
+        if random.random() < self.mutation.rate_mutation_rate:
+            scale = random.uniform(0.9, 1.1)
+            self.spike_rate = max(0.001, min(0.3, self.spike_rate * scale))
         self.mutation.mutate_rates()
 
     def copy(self, node_map: dict[Node, Node]) -> Connection:
         conn = Connection(node_map[self.target], innovation=self.innovation)
         conn.weight = self._weight   # property setter; _weight_arr is None on new conn
         conn.mutation = self.mutation.copy()
+        conn.enabled = self.enabled
+        conn.spike_rate = self.spike_rate
         return conn

@@ -196,6 +196,10 @@ class TestGenomeClearGuard(unittest.TestCase):
         yane = NeuroEvolution()
         yane.configure(2, 1)
         yane.set_population_size(3)
+        # Disable species-elite protection so pruning is purely fitness-based
+        # and the worst genome (fitness 0.0) is reliably evicted regardless of
+        # which species it happens to land in.
+        yane.set_elitism(elite_count=1, species_elite_count=0)
 
         genomes = []
         for i in range(4):

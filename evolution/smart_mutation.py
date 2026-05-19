@@ -15,12 +15,12 @@ def add_node(genome, tracker=None) -> None:
     A→N keeps weight w; N→B gets weight 1.0 with LINEAR activation.
     Net output stays identical at the moment of insertion.
     Skips silently if genome.max_nodes is set and already reached,
-    or if the genome has no connections to split.
+    or if the genome has no enabled connections to split.
     """
     if genome.max_nodes is not None and len(genome.nodes) >= genome.max_nodes:
         return
 
-    connections = genome.all_connections()
+    connections = [(n, c) for n, c in genome.all_connections() if c.enabled]
     if not connections:
         return  # nothing to split; adding an isolated node has no effect
 
@@ -123,10 +123,71 @@ def add_connection(genome, tracker=None) -> None:
 
 
 def remove_connection(genome, tracker=None) -> None:
-    """Remove a random connection from the network."""
-    connections = [(node, i) for node in genome.nodes for i in range(len(node.connections))]
+    """Remove a connection, preferring low-|weight| connections.
 
-    if connections:
-        node, idx = random.choice(connections)
-        node.connections.pop(idx)
-        genome._invalidate_topology()
+    Soft-min sampling: probability ∝ 1 / (|weight| + ε) so structurally
+    less important connections (small weights) are removed more often.
+    Only enabled connections are candidates — disabled ones are left intact.
+    """
+    candidates = [(node, i, conn)
+                  for node in genome.nodes
+                  for i, conn in enumerate(node.connections)
+                  if conn.enabled]
+    if not candidates:
+        return
+    probs = [1.0 / (abs(c[2].weight) + 1e-6) for c in candidates]
+    node, idx, _ = random.choices(candidates, weights=probs, k=1)[0]
+    node.connections.pop(idx)
+    genome._invalidate_topology()
+
+
+def rewire_connection(genome, tracker=None) -> None:
+    """Atomically replace a low-weight connection with a new random one.
+
+    Removes the weakest enabled connection (soft-min sampling from the bottom
+    quartile) and immediately adds a new random connection.  Topology stays
+    roughly the same size while the search space is explored.
+    """
+    candidates = [(node, i, conn)
+                  for node in genome.nodes
+                  for i, conn in enumerate(node.connections)
+                  if conn.enabled]
+    if not candidates:
+        return
+    candidates.sort(key=lambda x: abs(x[2].weight))
+    n_pool = max(1, len(candidates) // 4)
+    node, idx, _ = random.choice(candidates[:n_pool])
+    node.connections.pop(idx)
+    genome._invalidate_topology()
+    add_connection(genome, tracker)
+
+
+def disable_connection(genome) -> None:
+    """Disable a connection, preferring low-|weight| connections.
+
+    The connection stays in the genome (reversible) but is excluded from
+    the forward pass.  Soft-min sampling biases toward small weights.
+    """
+    candidates = [(node, conn)
+                  for node in genome.nodes
+                  for conn in node.connections
+                  if conn.enabled]
+    if not candidates:
+        return
+    probs = [1.0 / (abs(c[1].weight) + 1e-6) for c in candidates]
+    _, conn = random.choices(candidates, weights=probs, k=1)[0]
+    conn.enabled = False
+    genome._invalidate_topology()
+
+
+def enable_connection(genome) -> None:
+    """Re-enable a randomly chosen disabled connection."""
+    candidates = [(node, conn)
+                  for node in genome.nodes
+                  for conn in node.connections
+                  if not conn.enabled]
+    if not candidates:
+        return
+    _, conn = random.choice(candidates)
+    conn.enabled = True
+    genome._invalidate_topology()
