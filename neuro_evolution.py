@@ -77,8 +77,14 @@ class NeuroEvolution:
         self._resource_check_interval: int = 50  # check psutil every N iters (was 1 = ~5% overhead)
         self._population_size: int = 100
         self._n_workers: int = 1
-        self._lamarck_steps: int = 0      # 0 = disabled; >0 = hill-climbing steps per genome
-        self._lamarck_sigma: float = 1.0  # multiplier on genome.sigma_global (1.0 = unscaled)
+        self._lamarck_steps: int = 0      # explicit mode: >0 = always-on before eval
+        self._lamarck_sigma: float = 1.0  # step-size multiplier on genome.sigma_global
+        # Adaptive Lamarck — fires automatically based on stagnation pressure.
+        # Active when _lamarck_steps == 0 and _lamarck_max_steps > 0 (default).
+        self._lamarck_max_steps: int = 3   # ceiling: steps at full stagnation
+        self._lamarck_top_k: float = 0.2   # only refine top 20 % of evaluated pool
+        self._lamarck_n_applied: int = 0   # cumulative refinements performed
+        self._lamarck_n_steps_total: int = 0  # cumulative hill-climbing steps
         self._n_evaluations: int = 1
         self._eval_aggregation: str = "mean"
         self._eval_sigma_penalty: float = 0.0
@@ -274,31 +280,47 @@ class NeuroEvolution:
         self._sanitize_clip_high = clip_high
 
     def set_lamarck(self, n_steps: int = 5, sigma: float = 1.0) -> None:
-        """Enable Lamarckian weight refinement after each NEAT mutation.
+        """Explicit Lamarckian refinement: hill-climb every genome before evaluation.
 
-        Before a genome is evaluated, its weights and biases are hill-climbed
-        for `n_steps` attempts.  Each attempt perturbs all weights and biases
-        with Gaussian noise and keeps the perturbation only if it improves fitness.
-
-        The perturbation std-dev is  genome.sigma_global * sigma.  Because
-        sigma_global is a self-adaptive strategy gene that evolves with each
-        genome, the search step size automatically tunes itself — genomes that
-        prefer large mutations search broadly, those that have converged search
-        finely.  The sigma parameter here is just a global scale factor on top
-        of that (default 1.0 = use sigma_global as-is).
-
-        Cost: n_steps extra fitness-function calls per genome per generation.
-        Benefit: weights converge much faster for the topology found by NEAT,
-        especially on regression and continuous-output tasks.
+        When n_steps > 0 this overrides the adaptive mode — every genome is
+        refined for exactly n_steps hill-climbing attempts before its fitness
+        is measured.  n_steps = 0 re-enables adaptive mode.
 
         Args:
             n_steps: hill-climbing attempts per genome (default 5).
-                     0 disables Lamarck entirely.
+                     0 = use adaptive mode (default behaviour).
             sigma:   multiplier on genome.sigma_global (default 1.0).
-                     < 1.0 for finer search, > 1.0 for wider jumps.
         """
         self._lamarck_steps = max(0, n_steps)
         self._lamarck_sigma = sigma
+        if n_steps > 0:
+            self._lamarck_max_steps = 0  # explicit overrides adaptive
+
+    def set_lamarck_adaptive(
+        self,
+        max_steps: int = 3,
+        top_k: float = 0.2,
+        sigma: float = 1.0,
+    ) -> None:
+        """Configure the built-in adaptive Lamarck refinement.
+
+        Adaptive Lamarck fires automatically during stagnation without any
+        manual activation.  The number of hill-climbing steps scales linearly
+        from 0 (no stagnation) to max_steps (full stagnation), and only
+        genomes whose fitness falls in the top top_k fraction of the evaluated
+        pool are refined — keeping the cost proportional to usefulness.
+
+        Args:
+            max_steps: maximum hill-climbing steps at full stagnation (default 3).
+                       0 disables adaptive mode entirely.
+            top_k:     fraction of the pool eligible for refinement (default 0.2).
+                       1.0 = refine all genomes.
+            sigma:     multiplier on genome.sigma_global (default 1.0).
+        """
+        self._lamarck_max_steps = max(0, max_steps)
+        self._lamarck_top_k = max(0.0, min(1.0, top_k))
+        self._lamarck_sigma = sigma
+        self._lamarck_steps = 0  # adaptive mode requires explicit to be off
 
     # -------------------------------------------------------------------------
     # Training (automatic loop)
@@ -321,7 +343,7 @@ class NeuroEvolution:
             genome = self._population.select_for_evaluation()
 
             if lamarck:
-                self._lamarck_refine(genome, fitness_fn)
+                self._lamarck_refine(genome, fitness_fn)  # refines weights in-place
 
             fitness, elapsed_ms = self._run_evaluations(genome, fitness_fn)
             fitness = self._apply_sanitize(fitness)
@@ -412,6 +434,11 @@ class NeuroEvolution:
             "n_crossover":           self._population._n_crossover,
             "n_mutation_only":       self._population._n_mutation_only,
             "n_diversity_injection": self._population._n_diversity_injection,
+            # Lamarck diagnostics
+            "lamarck_mode":          "explicit" if self._lamarck_steps > 0 else
+                                     ("adaptive" if self._lamarck_max_steps > 0 else "off"),
+            "lamarck_n_applied":     self._lamarck_n_applied,
+            "lamarck_n_steps_total": self._lamarck_n_steps_total,
             # Best genome topology history: list of (total_submitted, n_nodes, n_conn, fitness)
             "best_topology_history": self._population._best_topology_history,
         }
@@ -581,61 +608,80 @@ class NeuroEvolution:
     ) -> tuple[float, float]:
         """Evaluate genome (possibly multiple times) → (fitness, total_elapsed_ms).
 
-        With n_evaluations=1 (default), this is a direct call with no overhead.
+        After the normal evaluation, adaptive Lamarck refinement fires when
+        stagnation pressure is high and the genome ranks in the top fraction of
+        the pool — improving weights without touching topology.  Explicit Lamarck
+        (_lamarck_steps > 0) is handled in train() instead and skips this path.
         """
+        start = time.perf_counter()
         if self._n_evaluations <= 1:
-            start = time.perf_counter()
             fitness = fitness_fn(genome)
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            return fitness, elapsed_ms
+        else:
+            fitnesses: list[float] = []
+            for _ in range(self._n_evaluations):
+                fitnesses.append(fitness_fn(genome))
+            fitness = _aggregate_fitnesses(
+                fitnesses, self._eval_aggregation, self._eval_sigma_penalty
+            )
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-        fitnesses: list[float] = []
-        total_ms = 0.0
-        for _ in range(self._n_evaluations):
-            start = time.perf_counter()
-            f = fitness_fn(genome)
-            total_ms += (time.perf_counter() - start) * 1000.0
-            fitnesses.append(f)
+        # Adaptive Lamarck: fires after the baseline is known, only when
+        # _lamarck_steps == 0 (explicit mode is off) and stagnation is high.
+        if self._lamarck_steps == 0:
+            n_steps = self._adaptive_lamarck_steps(fitness)
+            if n_steps > 0:
+                fitness = self._lamarck_refine(
+                    genome, fitness_fn,
+                    baseline_fitness=fitness,
+                    n_steps=n_steps,
+                )
+                self._lamarck_n_applied += 1
+                self._lamarck_n_steps_total += n_steps
 
-        return _aggregate_fitnesses(fitnesses, self._eval_aggregation, self._eval_sigma_penalty), total_ms
+        return fitness, elapsed_ms
 
-    def _lamarck_refine(self, genome: Genome, fitness_fn: Callable[[Genome], float]) -> None:
-        """Hill-climb weights and biases for `_lamarck_steps` attempts.
+    def _lamarck_refine(
+        self,
+        genome: Genome,
+        fitness_fn: Callable[[Genome], float],
+        baseline_fitness: float | None = None,
+        n_steps: int | None = None,
+    ) -> float:
+        """Hill-climb weights and biases, return best fitness achieved.
 
         Only weights and biases are touched — topology (connections, nodes) is
-        unchanged, so the compiled forward pass stays valid without rebuilding
-        the execution order.  Each step:
-          1. Perturb all weights + biases with Gaussian noise (σ = _lamarck_sigma).
-          2. Evaluate fitness.
-          3. Keep the perturbation if fitness improved; otherwise revert.
+        unchanged, so the compiled forward pass stays valid without rebuilding.
+        Each step: perturb → evaluate → keep if better, else revert.
 
-        The improved weights are stored back on the genome object and inherited
-        by the population on submit() — this is the Lamarckian part.
+        Args:
+            baseline_fitness: known fitness before hill-climbing.  If None a
+                              fresh evaluation is performed to establish the baseline.
+            n_steps:          override for the number of hill-climbing attempts.
+                              Defaults to self._lamarck_steps.
         """
-        conns = [conn for node in genome.nodes for conn in node.connections]
+        steps = self._lamarck_steps if n_steps is None else n_steps
+        if steps <= 0:
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        conns = [conn for node in genome.nodes for conn in node.connections if conn.enabled]
         nodes = genome.nodes
         if not conns and not nodes:
-            return
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
-        # Use the genome's own sigma_global as step size — it evolves along with
-        # the genome, so well-adapted genomes automatically search at the right scale.
-        # _lamarck_sigma acts as a multiplier (default 1.0 → pure sigma_global).
         sigma = genome.sigma_global * self._lamarck_sigma
-        if not (0.0 < sigma < 1e6):  # defensive: skip if sigma is inf/nan/zero
-            return
-        best_fitness = fitness_fn(genome)
+        if not (0.0 < sigma < 1e6):
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
-        for _ in range(self._lamarck_steps):
+        best_fitness = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
+
+        for _ in range(steps):
             saved_weights = [c.weight for c in conns]
             saved_biases  = [n.bias   for n in nodes]
-
             for c in conns:
                 c.weight += random.gauss(0.0, sigma)
             for n in nodes:
                 n.bias += random.gauss(0.0, sigma)
-
             new_fitness = fitness_fn(genome)
-
             if new_fitness > best_fitness:
                 best_fitness = new_fitness
             else:
@@ -643,6 +689,34 @@ class NeuroEvolution:
                     c.weight = w
                 for n, b in zip(nodes, saved_biases):
                     n.bias = b
+
+        return best_fitness
+
+    def _adaptive_lamarck_steps(self, fitness: float) -> int:
+        """Compute how many Lamarck steps to apply based on stagnation + top-K.
+
+        Returns 0 if adaptive mode is off or conditions aren't met.
+        """
+        if self._lamarck_max_steps <= 0 or self._population is None:
+            return 0
+        pop = self._population
+        stag_frac = min(1.0, pop.stagnation_count / max(1, pop.stagnation_threshold))
+        n_steps = round(stag_frac * self._lamarck_max_steps)
+        if n_steps <= 0:
+            return 0
+
+        # Top-K gate: only refine genomes that rank in the top fraction of the pool.
+        evaluated = pop._evaluated
+        if evaluated and self._lamarck_top_k < 1.0:
+            k = max(1, int(len(evaluated) * self._lamarck_top_k))
+            # Partial sort is cheaper than full sort for large pools.
+            threshold = sorted(
+                (g.fitness for g in evaluated), reverse=True
+            )[min(k - 1, len(evaluated) - 1)]
+            if fitness < threshold:
+                return 0
+
+        return n_steps
 
     def _enforce_memory_limit(self) -> None:
         if not self._resource_guard.process_over_limit():
