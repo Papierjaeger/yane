@@ -1760,6 +1760,7 @@ class InspectTab(QWidget):
 
     def _rebuild_test_rows(self) -> None:
         self._test_rows.clear()
+        self._test_sum_lbl = None
         # Strip everything except the persistent denormalize checkbox row at index 0.
         while self._test_inner.count() > 1:
             item = self._test_inner.takeAt(1)
