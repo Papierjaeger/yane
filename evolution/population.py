@@ -775,12 +775,9 @@ class Population:
         # and causing wild oscillation between sp=1 and sp=many.
         n = len(self._species)
         _step = max(0.001, 0.3 / max(1, self.max_size))
-        if n > self._target_species + 1:
+        if n > self._target_species:
             self._compat_threshold = min(1.5, self._compat_threshold + _step)
         elif n < self._target_species:
-            # Lower dead-band removed: decrease whenever sp < target, not just sp < target-1.
-            # With target=2 and sp=1, n < target-1 = n < 1 was always False → threshold
-            # frozen at whatever value kept sp=1.  Now n < target catches this edge case.
             self._compat_threshold = max(0.01, self._compat_threshold - _step)
 
     def _compute_shared_fitness(self) -> None:

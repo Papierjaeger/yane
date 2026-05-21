@@ -2157,8 +2157,8 @@ class DebugTab(QWidget):
     """Live debug log — compact tabular snapshot every 0.5 s when enabled."""
 
     _HEADER = (
-        "  iter     t(s)    best     avg     min  sp  thr   pop/max"
-        "   stag  sinj    xov    mut   inj   ms"
+        "  iter     t(s)    best     avg     min  sp tgt   thr   pop/max"
+        "   stag  sinj    xov    mut   inj   ms  spawn"
     )
     _HEADER_EVERY = 25   # repeat column header every N data lines
 
@@ -2217,7 +2217,7 @@ class DebugTab(QWidget):
 
     # ── Slots called by MainWindow ──────────────────────────────────────────
 
-    def on_training_started(self) -> None:
+    def on_training_started(self, mem: dict | None = None) -> None:
         self._t0 = _time.perf_counter()
         self._data_lines = 0
         if self._enabled:
@@ -2248,6 +2248,7 @@ class DebugTab(QWidget):
             f"  {mem.get('avg_fitness', 0.0):7.4f}"
             f"  {mem.get('min_fitness', 0.0):7.4f}"
             f"  {mem.get('species_count', 0):2d}"
+            f"  {mem.get('target_species', '?'):>3}"
             f"  {mem.get('compat_threshold', 0.0):.3f}"
             f"  {pop_eval:3d}/{pop_max:<3d}"
             f"  {mem.get('stagnation_count', 0):5d}"
@@ -2256,6 +2257,7 @@ class DebugTab(QWidget):
             f"  {mem.get('n_mutation_only', 0):5d}"
             f"  {mem.get('n_diversity_injection', 0):4d}"
             f"  {ev_ms:5.1f}"
+            f"  {mem.get('spawn_count', 0):6d}"
         )
         self._log.appendPlainText(line)
 
