@@ -766,11 +766,19 @@ class Population:
 
         # Adapt threshold so species count converges to target_species.
         # Dead-band ±1 prevents oscillation after a merge hits the target.
+        #
+        # Step is calibrated for per-evaluation frequency: _assign_species() runs
+        # once per genome evaluation in steady state, so ~max_size times per
+        # generation.  0.3/max_size ≈ 0.3 per generation, matching the original
+        # NEAT recommendation.  The old hardcoded 0.02 caused ~2.0 swing per
+        # injection cycle (100 evals × 0.02), sweeping the entire threshold range
+        # and causing wild oscillation between sp=1 and sp=many.
         n = len(self._species)
+        _step = max(0.001, 0.3 / max(1, self.max_size))
         if n > self._target_species + 1:
-            self._compat_threshold = min(1.5, self._compat_threshold + 0.02)
+            self._compat_threshold = min(1.5, self._compat_threshold + _step)
         elif n < self._target_species - 1:
-            self._compat_threshold = max(0.01, self._compat_threshold - 0.02)
+            self._compat_threshold = max(0.01, self._compat_threshold - _step)
 
     def _compute_shared_fitness(self) -> None:
         # No parsimony penalty: even a tiny coefficient causes evolution to
