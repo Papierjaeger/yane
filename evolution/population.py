@@ -777,7 +777,10 @@ class Population:
         _step = max(0.001, 0.3 / max(1, self.max_size))
         if n > self._target_species + 1:
             self._compat_threshold = min(1.5, self._compat_threshold + _step)
-        elif n < self._target_species - 1:
+        elif n < self._target_species:
+            # Lower dead-band removed: decrease whenever sp < target, not just sp < target-1.
+            # With target=2 and sp=1, n < target-1 = n < 1 was always False → threshold
+            # frozen at whatever value kept sp=1.  Now n < target catches this edge case.
             self._compat_threshold = max(0.01, self._compat_threshold - _step)
 
     def _compute_shared_fitness(self) -> None:
@@ -1033,6 +1036,12 @@ class Population:
         if self.species_elite_count > 0:
             for sp in self._species:
                 if not sp.members:
+                    continue
+                # Single-member species (typically fresh injection genomes) are only
+                # protected when the global elite count doesn't already cover them.
+                # This prevents bad-fitness injection genomes from surviving indefinitely
+                # simply because they happen to be in their own species.
+                if len(sp.members) < 2 and sp.best() not in protected:
                     continue
                 if self.species_elite_count == 1:
                     # sp.best() uses _cached_best in O(1) when available (set by
