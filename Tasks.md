@@ -49,12 +49,29 @@ Nutzen:
 
 Bei Klassifikations- und Regressions-Aufgaben wird jedes Genom auf allen Samples bewertet, auch wenn es nach wenigen Faellen offensichtlich schlecht ist.
 
+**Design: optionales Generator-Protokoll (rueckwaertskompatibel)**
+
+Die bestehende Signatur `fitness_fn(genome) -> float` bleibt unveraendert. Zusaetzlich kann eine Fitnessfunktion ein **Generator** sein, der nach jedem Sample (oder Batch) einen Partial-Score yieldet. YANE erkennt Generator-Funktionen via `inspect.isgeneratorfunction()` und bricht die Auswertung ab, wenn die akkumulierte Partial-Fitness unter `early_stop_threshold` faellt. Nicht-Generator-Funktionen laufen unveraendert durch.
+
+Beispiel (neues optionales Format):
+```python
+def evaluate(genome):
+    fitness = 0.0
+    for sample in dataset:
+        genome.reset()
+        outputs = genome.forward(sample["input"])
+        fitness -= abs(outputs[0] - sample["output"][0])
+        yield fitness  # YANE kann hier abbrechen
+```
+
 Aufgaben:
 
-- Optionales `early_stop_threshold` pro Fitnessfunktion: wenn geschaetzte Fitness nach k% der Samples unter Grenzwert, Bewertung abbrechen.
-- Framework-seitige Unterstuetzung: Fitnessfunktion gibt Teilergebnisse iterativ zurueck.
-- Abbruchzaehler in Diagnostics aufnehmen.
-- Kompatibel mit Multi-Eval halten.
+- `set_early_stopping(factor: float | None = 1.0)` in `NeuroEvolution` — setzt den relativen Abbruchfaktor. Abbruch wenn `partial_fitness < best_fitness - abs(best_fitness) * factor`. Diese Formel ist sign-unabhaengig: bei negativer Fitness (XOR: best=-0.5, factor=1.0 → threshold=-1.0) wie bei positiver Fitness (CartPole: best=200, factor=1.0 → threshold=0) und bei exponentiell wachsender Fitness korrekt. Default `1.0` bedeutet: Abbruch sobald das Genom mehr als 100% der besten bekannten Fitness hinter dem Populationsbesten liegt.
+- **Hochrechnung fuer Dataset-Aufgaben:** Da nach k von N Samples `partial_fitness ≈ k/N * final_fitness`, wird der Vergleich mit der extrapolierten Schaetzung durchgefuehrt: `estimated = partial_fitness * (N/k_sofar)`. Die Extrapolation setzt **lineare Akkumulation** voraus (Summe oder laufendes Mittel). Nicht-lineare Aggregationen (z.B. `max`, `sqrt`, Bonus am Ende) sind vom Nutzer eigenverantwortlich zu handhaben: entweder Generator nicht verwenden, oder bereits normalisierte Werte yielden (laufendes Mittel statt laufende Summe) — dann entfaellt die Hochrechnung und der Vergleich ist direkt.
+- **Automatische N-Inferenz:** Jedes Genom, das nicht fruehzeitig abgebrochen wird, aktualisiert N mit der tatsaechlichen Yield-Anzahl dieses Runs. Damit passt sich N automatisch an, wenn eine Fitnessfunktion bei verschiedenen Runs unterschiedlich viele Samples ausfuehrt (z.B. adaptives Curriculum, zufaelliges Sampling). N startet als `None`; das erste vollstaendige Genome kalibriert N und schaltet Early Stopping frei. Pruefung startet erst ab 20% der aktuellen N (`k >= N // 5`). Fuer gym-Multi-Eval (Mittelwert ueber Episoden statt Summe) ist N = `n_evaluations` bereits bekannt — direkter Vergleich ohne Hochrechnung.
+- In `_run_evaluations()`: wenn `inspect.isgeneratorfunction(fitness_fn)`, Generator statt direktem Aufruf verwenden. Nach jedem `yield` pruefen ob Partial-Fitness < threshold; falls ja, Generator schliessen und Partial-Fitness als Endwert verwenden.
+- Abbruchzaehler `n_early_stopped` in `population_memory_info()` aufnehmen; ins `EvaluationResult`-Objekt als `stopped_early: bool`.
+- Kompatibel mit Multi-Eval halten (alle n Durchlaeufe koennen individuell fruehzeitig abgebrochen werden).
 
 Nutzen:
 
@@ -65,12 +82,23 @@ Nutzen:
 
 Rohe Fitness-Werte koennen schlecht skalieren: kleine Unterschiede bei hoher Fitness, riesige Unterschiede bei niedrigen Werten. Rank-Transformation macht Selection stabiler.
 
+**Verhaeltnis zu Fitness-Sharing:** Fitness-Sharing (`_compute_shared_fitness()`) ist aktiv und teilt jeden Fitness-Wert durch die Species-Groesse, bevor Tournament-Selection laeuft. Fitness-Shaping ergaenzt das: die `shared_fitness`-Werte werden zusaetzlich in Raenge umgewandelt, bevor sie in die Selection-Formel einfliessen. Fitness-Sharing bleibt aktiv — Rank-Shaping ersetzt nur den rohen `shared_fitness`-Wert durch seinen Rang.
+
+In der Selection-Formel (`_compute_selection_scores()`) wuerde:
+```
+max(0.0, g.shared_fitness - min_fit + 1e-6)
+```
+ersetzt durch:
+```
+rank(g.shared_fitness) / pop_size  # linear normiert auf [1/N, 1]
+```
+
 Aufgaben:
 
-- Optionale Rank-Transformation vor der Elternauswahl: Fitness → Rang in Population.
-- Lineare oder nichtlineare Rank-Skala (z. B. exponentiell).
-- Als Alternative zu Fitness-Sharing evaluieren.
-- Toggle in GUI und `set_fitness_shaping()` in API.
+- Optionale Rank-Transformation: nach `_compute_shared_fitness()` alle `shared_fitness`-Werte durch Raenge ersetzen (linear: Rang 1 = schlechtestes Genom).
+- Lineare oder nichtlineare Rank-Skala wahlweise (linear ausreichend fuer Start).
+- `set_fitness_shaping(enabled: bool)` in `NeuroEvolution` API.
+- Toggle in GUI.
 
 Nutzen:
 
@@ -82,12 +110,14 @@ Nutzen:
 
 Aktuell laeuft Training bis der Nutzer haelt. Es gibt keine automatische Erkennung von Konvergenz.
 
-Aufgaben:
+**Bereits vorhanden:** `min_fitness` (Stopp wenn Fitness-Ziel erreicht) und `max_iterations` (Stopp nach N Schritten) existieren bereits als `set_min_fitness()` / `set_max_iterations()` in `NeuroEvolution`.
 
-- Konvergenz detektieren: z. B. wenn `stagnation_count > threshold` UND Fitness-Streuung in Population < epsilon.
-- Optionales `max_evaluations` und `target_fitness` als Stopp-Kriterien in `train()`.
-- Callback bei Erreichen des Ziels (z. B. fuer externe Skripte).
-- GUI-Anzeige und automatischer Stop.
+Noch fehlende Aufgaben:
+
+- **Fitness-Spread-Konvergenz:** `set_convergence_stop(fitness_spread_eps: float, min_stagnation: float = 1.0)` — Training stoppt wenn `stagnation_count >= stagnation_threshold * min_stagnation` UND IQR der Fitness in der evaluierten Population < `fitness_spread_eps`. (IQR wird bereits in der Fitness-Landscape-Diagnostics-Task berechnet.)
+- **`max_evaluations`:** Alias / Ergaenzung zu `max_iterations` der tatsaechliche Evaluierungen zaehlt (relevant fuer Multi-Eval: `max_evaluations = max_iterations × n_evaluations`). `set_max_evaluations(n: int)` hinzufuegen.
+- **Callback:** `train(fitness_fn, on_stop: Callable[[str], None] | None = None)` — wird am Ende aufgerufen mit Grund (`"target_reached"`, `"max_iterations"`, `"converged"`, `"max_evaluations"`).
+- GUI-Anzeige des Stoppgrundes und automatischer Stop (bereits `min_fitness` triggert GUI-Stop).
 
 Nutzen:
 
@@ -180,12 +210,14 @@ Nutzen:
 
 Original-NEAT erlaubt gelegentliches Crossover zwischen verschiedenen Species. Aktuell findet Crossover nur innerhalb derselben Species statt.
 
+**Species-Zuweisung des Offspring:** Ein Interspecies-Offspring bekommt kein Sonderbehandlung bei der Zuweisung — `_species_stale = True` wird gesetzt und das Offspring landet beim naechsten `_assign_species()`-Aufruf beim naechsten kompatiblen Repraesentanten (normales NEAT-Assignment). Es erhaelt nur keinen Species-Elitism-Schutz (d.h. es zaehlt nicht als "Champion" einer Species und ist nicht automatisch Elite).
+
 Aufgaben:
 
-- Kleinen Anteil (~5%) aller Crossover-Events interspecies erlauben.
-- Interspecies-Nachkommen erhalten keinen Species-Elitism-Schutz.
-- Rate als Strategie-Gen evolvierbarer Parameter oder fixer Hyperparameter.
-- Messen, ob Interspecies-Crossover tatsaechlich gute Genome produziert (Offspring-Zaehler).
+- Kleinen Anteil (~5%) aller Crossover-Events interspecies erlauben: zweiter Elternteil wird aus einer anderen Species gewaehlt.
+- Interspecies-Offspring wird als `n_interspecies_crossover` in `population_memory_info()` gezaehlt.
+- Rate als fixer Hyperparameter (kein Strategie-Gen, um Komplexitaet niedrig zu halten).
+- `set_interspecies_crossover(rate: float)` in `NeuroEvolution` API.
 
 Nutzen:
 
@@ -211,12 +243,13 @@ Nutzen:
 
 Das aktuelle "bestes Genom" ist ein einzelner Kandidat. Ein Ensemble der Top-k koennte robuster sein.
 
-Aufgaben:
+**Bereits implementiert:** `get_ensemble(k)` und `forward_ensemble(inputs, k)` mit simplem Averaging existieren in `neuro_evolution.py` (Zeilen 373–392).
 
-- `get_ensemble(k)` in `NeuroEvolution`: gibt Liste der k besten Genome zurueck.
-- `forward_ensemble(data, k, mode)`: Averaging oder Majority-Vote ueber k Genome.
-- GUI-Anzeige der Ensemble-Fitness (Mittelwert ueber Top-5 statt bestes Einzelgenom).
-- Optional: Ensemble-Gewichte nach Fitness proportional.
+Noch fehlende Aufgaben:
+
+- `mode`-Parameter fuer `forward_ensemble(inputs, k, mode='mean')`: zusaetzlich `mode='vote'` fuer binaere Klassifikation (Majority-Vote ueber gerundete Outputs).
+- GUI-Anzeige der Ensemble-Fitness: Mittelwert der Top-5-Fitness-Werte im LeftPanel anzeigen (ergaenzt den aktuellen Best-Fitness-Wert).
+- Optional: Fitness-gewichtetes Averaging (`mode='weighted'`): Outputs werden nach relativer Fitness der k Genome gewichtet.
 
 Nutzen:
 
@@ -653,13 +686,24 @@ Nutzen:
 
 YANE braucht feste Benchmarks, um echte Fortschritte zu messen.
 
+**Benchmark-Kandidaten und Erfolgskriterien:**
+
+| Benchmark | Typ | Erfolgskriterium | Timeout | Seeds |
+|---|---|---|---|---|
+| XOR | deterministisch | fitness ≥ -0.1 | 30 s | 5 |
+| basic_multiplication | deterministisch | fitness ≥ -5.0 | 60 s | 5 |
+| CartPole-v1 | gym (stochastisch) | mittl. Episoden-Return ≥ 475 | 2 min | 5 |
+| Acrobot-v1 | gym (stochastisch) | mittl. Return ≥ -100 | 5 min | 5 |
+
+XOR und basic_multiplication sind rein deterministisch (festes Dataset). Gym-Benchmarks setzen den neuen `NeuroEvolution(seed=...)` voraus (Seeding-Task muss zuerst fertig sein).
+
 Aufgaben:
 
-- Kleine deterministische Benchmarks definieren.
-- Mittelwert ueber mehrere Seeds messen.
-- Erfolgskriterium und Time-to-Solve erfassen.
-- CI-freundliche schnelle Benchmarks.
-- Separate lange Benchmark-Suite fuer lokale Experimente.
+- `benchmarks/run_suite.py`: laeuft alle Benchmarks und gibt Tabelle (Benchmark, gelöst, mittl. Iterationen, Laufzeit) aus.
+- Pro Benchmark: n Runs mit Seeds 0..n-1, mittlere Time-to-Solve und Erfolgsrate messen.
+- "Schnelle" CI-Suite: nur XOR + basic_multiplication (< 3 min gesamt).
+- "Lange" lokale Suite: alle vier Benchmarks.
+- Ergebnisse als JSON in `benchmarks/results/` speichern fuer Vergleiche.
 
 Nutzen:
 
@@ -765,7 +809,7 @@ Nutzen:
 - [x] Species-Hard-Cap gegen Pop-Overflow bei extremer Stagnation.
 - [x] Threshold-Adjustment-Diagnostics (dbg_last_adj_n, dbg_adj_count) im Log und GUI.
 - [x] UI: Collapsible Groups im LeftPanel, Uebersetzung auf Englisch, Visual Polish.
-- [ ] `EvaluationResult`-Objekt einfuehren.
+- [ ] `EvaluationResult`-Objekt einfuehren: `genome`, `fitness: float`, `elapsed_ms: float`, `n_lamarck_steps: int`, `stopped_early: bool`, `raw_fitnesses: list[float]` (bei Multi-Eval die Einzelwerte vor Aggregation). Ersetzt die aktuellen `(Genome, float, float)`-Tupel in Worker-Pfaden.
 - [ ] Seed-Parameter fuer `NeuroEvolution` einfuehren.
 - [ ] Checkpoint-Speicherung fuer Population und InnovationTracker.
 - [ ] Benchmark-Suite mit mehreren Seeds erstellen.
@@ -773,11 +817,11 @@ Nutzen:
 - [ ] Mutationsraten-Historie in GUI plotten.
 - [ ] API-`/configure` um wichtige Konfigurationsparameter erweitern.
 - [ ] Fitness-Shaping (Rank-basierte Transformation vor Selektion) einfuehren.
-- [ ] Convergence Detection und automatisches Training-Stop (`target_fitness`, `max_evaluations`).
+- [ ] Convergence Detection: `set_convergence_stop(fitness_spread_eps)`, `set_max_evaluations(n)`, `on_stop`-Callback in `train()`. (`min_fitness` + `max_iterations` bereits vorhanden.)
 - [ ] Interspecies Crossover (kleiner Anteil, ~5%) implementieren.
 - [ ] Output-Scale als Strategie-Gen auf Output-Nodes (analog zu input_scale).
-- [ ] Ensemble-Inferenz der Top-k Genome (`get_ensemble`, `forward_ensemble`).
-- [ ] Early Stopping pro Genome bei schlechter Teilperformance.
+- [ ] Ensemble-Inferenz vervollstaendigen: `mode`-Parameter fuer `forward_ensemble` (vote, weighted), GUI-Anzeige der Top-5-Durchschnittsfitness. (`get_ensemble` + Averaging bereits implementiert.)
+- [ ] Early Stopping pro Genome bei schlechter Teilperformance: Generator-Protokoll, sign-unabhaengiger Abbruch wenn `partial_fitness < best_fitness - abs(best_fitness) * factor` (default 1.0), mit Hochrechnung fuer Dataset-Summen.
 
 ---
 
