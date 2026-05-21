@@ -357,18 +357,21 @@ Nutzen:
 
 Persistente Node-Werte sind einfach und flexibel, aber schwer steuerbar.
 
+**Wichtig fuer sequentielle Aufgaben:** Mit einem Tick-basierten Ansatz (ein Token/Zeichen pro Tick, ein "Output-relevant"-Flag als zweiter Input) kann YANE prinzipiell lernen, sich wie ein Sprachmodell zu verhalten — ohne festes Kontextfenster, da der interne State theoretisch ueber beliebig viele Ticks persistiert. Der entscheidende technische Engpass dabei ist Gating: ohne gezielte Schreib-/Vergess-Kontrolle kollabiert der State bei langen Sequenzen numerisch oder das Netz kann keine selektive Retention lernen. Gating (`value = gate * old + (1 - gate) * new`) ist daher der einzige echte technische Blocker fuer diese Aufgabenklasse.
+
 Aufgaben:
 
 - Explizite Memory Nodes als eigener NodeType pruefen.
-- Gating-Mechanismen fuer Memory testen.
-- Leaky memory: `value = alpha * old + new`.
-- Mutation fuer Memory-Zerfall `alpha`.
+- Gating-Mechanismen implementieren: `value = gate * old + (1 - gate) * new`, wobei `gate` ein evolvierbarer Parameter oder ein weiterer Node-Output ist.
+- Leaky memory als einfachere Variante: `value = alpha * old + new`, mit evolvierbarerm Zerfall `alpha`.
+- Mutation fuer `alpha` und Gate-Staerke.
 - Reset-Regeln klarer visualisieren.
 
 Nutzen:
 
 - Bessere Sequenz- und Control-Faehigkeiten.
 - Stabilere rekurrente Dynamik.
+- Ermoeglicht LLM-artiges Verhalten ueber Tick-basierte sequentielle Verarbeitung.
 
 ### P2: Modulare Subnetze
 
