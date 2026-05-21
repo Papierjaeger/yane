@@ -404,6 +404,8 @@ class NeuroEvolution:
         max_connections = max(i["connections"] for i in infos)
         info = {
             "total_genomes": len(all_genomes),
+            "pop_evaluated":  len(self._population._evaluated),
+            "pop_max":        self._population.max_size,
             "total_nodes": total_nodes,
             "total_connections": total_connections,
             "avg_nodes_per_genome": total_nodes / len(all_genomes),

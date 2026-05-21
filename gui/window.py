@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTabWidget,
     QLabel, QPushButton, QSpinBox, QDoubleSpinBox, QComboBox,
     QCheckBox, QGroupBox, QFormLayout, QProgressBar, QStatusBar, QSizePolicy,
-    QFrame, QScrollArea, QMessageBox,
+    QFrame, QScrollArea, QMessageBox, QPlainTextEdit, QApplication,
 )
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
@@ -2150,6 +2150,142 @@ class ServerTab(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Debug tab
+# ---------------------------------------------------------------------------
+
+class DebugTab(QWidget):
+    """Live debug log — compact tabular snapshot every 0.5 s when enabled."""
+
+    _HEADER = (
+        "  iter     t(s)    best     avg     min  sp  thr   pop/max"
+        "   stag  sinj    xov    mut   inj   ms"
+    )
+    _HEADER_EVERY = 25   # repeat column header every N data lines
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._enabled = False
+        self._data_lines = 0
+        self._t0: float | None = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.setSpacing(8)
+
+        # ── Controls ────────────────────────────────────────────────────────
+        ctrl = QHBoxLayout()
+        self.btn_toggle = QPushButton("Debug: Off")
+        self.btn_toggle.setCheckable(True)
+        self.btn_toggle.setFixedWidth(110)
+        self.btn_toggle.toggled.connect(self._on_toggle)
+
+        btn_clear = QPushButton("Clear")
+        btn_clear.setFixedWidth(70)
+        btn_clear.clicked.connect(self._clear)
+
+        self.btn_copy = QPushButton("Copy to Clipboard")
+        self.btn_copy.setFixedWidth(150)
+        self.btn_copy.clicked.connect(self._copy)
+
+        hint = _label(
+            "Enable before training to capture a live log you can paste into chat.",
+            "mutRate",
+        )
+        hint.setWordWrap(True)
+
+        ctrl.addWidget(self.btn_toggle)
+        ctrl.addWidget(btn_clear)
+        ctrl.addStretch()
+        ctrl.addWidget(hint)
+        ctrl.addStretch()
+        ctrl.addWidget(self.btn_copy)
+        outer.addLayout(ctrl)
+
+        # ── Log area ────────────────────────────────────────────────────────
+        self._log = QPlainTextEdit()
+        self._log.setReadOnly(True)
+        self._log.setFont(QFont("Monospace", 10))
+        self._log.setStyleSheet(
+            "QPlainTextEdit {"
+            "  background: #11111b;"
+            "  color: #cdd6f4;"
+            "  border: 1px solid #313244;"
+            "  border-radius: 4px;"
+            "}"
+        )
+        outer.addWidget(self._log)
+
+    # ── Slots called by MainWindow ──────────────────────────────────────────
+
+    def on_training_started(self) -> None:
+        self._t0 = _time.perf_counter()
+        self._data_lines = 0
+        if self._enabled:
+            self._log.appendPlainText("\n=== Training started ===")
+
+    def on_update(self, genome, mem: dict, _do_heavy: bool) -> None:
+        if not self._enabled:
+            return
+
+        t = _time.perf_counter() - (self._t0 or _time.perf_counter())
+
+        # Repeat header every N data lines
+        if self._data_lines % self._HEADER_EVERY == 0:
+            self._log.appendPlainText(self._HEADER)
+        self._data_lines += 1
+
+        total_iter = (mem.get("n_crossover", 0)
+                      + mem.get("n_mutation_only", 0)
+                      + mem.get("n_diversity_injection", 0))
+        pop_eval = mem.get("pop_evaluated", mem.get("total_genomes", 0))
+        pop_max  = mem.get("pop_max", 0)
+        ev_ms    = mem.get("eval_time_mean_ms", 0.0)
+
+        line = (
+            f"{total_iter:6d}"
+            f"  {t:7.1f}"
+            f"  {mem.get('max_fitness', 0.0):7.4f}"
+            f"  {mem.get('avg_fitness', 0.0):7.4f}"
+            f"  {mem.get('min_fitness', 0.0):7.4f}"
+            f"  {mem.get('species_count', 0):2d}"
+            f"  {mem.get('compat_threshold', 0.0):.3f}"
+            f"  {pop_eval:3d}/{pop_max:<3d}"
+            f"  {mem.get('stagnation_count', 0):5d}"
+            f"  {mem.get('since_last_injection', 0):4d}"
+            f"  {mem.get('n_crossover', 0):5d}"
+            f"  {mem.get('n_mutation_only', 0):5d}"
+            f"  {mem.get('n_diversity_injection', 0):4d}"
+            f"  {ev_ms:5.1f}"
+        )
+        self._log.appendPlainText(line)
+
+        # Auto-scroll to bottom
+        sb = self._log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    # ── Internal helpers ────────────────────────────────────────────────────
+
+    def _on_toggle(self, checked: bool) -> None:
+        self._enabled = checked
+        self.btn_toggle.setText("Debug: On" if checked else "Debug: Off")
+        self.btn_toggle.setStyleSheet(
+            "color: #a6e3a1; font-weight: bold;" if checked else ""
+        )
+
+    def _clear(self) -> None:
+        self._log.clear()
+        self._data_lines = 0
+
+    def _copy(self) -> None:
+        text = self._log.toPlainText()
+        if text.strip():
+            QApplication.clipboard().setText(text)
+            original = self.btn_copy.text()
+            self.btn_copy.setText("Copied!")
+            QTimer.singleShot(1500, lambda: self.btn_copy.setText(original))
+
+
+# ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 
@@ -2180,15 +2316,19 @@ class MainWindow(QMainWindow):
         self._training_tab = TrainingTab()
         self._inspect_tab  = InspectTab()
         self._server_tab   = ServerTab()
+        self._debug_tab    = DebugTab()
         tabs.addTab(self._training_tab, "  Training  ")
         tabs.addTab(self._inspect_tab,  "  Inspect  ")
         tabs.addTab(self._server_tab,   "  API Server  ")
+        tabs.addTab(self._debug_tab,    "  Debug  ")
 
         self._training_tab.genome_updated.connect(self._left.update_genome)
         self._training_tab.genome_updated.connect(self._on_genome_for_inspect)
+        self._training_tab.genome_updated.connect(self._debug_tab.on_update)
         self._training_tab.example_changed.connect(self._inspect_tab.set_example)
         self._training_tab.training_started.connect(self._inspect_tab.reset_genome)
         self._training_tab.training_started.connect(self._reset_best_fitness_for_dot)
+        self._training_tab.training_started.connect(self._debug_tab.on_training_started)
         tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(tabs, stretch=1)
 
