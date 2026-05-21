@@ -895,6 +895,12 @@ class Population:
                 self._bootstrap_initial_population()
             return
 
+        # Always run species management — skipping it during stagnation injection
+        # causes unbounded species growth (no merging/threshold adjustment) which
+        # in turn makes every genome a species-elite and breaks _prune().
+        self._spawn_count += 1
+        self._assign_species()
+
         if self._since_last_injection >= self.stagnation_threshold:
             self._inject_fresh_genome()
             return
@@ -907,11 +913,6 @@ class Population:
             self._topology_stagnation_count = 0
             self._inject_structural_diversity()
             return
-
-        self._spawn_count += 1
-        # _assign_species() handles the periodic full rebuild internally
-        # (every _force_full_assign_interval spawns).  No stale-marking needed here.
-        self._assign_species()
         self._compute_shared_fitness()
         self._compute_efficiency_scores()
 
