@@ -567,6 +567,39 @@ class Population:
     # Speciation & fitness sharing
     # ------------------------------------------------------------------
 
+    def _place_or_cap(self, genome: Genome) -> 'Species | None':
+        """Create a new species for genome, or force-assign to nearest if at the hard cap.
+
+        Hard cap = max(target_species, max_size // 2).  With species_elite_count=1
+        each species consumes one protected slot in _prune().  Allowing species_count
+        to approach max_size means every genome is a species-elite → no pruning
+        candidates → population grows without bound.
+
+        Returns the newly created Species, or None if genome was force-assigned.
+        """
+        cap = max(self._target_species, self.max_size // 2)
+        if self._species and len(self._species) >= cap:
+            # Force-assign to nearest existing species by compatibility distance.
+            nearest = min(
+                self._species,
+                key=lambda sp: (
+                    _compatibility(genome, sp.representative)
+                    if sp.representative is not None else float('inf')
+                ),
+            )
+            nearest.members.append(genome)
+            if nearest._cached_best is None or genome.fitness > nearest._cached_best.fitness:
+                nearest._cached_best = genome
+            genome._last_species_id = id(nearest)
+            return None
+        else:
+            new_sp = Species(genome)
+            new_sp.members.append(genome)
+            new_sp._cached_best = genome
+            self._species.append(new_sp)
+            genome._last_species_id = id(new_sp)
+            return new_sp
+
     def _assign_one_genome(self, genome: Genome) -> None:
         """Assign a single genome to its species immediately after evaluation.
 
@@ -604,11 +637,7 @@ class Population:
                     break
 
         if not placed:
-            new_sp = Species(genome)
-            new_sp.members.append(genome)
-            new_sp._cached_best = genome
-            self._species.append(new_sp)
-            genome._last_species_id = id(new_sp)
+            self._place_or_cap(genome)
 
         genome._species_stale = False
 
@@ -659,12 +688,9 @@ class Population:
                             break
 
                 if not placed:
-                    new_sp = Species(genome)
-                    new_sp.members.append(genome)
-                    new_sp._cached_best = genome
-                    self._species.append(new_sp)
-                    species_by_id[id(new_sp)] = new_sp
-                    genome._last_species_id = id(new_sp)
+                    new_sp = self._place_or_cap(genome)
+                    if new_sp is not None:
+                        species_by_id[id(new_sp)] = new_sp
 
         else:
             # Incremental path: only re-process genuinely stale genomes.
@@ -696,11 +722,7 @@ class Population:
                         break
 
                 if not placed:
-                    new_sp = Species(genome)
-                    new_sp.members.append(genome)
-                    new_sp._cached_best = genome
-                    self._species.append(new_sp)
-                    genome._last_species_id = id(new_sp)
+                    self._place_or_cap(genome)
 
         self._species = [sp for sp in self._species if sp.members]
         for sp in self._species:
@@ -1018,7 +1040,15 @@ class Population:
 
             candidates = [g for g in self._evaluated if g not in protected]
             if not candidates:
-                break
+                # Emergency: species elites fill all slots (species explosion).
+                # Fall back to protecting only the global elite so pruning can proceed.
+                if self.elite_count > 0:
+                    fallback = set(nlargest(self.elite_count, self._evaluated, key=_fitness_key))
+                else:
+                    fallback = set()
+                candidates = [g for g in self._evaluated if g not in fallback]
+                if not candidates:
+                    break
 
             worst = min(candidates, key=_fitness_key)
             self._behaviors.pop(id(worst), None)
