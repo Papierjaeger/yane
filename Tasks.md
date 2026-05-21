@@ -45,18 +45,82 @@ Nutzen:
 - YANE muss nicht alle Ziele in eine fragile Fitnessformel pressen.
 - Gute Basis fuer groessere Aufgaben mit Trade-offs.
 
-## 2. Evolution und Suchstrategie
+### P0: Early Stopping pro Genom bei Dataset-Aufgaben
 
-
-### P0: Mutation- und Strategie-Gene sichtbar machen
-
-Die selbstadaptierenden Raten sind stark, aber schwer zu beobachten.
+Bei Klassifikations- und Regressions-Aufgaben wird jedes Genom auf allen Samples bewertet, auch wenn es nach wenigen Faellen offensichtlich schlecht ist.
 
 Aufgaben:
 
-- Durchschnittliche Mutationsraten pro Population ausgeben.
-- Raten des besten Genoms anzeigen.
-- Historie in GUI plotten.
+- Optionales `early_stop_threshold` pro Fitnessfunktion: wenn geschaetzte Fitness nach k% der Samples unter Grenzwert, Bewertung abbrechen.
+- Framework-seitige Unterstuetzung: Fitnessfunktion gibt Teilergebnisse iterativ zurueck.
+- Abbruchzaehler in Diagnostics aufnehmen.
+- Kompatibel mit Multi-Eval halten.
+
+Nutzen:
+
+- Viel schnellere Population-Selektion bei grossen Datasets (XOR, MNIST).
+- Macht groessere Datasets fuer YANE praktisch.
+
+### P1: Fitness-Shaping / Rank-basierte Transformation
+
+Rohe Fitness-Werte koennen schlecht skalieren: kleine Unterschiede bei hoher Fitness, riesige Unterschiede bei niedrigen Werten. Rank-Transformation macht Selection stabiler.
+
+Aufgaben:
+
+- Optionale Rank-Transformation vor der Elternauswahl: Fitness → Rang in Population.
+- Lineare oder nichtlineare Rank-Skala (z. B. exponentiell).
+- Als Alternative zu Fitness-Sharing evaluieren.
+- Toggle in GUI und `set_fitness_shaping()` in API.
+
+Nutzen:
+
+- Selection ist skalierungsinvariant — keine Empfindlichkeit gegenueber Fitness-Ausreissern.
+- Stabiler bei sehr sparse Rewards und bei sehr dichter Fitness-Verteilung.
+- Bekannt aus CMA-ES und OpenAI-ES als wichtige Robustheitsverbesserung.
+
+### P1: Convergence Detection und automatisches Training-Stop
+
+Aktuell laeuft Training bis der Nutzer haelt. Es gibt keine automatische Erkennung von Konvergenz.
+
+Aufgaben:
+
+- Konvergenz detektieren: z. B. wenn `stagnation_count > threshold` UND Fitness-Streuung in Population < epsilon.
+- Optionales `max_evaluations` und `target_fitness` als Stopp-Kriterien in `train()`.
+- Callback bei Erreichen des Ziels (z. B. fuer externe Skripte).
+- GUI-Anzeige und automatischer Stop.
+
+Nutzen:
+
+- Skripte koennen unbeaufsichtigt laufen.
+- Benchmark-Suite wird einfacher (kein manuelles Stoppen).
+
+### P1: Fitness-Landscape Diagnostics
+
+Wie verteilt sich Fitness in der Population? Gibt es Sprünge, Plateaus, bimodale Verteilungen?
+
+Aufgaben:
+
+- Fitness-Histogramm der aktuellen Population berechnen und in GUI anzeigen.
+- Fitness-Sprungrate verfolgen (Anteil Evaluierungen, die neuen Bestwert setzen).
+- Plateau-Erkennung: wie lange ist stagnation_count / max_size > 0.9?
+- Fitness-Interquartilsabstand (IQR) als Diversitaetsmass anzeigen.
+
+Nutzen:
+
+- Sieht man sofort, ob die Population kollabiert (alle gleich gut), exploriert (breite Verteilung) oder stagniert.
+- Hilft beim Tuning von Populationsgroesse, Elitismus und Novelty-Gewicht.
+
+## 2. Evolution und Suchstrategie
+
+
+### P1: Mutation- und Strategie-Gene sichtbar machen
+
+Die selbstadaptierenden Raten sind stark, aber schwer zu beobachten. Raten des besten Genoms bereits in GUI (siehe Erledigte). Offen:
+
+Aufgaben:
+
+- Durchschnittliche Mutationsraten populationsweit ausgeben (nicht nur bestes Genom).
+- Historie der Raten in GUI plotten.
 - Warnung, wenn Raten an Minimum oder Maximum kleben.
 
 Nutzen:
@@ -112,6 +176,53 @@ Nutzen:
 - Naeher an klassischem NEAT.
 - Besserer Schutz neuer Strukturinnovationen.
 
+### P1: Interspecies Crossover
+
+Original-NEAT erlaubt gelegentliches Crossover zwischen verschiedenen Species. Aktuell findet Crossover nur innerhalb derselben Species statt.
+
+Aufgaben:
+
+- Kleinen Anteil (~5%) aller Crossover-Events interspecies erlauben.
+- Interspecies-Nachkommen erhalten keinen Species-Elitism-Schutz.
+- Rate als Strategie-Gen evolvierbarer Parameter oder fixer Hyperparameter.
+- Messen, ob Interspecies-Crossover tatsaechlich gute Genome produziert (Offspring-Zaehler).
+
+Nutzen:
+
+- Kombiniert strukturelle Innovationen aus verschiedenen Niches.
+- Kann lokale Optima aufbrechen, die Species-Isolation sonst schuetzt.
+
+### P1: Per-Species adaptives Lamarck
+
+Aktuell bekommt jedes Genome denselben (stagnationsbasierten) Lamarck-Aufwand. Species, die stark stagnieren, koennten mehr Refinement-Schritte bekommen.
+
+Aufgaben:
+
+- Pro Species `stagnation_count` verfolgen (bereits teilweise im Code).
+- Lamarck-Steps pro Genome nach Species-Stagnation skalieren statt nach globaler Stagnation.
+- Diagnostics: mittlere Lamarck-Steps je Species anzeigen.
+
+Nutzen:
+
+- Ressourcen werden dort eingesetzt, wo Verbesserung am staerksten blockiert ist.
+- Feinere Kontrolle als globales Lamarck.
+
+### P1: Ensemble-Inferenz der Top-k Genome
+
+Das aktuelle "bestes Genom" ist ein einzelner Kandidat. Ein Ensemble der Top-k koennte robuster sein.
+
+Aufgaben:
+
+- `get_ensemble(k)` in `NeuroEvolution`: gibt Liste der k besten Genome zurueck.
+- `forward_ensemble(data, k, mode)`: Averaging oder Majority-Vote ueber k Genome.
+- GUI-Anzeige der Ensemble-Fitness (Mittelwert ueber Top-5 statt bestes Einzelgenom).
+- Optional: Ensemble-Gewichte nach Fitness proportional.
+
+Nutzen:
+
+- Robustere Inferenz bei stochastischen Aufgaben.
+- Sofort nutzbar ohne zusaetzliches Training.
+
 ### P2: Quality Diversity / MAP-Elites
 
 YANE hat bereits Novelty Search. Der naechste Schritt waere Quality Diversity.
@@ -142,6 +253,38 @@ Aufgaben:
 Nutzen:
 
 - Starke Methode fuer Strategien, Spiele und robuste Policies.
+
+### P2: Adaptive Populationsgroesse
+
+Die Populationsgroesse ist aktuell fix. Dynamische Anpassung koennte Ressourcen effizienter nutzen.
+
+Aufgaben:
+
+- Populationsgroesse automatisch reduzieren, wenn Species sich stark konsolidiert hat (wenig Diversitaet braucht weniger Kandidaten).
+- Populationsgroesse erhoehen, wenn viele Species gleichzeitig wachsen (Exploration-Phase).
+- Mindest- und Maximalgroesse als Grenzen definieren.
+- Groessenveraenderung schrittweise (kein sprunghafter Drop).
+
+Nutzen:
+
+- Weniger Evaluierungen in konvergierten Phasen, mehr Vielfalt in Explorationsphasen.
+- Bessere Ressourcennutzung bei langen Runs.
+
+### P2: Warm-Start und Transfer Learning
+
+Trainiertes Bestes Genome oder ganze Population als Startpunkt fuer verwandte Aufgaben nutzen.
+
+Aufgaben:
+
+- `load_population(checkpoint)` als Startpunkt statt zufaelliger Initialisierung.
+- Filterung: nur Genome behalten, die auf neuer Aufgabe mindestens Baseline erreichen.
+- Optionale Re-Initialisierung der Strategie-Gene (sigma, rates) bei Start.
+- Beispiel: CartPole-trainiertes Netz als Startpunkt fuer Acrobot.
+
+Nutzen:
+
+- Verkuerzte Konvergenzzeit bei verwandten Aufgaben.
+- Sinnvoll fuer Curriculum Learning (automatischer Wechsel).
 
 ## 3. Netzwerkmodell
 
@@ -225,6 +368,23 @@ Nutzen:
 - Potenziell viel bessere Skalierung bei grossen, regelmaessigen Strukturen.
 - Interessant fuer Bild- und Steuerungsaufgaben.
 
+### P1: Output-Scale als Strategie-Gen
+
+Input-Nodes haben bereits einen evolvierbaren `input_scale`-Faktor fuer automatische Normalisierung. Output-Nodes haben kein Analoges.
+
+Aufgaben:
+
+- `output_scale: float = 1.0` auf Output-Nodes (wie `input_scale` auf Input-Nodes).
+- Evolvierbar: Mutationsrate analog zu `input_scale`.
+- Forward-Pass multipliziert Ausgabe-Aktivierung mit `output_scale`.
+- GUI: Output-Scales neben Input-Scales anzeigen.
+
+Nutzen:
+
+- Netze koennen Ausgaben automatisch auf erwarteten Wertebereich skalieren.
+- Besonders nuetzlich bei Continuous-Control (z. B. Aktion in [-1, 1] oder [0, 100]).
+- Symmetrisch zur bestehenden Input-Scale-Mechanik — konsistentes Konzept.
+
 ## 4. Optimierung und Hybrid-Training
 
 ### P1: Lamarckian Refinement — Restaufgaben
@@ -272,6 +432,24 @@ Nutzen:
 
 - Deutlich bessere Skalierung bei grossen supervised Aufgaben.
 - Bleibt optional, Neuroevolution bleibt Kernidee.
+
+### P2: Natural Evolution Strategies (NES) als Lamarck-Alternative
+
+Hill-Climbing aendert Gewichte zufaellig und haelt die bessere Variante. NES schaetzt aus mehreren Perturbationen einen approximierten Fitness-Gradienten und macht gerichtete Schritte.
+
+Aufgaben:
+
+- `_nes_refine()` als Alternative zu `_lamarck_refine()` implementieren.
+- k Perturbationen ± epsilon; Gradienten-Schaetzung: `g = sum(f_i * noise_i) / (k * epsilon)`.
+- Schrittweite adaptiv (analoges sigma_global-Konzept).
+- Benchmark: NES vs. Hill-Climbing auf Acrobot / LunarLander.
+- Umschaltbar via `set_lamarck(mode='nes')`.
+
+Nutzen:
+
+- Gerichtete Gewichtsoptimierung statt reinem Zufalls-Climbing.
+- Skaliert besser mit Genomgroesse (ein Schritt pro k Evaluierungen statt k Schritte).
+- Theoretisch fundierter als blindes Hill-Climbing.
 
 ## 5. Parallelisierung und Performance
 
@@ -581,12 +759,25 @@ Nutzen:
 - [x] Connection Enable/Disable (reversibles Deaktivieren, Forward-Filter, forward-Pfad compile-time).
 - [x] Adaptive Strukturmutation (weight-biased remove, Spike-Mutation, Rewiring).
 - [x] Adaptives Lamarckian Refinement (Top-K, stagnationsbasiert, 0→max_steps).
+- [x] Raten des besten Genoms in GUI anzeigen (sigma_global, Struktur-Raten, Weight/Bias/Activation-Raten, Strategy-Genes).
+- [x] Inkrementelle Speziation (_assign_species von O(pop) auf O(0) im Steady-State).
+- [x] Debug-Tab mit Live-Log, Toggle und Clipboard-Kopie.
+- [x] Species-Hard-Cap gegen Pop-Overflow bei extremer Stagnation.
+- [x] Threshold-Adjustment-Diagnostics (dbg_last_adj_n, dbg_adj_count) im Log und GUI.
+- [x] UI: Collapsible Groups im LeftPanel, Uebersetzung auf Englisch, Visual Polish.
 - [ ] `EvaluationResult`-Objekt einfuehren.
 - [ ] Seed-Parameter fuer `NeuroEvolution` einfuehren.
 - [ ] Checkpoint-Speicherung fuer Population und InnovationTracker.
 - [ ] Benchmark-Suite mit mehreren Seeds erstellen.
-- [ ] Mutationsraten-Diagnostics implementieren.
+- [ ] Durchschnittliche Mutationsraten populationsweit ausgeben (Ergaenzung zu Best-Genome-Raten).
+- [ ] Mutationsraten-Historie in GUI plotten.
 - [ ] API-`/configure` um wichtige Konfigurationsparameter erweitern.
+- [ ] Fitness-Shaping (Rank-basierte Transformation vor Selektion) einfuehren.
+- [ ] Convergence Detection und automatisches Training-Stop (`target_fitness`, `max_evaluations`).
+- [ ] Interspecies Crossover (kleiner Anteil, ~5%) implementieren.
+- [ ] Output-Scale als Strategie-Gen auf Output-Nodes (analog zu input_scale).
+- [ ] Ensemble-Inferenz der Top-k Genome (`get_ensemble`, `forward_ensemble`).
+- [ ] Early Stopping pro Genome bei schlechter Teilperformance.
 
 ---
 
@@ -630,3 +821,30 @@ Drei neue Mutationsmechanismen, alle selbst-adaptiv:
 ### Adaptives Lamarckian Refinement
 
 Lamarck feuert jetzt automatisch ohne manuelle Konfiguration. Anzahl der Hill-Climbing-Schritte skaliert linear mit Stagnation (0 bei gutem Fortschritt → max_steps bei voller Stagnation). Nur Top-20% des evaluierten Pools werden verfeinert. Expliziter Modus (`set_lamarck(n_steps>0`) bleibt fuer Override-Faelle erhalten. Benchmark Acrobot: 2x schneller geloest, bessere Endfitness, 5% Eval-Overhead.
+
+### Mutationsraten des besten Genoms in der GUI
+
+Im LeftPanel werden die selbst-adaptiven Raten des aktuell besten Genoms angezeigt: `sigma_global` (globale Schrittweite), die vier Struktur-Raten (Add/Remove Node, Add/Remove Connection) sowie populationsdurchschnittliche Weight-shift-rate, Weight-delta, Bias-rate, Bias-delta und Activation-Wechsel-rate. Alle Werte stehen in collapsible Groups ("Structural rates", "Strategy genes", "Weight / Node rates").
+
+### Inkrementelle Speziation
+
+`_assign_species()` laeuft jetzt im Steady-State in O(0) statt O(pop): Jedes neu evaluierte Genom cached seine letzte Species und wird beim naechsten Aufruf direkt dort eingesetzt, wenn die Kompatibilitaet noch stimmt. Ein periodischer Vollscan (jede k-te Generation) korrigiert Drift. Spart signifikant CPU in grossen Populationen.
+
+### Debug-Tab mit Live-Log
+
+Neuer "Debug"-Tab in der GUI: zeilenweise Snapshot aller `population_memory_info()`-Werte alle 0.5 s, Toggle zum Pausieren, Clipboard-Kopie des vollstaendigen Logs. Ermoeglicht tieferes Debugging ohne Print-Statements oder externen Logger.
+
+### Species-Hard-Cap und Stabilitaetsfixes
+
+Mehrere aufeinanderfolgende Fixes fuer Randfaelle bei Stagnation:
+- **Hard-Cap**: Species-Anzahl wird hart nach oben begrenzt, damit Pop-Overflow bei extremer Stagnation und vielen kleinen Species ausbleibt.
+- **Threshold-Freeze-Fix**: Threshold wurde bei kleinem `target_species` nicht korrekt angepasst; Schutz wird jetzt nur fuer Species mit mehr als einem Mitglied angewendet.
+- **Threshold-Schritt-Kalibrierung**: Schrittgroesse auf per-Evaluation-Frequenz kalibriert (nicht per-Schritt), damit Threshold-Anpassung bei verschiedenen Populationsgroessen stabil bleibt.
+- **Dead-Band entfernt**: Hysterese erwies sich als schaedlich; Threshold-Anpassung laeuft jetzt ohne Dead-Band.
+- **Diagnostics**: `dbg_last_adj_n` und `dbg_adj_count` in `population_memory_info()` und im Debug-Tab sichtbar.
+
+### UI-Verbesserungen (Collapsible Groups, Englisch, Visual Polish)
+
+- **Collapsible Groups im LeftPanel**: Alle Diagnostik-Sektionen koennen ein- und ausgeklappt werden; Zustand bleibt erhalten.
+- **Vollstaendige Uebersetzung auf Englisch**: GUI-Texte, Labels und Tooltips durchgehend auf Englisch umgestellt.
+- **Visual Polish**: Chart-Ticks, Δ-Styling, Canvas-Legende, Progress-Form und Tab-Indikator verbessert; Inspect-Tab-Notification-Dot erscheint nur bei neuem Bestwert.
