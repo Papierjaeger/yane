@@ -419,6 +419,8 @@ class NeuroEvolution:
             "stagnation_threshold":    self._population.stagnation_threshold,
             "since_last_injection":    self._population._since_last_injection,
             "spawn_count":             self._population._spawn_count,
+            "dbg_last_adj_n":          self._population._dbg_last_adj_n,
+            "dbg_adj_count":           self._population._dbg_adj_count,
             "novelty_weight":          self._population.novelty_weight,
             "efficiency_weight":       self._population.efficiency_weight,
             "min_fitness": min((g.fitness for g in self._population._evaluated), default=0.0),

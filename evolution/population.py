@@ -287,6 +287,9 @@ class Population:
         # ([0, ~0.15] for bootstrap genomes) to avoid oscillation.
         self._target_species: int = target_species
         self._compat_threshold: float = 0.2
+        # Diagnostics: track last threshold adjustment for debugging.
+        self._dbg_last_adj_n: int = -1       # n at last _assign_species() threshold check
+        self._dbg_adj_count: int = 0         # how many times threshold was actually changed
 
         # Novelty search — probe inputs are fixed (seed 42) so behavior descriptors
         # are comparable across the lifetime of the population. No user config needed.
@@ -774,11 +777,14 @@ class Population:
         # injection cycle (100 evals × 0.02), sweeping the entire threshold range
         # and causing wild oscillation between sp=1 and sp=many.
         n = len(self._species)
+        self._dbg_last_adj_n = n
         _step = max(0.001, 0.3 / max(1, self.max_size))
         if n > self._target_species:
             self._compat_threshold = min(1.5, self._compat_threshold + _step)
+            self._dbg_adj_count += 1
         elif n < self._target_species:
             self._compat_threshold = max(0.01, self._compat_threshold - _step)
+            self._dbg_adj_count += 1
 
     def _compute_shared_fitness(self) -> None:
         # No parsimony penalty: even a tiny coefficient causes evolution to

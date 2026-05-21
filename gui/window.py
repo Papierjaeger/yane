@@ -2158,7 +2158,7 @@ class DebugTab(QWidget):
 
     _HEADER = (
         "  iter     t(s)    best     avg     min  sp tgt   thr   pop/max"
-        "   stag  sinj    xov    mut   inj   ms  spawn"
+        "   stag  sinj    xov    mut   inj   ms  spawn adj_n  adj#"
     )
     _HEADER_EVERY = 25   # repeat column header every N data lines
 
@@ -2258,6 +2258,8 @@ class DebugTab(QWidget):
             f"  {mem.get('n_diversity_injection', 0):4d}"
             f"  {ev_ms:5.1f}"
             f"  {mem.get('spawn_count', 0):6d}"
+            f"  {mem.get('dbg_last_adj_n', -1):5d}"
+            f"  {mem.get('dbg_adj_count', 0):5d}"
         )
         self._log.appendPlainText(line)
 
