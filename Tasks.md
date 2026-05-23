@@ -760,7 +760,75 @@ Nutzen:
 
 - Weniger Risiko bei groesseren Refactors.
 
-## 10. Moegliche grosse Entwicklungsphasen
+## 10. Tests und Qualitaetssicherung
+
+### P1: Testabdeckung ausbauen und Regressionstests etablieren
+
+Aktuell gibt es schon einige Testdateien in `tests/`, aber neue Features werden nicht systematisch durch Tests abgesichert.
+
+Aufgaben:
+
+- Fuer jedes neue Framework-Feature einen mindestens grundlegenden Test schreiben (Richtlinie: kein P0/P1-Feature ohne Test).
+- Regressionstests fuer bereits behobene Bugs (Species-Explosion, Threshold-Adjustment, etc.), damit sie nicht zurueckkehren.
+- Parametrisierte Tests fuer Edge Cases: leere Population, single-member Species, extreme Fitness-Werte, NaN/Inf-Gewichte, maximale Netzwerkgroesse.
+- CI-faehige Test-Suite: `pytest` mit `--durations=10` und Coverage-Report. Schnelle CI-Suite (< 2 min) als separates pytest-Mark (`-m "ci"`) definieren.
+- Coverage-Ziel definieren (z.B. >= 80% fuer `core/` und `evolution/`).
+- Property-based Testing mit `hypothesis` fuer Invarianten pruefen (z. B. `forward()`-Output hat immer Laenge `n_outputs`, Mutation erzeugt keine isolierten Nodes, Crossover erhaelt Kompatibilitaet nicht beliebig).
+
+Nutzen:
+
+- Refactoring-Risiko sinkt erheblich.
+- Neue Contributors koennen sicher aendern.
+- Regressionen werden vor dem Merge erkannt.
+
+## 11. Strukturiertes Logging
+
+### P1: Logs mit Kategorie- und Zeitstempel-Ordnern
+
+Aktuell schreibt YANE Logs unsortiert. Ein strukturiertes Log-Verzeichnis erleichtert Debugging und Vergleich von Trainingslaeufen.
+
+**Zielstruktur:**
+
+```
+logs/
+   cartpole/
+       2026-05-24_14-10-00/
+           run.log
+           best_genome.json
+           config.json
+       2026-05-24_15-30-00/
+           ...
+   xor/
+       2026-05-24_14-10-00/
+           ...
+   benchmarks/
+       2026-05-24_14-10-00/
+           suite_results.json
+           ...
+   gui/
+       2026-05-24_14-10-00/
+           ...
+```
+
+Aufgaben:
+
+- `util/logger.py` erweitern: `setup_logging(name: str, log_root: str | None = None)` erstellt `<projekt-root>/logs/<name>/<timestamp>/` und gibt den Pfad zurueck. Der `log_root` ist **immer relativ zum YANE-Projektverzeichnis**, nicht zum Home-Verzeichnis oder einem systemweiten tmp-Pfad. Default `None` → `logs/` im Projekt-Root. Ein abweichender Pfad ist nur ueber explizite Konfiguration moeglich.
+- Timestamp-Format: `YYYY-MM-DD_HH-MM-SS` (ISO 8601-kompatibel, dateisystem-sicher).
+- Automatische Kategorie-Erkennung: In `train()` und `NeuroEvolution` wird `name` aus der Fitnessfunktion oder einem optionalen `run_name`-Parameter abgeleitet; GUI nutzt `"gui"`; Benchmark-Suite nutzt `"benchmarks"`.
+- Pro Run: `run.log` (Hauptlog), `config.json` (alle NeuroEvolution-Einstellungen serialisiert), `best_genome.json` (Bestes Genom am Ende des Runs).
+- Fitness-Historie als `fitness_history.csv` (Iteration, Bestfitness, Meanfitness, Medianfitness, IQR) — baut auf der bestehenden `population_memory_info()` auf.
+- Alte Logs automatisch aufrauemen: `max_log_dirs` pro Kategorie (Default 20), aelteste werden geloescht.
+- GUI-Konfiguration: Log-Root-Pfad (relativ zum Projektverzeichnis) und Auto-Cleanup im Settings-Tab einstellbar. Standard: `logs/` im YANE-Projektordner — kein versteckter Pfad in `~/.yane/` oder `/tmp/`.
+- `log_info` / `log_warning` / `log_error` in API-Endpunkten nutzen, sodass Server-Logs in `logs/api/` landen.
+
+Nutzen:
+
+- Trainingslaeufe sind dauerhaft und geordnet nachvollziehbar — alle Logs direkt im Projektordner, kein Suchen in versteckten Systemverzeichnissen.
+- Kein manuelles Einrichten von Log-Verzeichnissen mehr noetig.
+- Schnelles Auffinden des relevanten Runs ueber Kategorie + Zeitstempel.
+- Automatisches Aufrauemen verhindert volle Platten bei langen Experiment-Serien.
+
+## 12. Moegliche grosse Entwicklungsphasen
 
 ### Phase 1: Stabilisieren und sichtbar machen
 
@@ -793,7 +861,7 @@ Nutzen:
 - Bessere Memory Nodes.
 - Hybrid-Optimierung fuer Gewichte.
 
-## 11. Erste konkrete TODO-Liste
+## 13. Erste konkrete TODO-Liste
 
 - [x] Automatische Effizienzbewertung in der Elternauswahl anwenden.
 - [x] Bewertungszeit in den GUI-Worker-Pfaden messen.
@@ -825,6 +893,8 @@ Nutzen:
 - [ ] Output-Scale als Strategie-Gen auf Output-Nodes (analog zu input_scale).
 - [ ] Ensemble-Inferenz vervollstaendigen: `mode`-Parameter fuer `forward_ensemble` (vote, weighted), GUI-Anzeige der Top-5-Durchschnittsfitness. (`get_ensemble` + Averaging bereits implementiert.)
 - [ ] Early Stopping pro Genome bei schlechter Teilperformance: Generator-Protokoll, sign-unabhaengiger Abbruch wenn `partial_fitness < best_fitness - abs(best_fitness) * factor` (default 1.0), mit Hochrechnung fuer Dataset-Summen.
+- [ ] Strukturiertes Logging: `logs/<kategorie>/<timestamp>/`-Struktur mit `run.log`, `config.json`, `best_genome.json`, `fitness_history.csv`; Auto-Cleanup pro Kategorie.
+- [ ] Testabdeckung ausbauen: Regressionstests fuer Bugfixes, parametrisierte Edge-Case-Tests, CI-Suite (`-m "ci"`), Coverage-Ziel >= 80% fuer `core/` und `evolution/`.
 
 ---
 
