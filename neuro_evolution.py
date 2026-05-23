@@ -22,7 +22,7 @@ from yane.evolution.population import Population
 from yane.evolution.efficiency_penalty import EfficiencyPenalty
 from yane.evolution.fitness_sanitizer import FitnessSanitizer, sanitize_fitness  # noqa: F401
 from yane.evolution.lamarck_refiner import LamarckRefiner
-from yane.evolution.diagnostics import build_population_info
+from yane.evolution.diagnostics import build_population_info, _fitness_iqr as _compute_fitness_iqr
 from yane.evolution.evaluation import (  # noqa: F401  (EvaluationResult re-exported for GUI)
     EvaluationResult,
     EvaluationRunner,
@@ -537,54 +537,11 @@ class NeuroEvolution:
                     mem.get("stagnation_count", 0),
                     mem.get("largest_genome_nodes", 0),
                     mem.get("largest_genome_connections", 0))
-                # Crash-safe state snapshot — survives segfaults.
-                if self._log_run_dir is not None:
-                    try:
-                        import json
-                        snap = {
-                            "iteration": iterations,
-                            "best_fitness": mem.get("max_fitness"),
-                            "avg_fitness": mem.get("avg_fitness"),
-                            "fitness_iqr": mem.get("fitness_iqr"),
-                            "species_count": mem.get("species_count"),
-                            "stagnation_count": mem.get("stagnation_count"),
-                            "nodes": mem.get("largest_genome_nodes"),
-                            "connections": mem.get("largest_genome_connections"),
-                            "lamarck_n_applied": mem.get("lamarck_n_applied"),
-                        }
-                        snap_path = self._log_run_dir / "_crash_state.json"
-                        tmp = snap_path.with_suffix(".tmp")
-                        tmp.write_text(json.dumps(snap), encoding="utf-8")
-                        tmp.replace(snap_path)
-                    except Exception as e:
-                        _li("Failed to write crash state snapshot: %s", e)
+                self._write_crash_snapshot(iterations, mem, _li)
 
-            if self.min_fitness is not None and fitness >= self.min_fitness:
-                stop_reason = "target_reached"
-                _li("Training stopped: target fitness reached  fitness=%.6f  iterations=%d",
-                    fitness, iterations)
+            stop_reason = self._check_stop_reason(fitness, iterations, _li)
+            if stop_reason is not None:
                 break
-            if self._max_evaluations is not None and self._n_evaluations_done >= self._max_evaluations:
-                stop_reason = "max_evaluations"
-                _li("Training stopped: max evaluations reached  evals=%d  iterations=%d",
-                    self._n_evaluations_done, iterations)
-                break
-            if self.max_iterations is not None and iterations >= self.max_iterations:
-                stop_reason = "max_iterations"
-                _li("Training stopped: max iterations reached  iterations=%d", iterations)
-                break
-            if (self._convergence_spread_eps is not None
-                    and iterations % max(1, self._population_size // 5) == 0):
-                pop = self._population
-                stag_threshold = max(1, pop.stagnation_threshold)
-                stag_frac = pop.stagnation_count / stag_threshold
-                if stag_frac >= self._convergence_min_stagnation:
-                    iqr = _compute_fitness_iqr(pop._evaluated)
-                    if iqr < self._convergence_spread_eps:
-                        stop_reason = "converged"
-                        _li("Training stopped: converged  iqr=%.6f  stagnation=%d  iterations=%d",
-                            iqr, pop.stagnation_count, iterations)
-                        break
 
             if iterations % self._resource_check_interval == 0:
                 self._enforce_memory_limit()
@@ -599,34 +556,7 @@ class NeuroEvolution:
                 pass
 
         # --- End-of-run artefacts -------------------------------------------
-        if self._log_run_dir is not None:
-            import pickle
-            best = self.get_best()
-            pkl_path = self._log_run_dir / "best_genome.pkl"
-            pkl_path.write_bytes(pickle.dumps(best))
-            # Human-readable summary.
-            mem = self.population_memory_info()
-            _wj(self._log_run_dir / "summary.json", {
-                "run_name": name,
-                "stop_reason": stop_reason or "manual",
-                "iterations": iterations,
-                "best_fitness": best.fitness,
-                "best_nodes": len(best.nodes),
-                "best_connections": best.connection_count,
-                "final_species_count": mem.get("species_count", 0),
-                "final_stagnation": mem.get("stagnation_count", 0),
-                "n_evaluations_done":       self._n_evaluations_done,
-                "lamarck_n_applied":       mem.get("lamarck_n_applied", 0),
-                "lamarck_n_steps_total":   mem.get("lamarck_n_steps_total", 0),
-                "lamarck_n_blocked_top_k": mem.get("lamarck_n_blocked_top_k", 0),
-                "n_invalid_fitness": mem.get("n_invalid_fitness", 0),
-                "n_clipped_fitness": mem.get("n_clipped_fitness", 0),
-            })
-            _li("Training finished  best_fitness=%.6f  nodes=%d  connections=%d  iterations=%d  "
-                "stop_reason=%s  evals=%d  lamarck_applied=%d  lamarck_blocked_top_k=%d",
-                best.fitness, len(best.nodes), best.connection_count, iterations,
-                stop_reason or "manual", self._n_evaluations_done,
-                mem.get("lamarck_n_applied", 0), mem.get("lamarck_n_blocked_top_k", 0))
+        self._write_run_summary(name, stop_reason, iterations, _wj, _li)
 
         return iterations
 
@@ -1211,6 +1141,99 @@ class NeuroEvolution:
 
     def _adaptive_lamarck_steps(self, genome: Genome, fitness: float) -> int:
         return self._lamarck.adaptive_steps(genome, fitness, self._population)
+
+    def _check_stop_reason(
+        self,
+        fitness: float,
+        iterations: int,
+        _li: Callable,
+    ) -> str | None:
+        if self.min_fitness is not None and fitness >= self.min_fitness:
+            _li("Training stopped: target fitness reached  fitness=%.6f  iterations=%d",
+                fitness, iterations)
+            return "target_reached"
+        if self._max_evaluations is not None and self._n_evaluations_done >= self._max_evaluations:
+            _li("Training stopped: max evaluations reached  evals=%d  iterations=%d",
+                self._n_evaluations_done, iterations)
+            return "max_evaluations"
+        if self.max_iterations is not None and iterations >= self.max_iterations:
+            _li("Training stopped: max iterations reached  iterations=%d", iterations)
+            return "max_iterations"
+        if (self._convergence_spread_eps is not None
+                and iterations % max(1, self._population_size // 5) == 0):
+            pop = self._population
+            stag_frac = pop.stagnation_count / max(1, pop.stagnation_threshold)
+            if stag_frac >= self._convergence_min_stagnation:
+                iqr = _compute_fitness_iqr(pop._evaluated)
+                if iqr < self._convergence_spread_eps:
+                    _li("Training stopped: converged  iqr=%.6f  stagnation=%d  iterations=%d",
+                        iqr, pop.stagnation_count, iterations)
+                    return "converged"
+        return None
+
+    def _write_crash_snapshot(
+        self,
+        iterations: int,
+        mem: dict,
+        _li: Callable,
+    ) -> None:
+        if self._log_run_dir is None:
+            return
+        try:
+            snap = {
+                "iteration": iterations,
+                "best_fitness": mem.get("max_fitness"),
+                "avg_fitness": mem.get("avg_fitness"),
+                "fitness_iqr": mem.get("fitness_iqr"),
+                "species_count": mem.get("species_count"),
+                "stagnation_count": mem.get("stagnation_count"),
+                "nodes": mem.get("largest_genome_nodes"),
+                "connections": mem.get("largest_genome_connections"),
+                "lamarck_n_applied": mem.get("lamarck_n_applied"),
+            }
+            snap_path = self._log_run_dir / "_crash_state.json"
+            tmp = snap_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(snap), encoding="utf-8")
+            tmp.replace(snap_path)
+        except Exception as e:
+            _li("Failed to write crash state snapshot: %s", e)
+
+    def _write_run_summary(
+        self,
+        name: str,
+        stop_reason: str | None,
+        iterations: int,
+        _wj: Callable,
+        _li: Callable,
+    ) -> None:
+        if self._log_run_dir is None:
+            return
+        import pickle
+        best = self.get_best()
+        pkl_path = self._log_run_dir / "best_genome.pkl"
+        pkl_path.write_bytes(pickle.dumps(best))
+        mem = self.population_memory_info()
+        _wj(self._log_run_dir / "summary.json", {
+            "run_name": name,
+            "stop_reason": stop_reason or "manual",
+            "iterations": iterations,
+            "best_fitness": best.fitness,
+            "best_nodes": len(best.nodes),
+            "best_connections": best.connection_count,
+            "final_species_count": mem.get("species_count", 0),
+            "final_stagnation": mem.get("stagnation_count", 0),
+            "n_evaluations_done":       self._n_evaluations_done,
+            "lamarck_n_applied":        mem.get("lamarck_n_applied", 0),
+            "lamarck_n_steps_total":    mem.get("lamarck_n_steps_total", 0),
+            "lamarck_n_blocked_top_k":  mem.get("lamarck_n_blocked_top_k", 0),
+            "n_invalid_fitness":        mem.get("n_invalid_fitness", 0),
+            "n_clipped_fitness":        mem.get("n_clipped_fitness", 0),
+        })
+        _li("Training finished  best_fitness=%.6f  nodes=%d  connections=%d  iterations=%d  "
+            "stop_reason=%s  evals=%d  lamarck_applied=%d  lamarck_blocked_top_k=%d",
+            best.fitness, len(best.nodes), best.connection_count, iterations,
+            stop_reason or "manual", self._n_evaluations_done,
+            mem.get("lamarck_n_applied", 0), mem.get("lamarck_n_blocked_top_k", 0))
 
     def _enforce_memory_limit(self) -> None:
         if not self._resource_guard.process_over_limit():
