@@ -359,9 +359,9 @@ class TrainingWorker(QThread):
                 initializer=_mp_initializer,
                 initargs=(
                     self._make_eval_fn, None,
-                    self._yane._n_evaluations,
-                    self._yane._eval_aggregation,
-                    self._yane._eval_sigma_penalty,
+                    self._yane._runner.n_evaluations,
+                    self._yane._runner.aggregation,
+                    self._yane._runner.sigma_penalty,
                 ),
             )
 

@@ -4,10 +4,29 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QPushButton, QFrame, QLabel, QGroupBox, QCheckBox, QDoubleSpinBox,
+    QFormLayout,
 )
 from PySide6.QtCore import Qt
 
 from yane.gui._helpers import _label, _divider
+
+
+def _fmt_value(v: float, denormalized: bool) -> str:
+    """Format a single value for display. When denormalized and close to an integer,
+    drop decimals so e.g. 5 → "5" instead of "5.000"."""
+    if denormalized and abs(v - round(v)) < 0.01 and abs(v) < 1e9:
+        return f"{int(round(v))}"
+    return f"{v:.2f}" if denormalized else f"{v:.3f}"
+
+
+def _fmt_list(vs: list[float], scale: list[float] | None, denormalized: bool) -> str:
+    if denormalized and scale:
+        vs = [v * s for v, s in zip(vs, scale)]
+    return "[" + ", ".join(_fmt_value(v, denormalized) for v in vs) + "]"
+
+
+_TOL_NORMALIZED = 0.05   # average per-output error implied by typical target_fitness values
+
 
 class _TestCaseRow:
     """One persistent row in the test-cases table. Created once, updated in place."""
