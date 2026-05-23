@@ -1,5 +1,6 @@
 """Tests for the /configure API endpoint."""
 import unittest
+import pytest
 
 try:
     from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ except ImportError:
     _HAS_TESTCLIENT = False
 
 
+@pytest.mark.ci
 @unittest.skipUnless(_HAS_TESTCLIENT, "fastapi[test] not installed")
 class TestConfigureEndpoint(unittest.TestCase):
 

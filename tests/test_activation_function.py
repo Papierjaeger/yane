@@ -1,8 +1,10 @@
 import unittest
+import pytest
 
 from yane.util.activation import ActivationFunction, ActivationType
 
 
+@pytest.mark.ci
 class TestActivationFunction(unittest.TestCase):
 
     def test_linear(self):

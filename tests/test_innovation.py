@@ -1,5 +1,6 @@
 """Tests for InnovationTracker and innovation-number propagation."""
 import unittest
+import pytest
 
 from yane.evolution.innovation import InnovationTracker
 from yane import NeuroEvolution
@@ -12,6 +13,7 @@ def _make_tracked_genome(n_inputs=2, n_outputs=1):
     return yane.next_genome(), yane._tracker
 
 
+@pytest.mark.ci
 class TestInnovationTracker(unittest.TestCase):
 
     def test_counter_is_unique_and_monotonic(self):
@@ -52,6 +54,7 @@ class TestInnovationTracker(unittest.TestCase):
         self.assertNotEqual(t1, t2)
 
 
+@pytest.mark.ci
 class TestInnovationOnGenome(unittest.TestCase):
 
     def test_configure_assigns_innovations_to_all_nodes(self):

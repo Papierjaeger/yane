@@ -1,4 +1,5 @@
 import unittest
+import pytest
 from yane.core.node import Node, NodeType
 from yane.core.connection import Connection
 
@@ -7,6 +8,7 @@ def _node():
     return Node(NodeType.HIDDEN)
 
 
+@pytest.mark.ci
 class TestConnectionBasics(unittest.TestCase):
 
     def test_initial_weight_in_range(self):
@@ -79,6 +81,7 @@ class TestConnectionBasics(unittest.TestCase):
         self.assertIsNone(ref(), "Connection must be freed when removed from node.connections")
 
 
+@pytest.mark.ci
 class TestConnectionNumerics(unittest.TestCase):
 
     def test_weight_stays_finite_after_many_mutations(self):
