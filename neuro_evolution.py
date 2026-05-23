@@ -1,9 +1,7 @@
 from __future__ import annotations
-import dataclasses
 import gc
 import json
 import random
-import statistics
 import time
 from pathlib import Path
 from typing import Callable
@@ -17,24 +15,6 @@ def _return_memory_to_os() -> None:
     except Exception:
         pass
 
-def _aggregate_fitnesses(fitnesses: list[float], aggregation: str, sigma_penalty: float) -> float:
-    """Combine multiple fitness values into one.
-
-    aggregation: "mean" | "median" | "min"
-    sigma_penalty: subtract sigma_penalty * std from the result (0 = no penalty).
-    """
-    if len(fitnesses) == 1:
-        return fitnesses[0]
-    if aggregation == "median":
-        result = statistics.median(fitnesses)
-    elif aggregation == "min":
-        result = min(fitnesses)
-    else:
-        result = statistics.mean(fitnesses)
-    if sigma_penalty > 0.0:
-        result -= sigma_penalty * statistics.pstdev(fitnesses)
-    return result
-
 
 from yane.core.genome import Genome
 from yane.core.node import Node, NodeType
@@ -43,24 +23,15 @@ from yane.evolution.efficiency_penalty import EfficiencyPenalty
 from yane.evolution.fitness_sanitizer import FitnessSanitizer, sanitize_fitness  # noqa: F401
 from yane.evolution.lamarck_refiner import LamarckRefiner
 from yane.evolution.diagnostics import build_population_info
+from yane.evolution.evaluation import (  # noqa: F401  (EvaluationResult re-exported for GUI)
+    EvaluationResult,
+    EvaluationRunner,
+    aggregate_fitnesses,
+)
 from yane.util.resource_guard import ResourceGuard
 
-
-@dataclasses.dataclass
-class EvaluationResult:
-    """Structured result from evaluating a single genome.
-
-    Returned by ``NeuroEvolution._run_evaluations()`` — used internally by the
-    training loop and GUI worker paths.  The public API (``submit_fitness``,
-    ``submit_fitness_batch``) is not affected.
-    """
-    genome: Genome
-    fitness: float
-    elapsed_ms: float
-    n_lamarck_steps: int = 0
-    stopped_early: bool = False
-    early_stop_reason: str = ""     # "budget", "threshold", or "" if not stopped
-    raw_fitnesses: list[float] = dataclasses.field(default_factory=list)
+# Re-export for gui/worker.py backwards compatibility
+_aggregate_fitnesses = aggregate_fitnesses
 
 
 def _derive_run_name(fitness_fn: Callable) -> str:
@@ -91,9 +62,8 @@ class NeuroEvolution:
         self._n_workers: int = 1
         # Lamarckian refinement
         self._lamarck = LamarckRefiner()
-        self._n_evaluations: int = 1
-        self._eval_aggregation: str = "mean"
-        self._eval_sigma_penalty: float = 0.0
+        # Multi-eval + early stopping
+        self._runner = EvaluationRunner()
         # Elitism (applied to population on configure())
         self._elite_count: int = 1
         self._species_elite_count: int = 1
@@ -114,10 +84,6 @@ class NeuroEvolution:
         self._convergence_min_stagnation: float = 1.0       # stagnation fraction required
         self._max_evaluations: int | None = None
         self._n_evaluations_done: int = 0
-        # Early stopping per genome (generator protocol)
-        self._early_stopping_factor: float | None = None   # None = disabled
-        self._n_early_stopped: int = 0
-        self._early_stopping_n: int | None = None          # calibrated from first complete run
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -312,7 +278,7 @@ class NeuroEvolution:
                     fitness is more than 100 % below the best (very lenient).
                     Smaller values make stopping more aggressive.
         """
-        self._early_stopping_factor = factor
+        self._runner.early_stopping_factor = factor
 
     def set_resource_limits(
         self,
@@ -360,14 +326,7 @@ class NeuroEvolution:
         Note: the manual loop (next_genome / submit_fitness) is not affected;
               aggregate manually if needed.
         """
-        if n < 1:
-            raise ValueError(f"n must be >= 1, got {n}")
-        valid = ("mean", "median", "min")
-        if aggregation not in valid:
-            raise ValueError(f"aggregation must be one of {valid}, got {aggregation!r}")
-        self._n_evaluations = n
-        self._eval_aggregation = aggregation
-        self._eval_sigma_penalty = max(0.0, sigma_penalty)
+        self._runner.configure_multi_eval(n, aggregation, sigma_penalty)
 
     def set_fitness_sanitizing(
         self,
@@ -458,9 +417,9 @@ class NeuroEvolution:
             "convergence_spread_eps": self._convergence_spread_eps,
             "convergence_min_stagnation": self._convergence_min_stagnation,
             # Evaluation
-            "n_evaluations": self._n_evaluations,
-            "eval_aggregation": self._eval_aggregation,
-            "eval_sigma_penalty": self._eval_sigma_penalty,
+            "n_evaluations": self._runner.n_evaluations,
+            "eval_aggregation": self._runner.aggregation,
+            "eval_sigma_penalty": self._runner.sigma_penalty,
             # Lamarck
             "lamarck_mode": self._lamarck.mode,
             "lamarck_steps": self._lamarck.steps,
@@ -551,7 +510,7 @@ class NeuroEvolution:
 
             self._population.submit(genome, fitness, result.elapsed_ms)
             iterations += 1
-            self._n_evaluations_done += self._n_evaluations
+            self._n_evaluations_done += self._runner.n_evaluations
 
             # --- Periodic CSV logging ---------------------------------------
             if iterations % _log_interval == 0:
@@ -743,9 +702,9 @@ class NeuroEvolution:
             self._population,
             self._lamarck,
             self._sanitizer,
-            self._n_evaluations,
-            self._eval_aggregation,
-            self._n_early_stopped,
+            self._runner.n_evaluations,
+            self._runner.aggregation,
+            self._runner.n_early_stopped,
         )
 
     def set_target_species(self, n: int) -> None:
@@ -958,8 +917,8 @@ class NeuroEvolution:
             "lamarck_n_blocked_top_k": self._lamarck.n_blocked_top_k,
             "n_invalid_fitness": self._sanitizer.n_invalid,
             "n_clipped_fitness": self._sanitizer.n_clipped,
-            "n_early_stopped": self._n_early_stopped,
-            "early_stopping_n": self._early_stopping_n,
+            "n_early_stopped": self._runner.n_early_stopped,
+            "early_stopping_n": self._runner.early_stopping_n,
         }
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
@@ -1013,8 +972,8 @@ class NeuroEvolution:
         self._lamarck.n_blocked_top_k = payload.get("lamarck_n_blocked_top_k", 0)
         self._sanitizer.n_invalid     = payload.get("n_invalid_fitness", 0)
         self._sanitizer.n_clipped     = payload.get("n_clipped_fitness", 0)
-        self._n_early_stopped         = payload.get("n_early_stopped", 0)
-        self._early_stopping_n        = payload.get("early_stopping_n", None)
+        self._runner.n_early_stopped  = payload.get("n_early_stopped", 0)
+        self._runner.early_stopping_n = payload.get("early_stopping_n", None)
         # Restore cached config so _config_dict() + logs are accurate.
         self._n_inputs           = cfg.get("n_inputs", self._n_inputs)
         self._n_outputs          = cfg.get("n_outputs", self._n_outputs)
@@ -1091,7 +1050,55 @@ class NeuroEvolution:
     # Internal helpers
     # -------------------------------------------------------------------------
 
-    # ── Compatibility properties (delegate to _lamarck / _sanitizer) ─────────
+    # ── Compatibility properties (delegate to _runner / _lamarck / _sanitizer) ──
+
+    @property
+    def _n_evaluations(self) -> int:
+        return self._runner.n_evaluations
+
+    @_n_evaluations.setter
+    def _n_evaluations(self, value: int) -> None:
+        self._runner.n_evaluations = value
+
+    @property
+    def _eval_aggregation(self) -> str:
+        return self._runner.aggregation
+
+    @_eval_aggregation.setter
+    def _eval_aggregation(self, value: str) -> None:
+        self._runner.aggregation = value
+
+    @property
+    def _eval_sigma_penalty(self) -> float:
+        return self._runner.sigma_penalty
+
+    @_eval_sigma_penalty.setter
+    def _eval_sigma_penalty(self, value: float) -> None:
+        self._runner.sigma_penalty = value
+
+    @property
+    def _early_stopping_factor(self) -> float | None:
+        return self._runner.early_stopping_factor
+
+    @_early_stopping_factor.setter
+    def _early_stopping_factor(self, value: float | None) -> None:
+        self._runner.early_stopping_factor = value
+
+    @property
+    def _n_early_stopped(self) -> int:
+        return self._runner.n_early_stopped
+
+    @_n_early_stopped.setter
+    def _n_early_stopped(self, value: int) -> None:
+        self._runner.n_early_stopped = value
+
+    @property
+    def _early_stopping_n(self) -> int | None:
+        return self._runner.early_stopping_n
+
+    @_early_stopping_n.setter
+    def _early_stopping_n(self, value: int | None) -> None:
+        self._runner.early_stopping_n = value
 
     @property
     def _lamarck_steps(self) -> int:
@@ -1187,96 +1194,7 @@ class NeuroEvolution:
     def _run_evaluations(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]
     ) -> EvaluationResult:
-        """Evaluate genome (possibly multiple times) → EvaluationResult.
-
-        Supports two calling conventions for ``fitness_fn``:
-
-        1. **Regular function** — called ``n_evaluations`` times; results are
-           aggregated with the configured aggregation strategy.
-        2. **Generator function** — called once; each ``yield`` is one episode
-           result.  Early stopping (see ``set_early_stopping()``) aborts the
-           generator when the running mean drops below the worst-pool threshold.
-
-        After the normal evaluation, adaptive Lamarck refinement fires when
-        stagnation pressure is high and the genome ranks in the top fraction of
-        the pool — improving weights without touching topology.  Explicit Lamarck
-        (_lamarck_steps > 0) is handled in train() instead and skips this path.
-        """
-        import inspect
-        start = time.perf_counter()
-        raw: list[float] = []
-        stopped_early = False
-        early_stop_reason = ""
-
-        if inspect.isgeneratorfunction(fitness_fn):
-            gen = fitness_fn(genome)
-            N = self._early_stopping_n   # snapshot; None until calibrated
-            cumulative = 0.0
-            episode_count = 0
-            try:
-                for k, episode_fitness in enumerate(gen, 1):
-                    raw.append(episode_fitness)
-                    cumulative += episode_fitness
-                    episode_count = k
-                    if (self._early_stopping_factor is not None
-                            and N is not None
-                            and k >= max(1, N // 5)):
-                        estimated = cumulative * (N / k)
-                        evaluated = self._population._evaluated
-                        if evaluated:
-                            best = max(g.fitness for g in evaluated)
-                            threshold = best - abs(best) * self._early_stopping_factor
-                            if estimated < threshold:
-                                gen.close()
-                                stopped_early = True
-                                early_stop_reason = "threshold"
-                                self._n_early_stopped += 1
-                                break
-            except StopIteration:
-                pass
-            # Calibrate N from the first non-stopped complete run.
-            if not stopped_early and episode_count > 0 and self._early_stopping_n is None:
-                self._early_stopping_n = episode_count
-            fitness = _aggregate_fitnesses(raw, self._eval_aggregation, self._eval_sigma_penalty) if raw else 0.0
-        elif self._n_evaluations <= 1:
-            fitness = fitness_fn(genome)
-        else:
-            for _ in range(self._n_evaluations):
-                raw.append(fitness_fn(genome))
-            fitness = _aggregate_fitnesses(
-                raw, self._eval_aggregation, self._eval_sigma_penalty
-            )
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-
-        n_lamarck_steps = 0
-        # Adaptive Lamarck: fires after the baseline is known, only when
-        # _lamarck_steps == 0 (explicit mode is off) and stagnation is high.
-        if self._lamarck_steps == 0:
-            n_steps = self._adaptive_lamarck_steps(genome, fitness)
-            if n_steps > 0:
-                fitness = self._lamarck_refine(
-                    genome, fitness_fn,
-                    baseline_fitness=fitness,
-                    n_steps=n_steps,
-                )
-                n_lamarck_steps = n_steps
-                self._lamarck.n_applied += 1
-                self._lamarck.n_steps_total += n_steps
-                # Per-species tracking for diagnostics.
-                sp = self._population.get_species_for_genome(genome)
-                if sp is not None:
-                    sp.lamarck_n_applied += 1
-                    sp.lamarck_n_steps_total += n_steps
-
-        return EvaluationResult(
-            genome=genome,
-            fitness=fitness,
-            elapsed_ms=elapsed_ms,
-            n_lamarck_steps=n_lamarck_steps,
-            stopped_early=stopped_early,
-            early_stop_reason=early_stop_reason,
-            raw_fitnesses=raw,
-        )
+        return self._runner.run(genome, fitness_fn, self._population, self._lamarck)
 
     def _lamarck_refine(
         self,
