@@ -18,14 +18,15 @@ class Node:
         # _persist_value is the backing store; the public `persist_value` property
         # keeps _retain_value in sync automatically on every write.
         '_persist_value', '_retain_value',
-        'max_triggers', 'input_index', 'input_scale', 'connections',
+        'max_triggers', 'input_index', 'input_scale', 'output_scale', 'connections',
         'mutation_bias', 'mutation_activation', 'mutation_persist',
         'mutation_max_triggers', 'mutation_input_index', 'mutation_input_scale',
+        'mutation_output_scale',
         'innovation',
     )
 
-    # Slot-level defaults for __setstate__ (handles genomes serialised before input_scale existed).
-    _SLOT_DEFAULTS: dict = {'innovation': -1, 'input_scale': 1.0}
+    # Slot-level defaults for __setstate__ (handles genomes serialised before these slots existed).
+    _SLOT_DEFAULTS: dict = {'innovation': -1, 'input_scale': 1.0, 'output_scale': 1.0}
 
     def __init__(self, node_type: NodeType = NodeType.HIDDEN, innovation: int = -1) -> None:
         self.type = node_type
@@ -41,7 +42,8 @@ class Node:
         object.__setattr__(self, '_retain_value', node_type is NodeType.OUTPUT)
         self.max_triggers: int = 3
         self.input_index: int = 0
-        self.input_scale: float = 1.0   # per-input scaling gene — evolves to normalise raw inputs
+        self.input_scale: float = 1.0    # per-input scaling gene — evolves to normalise raw inputs
+        self.output_scale: float = 1.0   # per-output scaling gene — evolves to map to action range
 
         self.connections: list[Connection] = []
 
@@ -51,6 +53,7 @@ class Node:
         self.mutation_max_triggers = Mutation()
         self.mutation_input_index = Mutation()
         self.mutation_input_scale = Mutation()
+        self.mutation_output_scale = Mutation()
 
     # -- persist_value property -----------------------------------------------
     # Exposes _persist_value and keeps _retain_value in sync on every write.
@@ -157,6 +160,11 @@ class Node:
             self.input_scale = 1e-6 if new_scale < 1e-6 else new_scale
             self.mutation_input_scale.mutate_rates()
 
+        if self.type == NodeType.OUTPUT:
+            new_scale = self.mutation_output_scale.mutate_value(self.output_scale, sigma)
+            self.output_scale = 1e-6 if new_scale < 1e-6 else new_scale
+            self.mutation_output_scale.mutate_rates()
+
         for conn in self.connections:
             conn.mutate(sigma)
 
@@ -175,10 +183,12 @@ class Node:
         n.max_triggers = self.max_triggers
         n.input_index = self.input_index
         n.input_scale = self.input_scale
+        n.output_scale = self.output_scale
         n.mutation_bias = self.mutation_bias.copy()
         n.mutation_activation = self.mutation_activation.copy()
         n.mutation_persist = self.mutation_persist.copy()
         n.mutation_max_triggers = self.mutation_max_triggers.copy()
         n.mutation_input_index = self.mutation_input_index.copy()
         n.mutation_input_scale = self.mutation_input_scale.copy()
+        n.mutation_output_scale = self.mutation_output_scale.copy()
         return n

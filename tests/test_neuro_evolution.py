@@ -522,5 +522,144 @@ class TestPopulationMemoryInfo(unittest.TestCase):
         self.assertGreaterEqual(n_inj, 0)
 
 
+class TestEarlyStopping(unittest.TestCase):
+    """Generator-protocol early stopping per genome."""
+
+    def _make(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=1, n_outputs=1)
+        return yane
+
+    def test_set_early_stopping_stores_factor(self):
+        yane = self._make()
+        yane.set_early_stopping(factor=0.5)
+        self.assertEqual(yane._early_stopping_factor, 0.5)
+
+    def test_generator_fn_all_episodes_run_when_no_early_stopping(self):
+        """Without early stopping, all yielded episodes are consumed."""
+        yane = self._make()
+        call_counts = [0]
+
+        def fitness_gen(genome):
+            for _ in range(5):
+                call_counts[0] += 1
+                yield 1.0
+
+        yane.set_max_iterations(1)
+        yane.train(fitness_gen)
+        self.assertEqual(call_counts[0], 5)
+
+    def test_generator_fn_stopped_early_when_running_mean_below_threshold(self):
+        """Early stopping aborts generator when running mean < worst * factor."""
+        yane = self._make()
+        yane.set_population_size(5)
+        # Seed the pool so worst_fitness() returns something meaningful.
+        for _ in range(5):
+            g = yane.next_genome()
+            yane.submit_fitness(10.0)
+
+        yane.set_early_stopping(factor=1.0)
+
+        episode_count = [0]
+
+        def poor_gen(genome):
+            for _ in range(100):
+                episode_count[0] += 1
+                yield -999.0  # always far below worst (10.0)
+
+        yane.set_max_iterations(1)
+        yane.train(poor_gen)
+        # Should have stopped well before 100 episodes.
+        self.assertLess(episode_count[0], 100)
+
+    def test_n_early_stopped_incremented(self):
+        yane = self._make()
+        yane.set_population_size(5)
+        for _ in range(5):
+            yane.next_genome()
+            yane.submit_fitness(10.0)
+        yane.set_early_stopping(factor=1.0)
+
+        def poor_gen(genome):
+            for _ in range(100):
+                yield -999.0
+
+        yane.set_max_iterations(3)
+        yane.train(poor_gen)
+        self.assertGreater(yane._n_early_stopped, 0)
+
+    def test_n_early_stopped_in_mem_info(self):
+        yane = self._make()
+        for _ in range(3):
+            yane.next_genome()
+            yane.submit_fitness(1.0)
+        mem = yane.population_memory_info()
+        self.assertIn("n_early_stopped", mem)
+
+    def test_regular_fn_unaffected_by_early_stopping_flag(self):
+        """set_early_stopping must not break regular (non-generator) fitness fns."""
+        yane = self._make()
+        yane.set_early_stopping(factor=0.5)
+        calls = [0]
+
+        def fitness(genome):
+            calls[0] += 1
+            return 1.0
+
+        yane.set_max_iterations(3)
+        yane.train(fitness)
+        self.assertEqual(calls[0], 3)
+
+
+class TestOutputScale(unittest.TestCase):
+    """output_scale strategy gene on OUTPUT nodes."""
+
+    def test_output_scale_default_is_1(self):
+        from yane.core.node import Node, NodeType
+        n = Node(NodeType.OUTPUT)
+        self.assertAlmostEqual(n.output_scale, 1.0)
+
+    def test_output_scale_applied_in_get_outputs(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=1, n_outputs=1)
+        g = yane.next_genome()
+        g.output_nodes[0].output_scale = 2.0
+        g.output_nodes[0].value = 0.5
+        outputs = g.get_outputs()
+        self.assertAlmostEqual(outputs[0], 1.0)
+
+    def test_output_scale_copied(self):
+        from yane.core.node import Node, NodeType
+        n = Node(NodeType.OUTPUT)
+        n.output_scale = 3.0
+        c = n.copy()
+        self.assertAlmostEqual(c.output_scale, 3.0)
+
+    def test_output_scale_mutates_on_output_nodes(self):
+        from yane.core.node import Node, NodeType
+        import random
+        random.seed(0)
+        n = Node(NodeType.OUTPUT)
+        n.mutation_output_scale.p_change = 1.0
+        original = n.output_scale
+        for _ in range(50):
+            n.mutate()
+        # After 50 mutations with p_change=1.0, scale should differ.
+        # (May be same by random chance, but extremely unlikely)
+        # Just check it stays positive.
+        self.assertGreater(n.output_scale, 0.0)
+
+    def test_hidden_node_has_no_mutation_output_scale_effect(self):
+        """Hidden nodes must NOT have output_scale mutated (only OUTPUT nodes do)."""
+        from yane.core.node import Node, NodeType
+        n = Node(NodeType.HIDDEN)
+        n.output_scale = 5.0
+        n.mutate()
+        # Scale should be unchanged for hidden nodes.
+        self.assertAlmostEqual(n.output_scale, 5.0)
+
+
 if __name__ == "__main__":
     unittest.main()

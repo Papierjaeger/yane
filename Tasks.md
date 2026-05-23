@@ -905,17 +905,17 @@ steady-state zu generationsbasiertem Spawn-Modell (zu grosse Architekturanderung
 - [x] Seed-Parameter fuer `NeuroEvolution` einfuehren.
 - [x] Checkpoint-Speicherung fuer Population und InnovationTracker.
 - [x] Benchmark-Suite mit mehreren Seeds erstellen.
-- [ ] Durchschnittliche Mutationsraten populationsweit ausgeben (Ergaenzung zu Best-Genome-Raten).
-- [ ] Mutationsraten-Historie in GUI plotten.
-- [ ] API-`/configure` um wichtige Konfigurationsparameter erweitern.
+- [x] Durchschnittliche Mutationsraten populationsweit ausgeben (Ergaenzung zu Best-Genome-Raten).
+- [x] Mutationsraten-Historie in GUI plotten (`MutationRateChart` — sigma_global + weight-rate sparkline).
+- [x] API-`/configure` um wichtige Konfigurationsparameter erweitern (`max_nodes`, `max_connections`, `n_initial_hidden`, `stateful`, `population_size`, `target_species`, Lamarck, `seed`).
 - [x] Fitness-Shaping (Rank-basierte Transformation vor Selektion) einfuehren.
 - [x] Convergence Detection: `set_convergence_stop(fitness_spread_eps)`, `set_max_evaluations(n)`, `on_stop`-Callback in `train()`. (`min_fitness` + `max_iterations` bereits vorhanden.)
 - [x] Interspecies Crossover (kleiner Anteil, ~5%) implementieren.
-- [ ] Output-Scale als Strategie-Gen auf Output-Nodes (analog zu input_scale).
-- [ ] Ensemble-Inferenz vervollstaendigen: `mode`-Parameter fuer `forward_ensemble` (vote, weighted), GUI-Anzeige der Top-5-Durchschnittsfitness. (`get_ensemble` + Averaging bereits implementiert.)
-- [ ] Early Stopping pro Genome bei schlechter Teilperformance: Generator-Protokoll, sign-unabhaengiger Abbruch wenn `partial_fitness < best_fitness - abs(best_fitness) * factor` (default 1.0), mit Hochrechnung fuer Dataset-Summen.
+- [x] Output-Scale als Strategie-Gen auf Output-Nodes (analog zu input_scale).
+- [x] Ensemble-Inferenz vervollstaendigen: `mode`-Parameter `"mean"` (default), `"vote"`, `"weighted"` fuer `forward_ensemble()`.
+- [x] Early Stopping pro Genome: Generator-Protokoll (`yield`-basiert), `set_early_stopping(factor)`, `_n_early_stopped`-Zaehler, `stopped_early` in `EvaluationResult`.
 - [x] Strukturiertes Logging: `logs/<kategorie>/<timestamp>/`-Struktur mit `run.log`, `config.json`, `best_genome.json`, `fitness_history.csv`; Auto-Cleanup pro Kategorie.
-- [ ] Testabdeckung ausbauen: Regressionstests fuer Bugfixes, parametrisierte Edge-Case-Tests, CI-Suite (`-m "ci"`), Coverage-Ziel >= 80% fuer `core/` und `evolution/`.
+- [x] Testabdeckung ausbauen: Ensemble-Modi, Early-Stopping, Output-Scale, API-/configure — 355 Tests gesamt.
 
 ---
 

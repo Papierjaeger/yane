@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
 
-from yane.gui.canvas import NetworkCanvas, FitnessChart, SpeciesChart, WeightHistogram
+from yane.gui.canvas import NetworkCanvas, FitnessChart, SpeciesChart, WeightHistogram, MutationRateChart
 from yane.gui.worker import TrainingWorker, EpisodeRunner, ServerThread
 from yane.gui.examples import load_examples
 
@@ -476,13 +476,29 @@ class LeftPanel(QWidget):
         iscale.addRow(self.lbl_input_scales)
         layout.addWidget(iscale)
 
-        # ── Weight / Node rates (avg over best genome) ────────────────────
-        wn = _CollapsibleGroup("Weight / Node rates  (avg)", collapsed=True)
+        # ── Output scales (best genome) ───────────────────────────────────
+        oscale = _CollapsibleGroup("Output Scales  (×)", collapsed=True)
+        self.lbl_output_scales = _label("—", "mutRate")
+        self.lbl_output_scales.setWordWrap(True)
+        self.lbl_output_scales.setToolTip(
+            "Skalierungsfaktoren für jeden Output-Node — vom Netz selbst erlernt.\n"
+            "Out0: ×2.5 bedeutet: der aktivierte Output-Wert wird mit 2.5 multipliziert.\n"
+            "Ermöglicht automatische Anpassung an den erwarteten Aktionsbereich.\n"
+            "Analogon zu Input Scales, aber für die Ausgabe.")
+        oscale.addRow(self.lbl_output_scales)
+        layout.addWidget(oscale)
+
+        # ── Weight / Node rates (avg over best genome + population) ─────────
+        wn = _CollapsibleGroup("Mutation rates  (best / pop avg)", collapsed=True)
         self.lbl_weight_rate  = _label("—", "mutRate")
         self.lbl_weight_delta = _label("—", "mutRate")
         self.lbl_bias_rate    = _label("—", "mutRate")
         self.lbl_bias_delta   = _label("—", "mutRate")
         self.lbl_activ_rate   = _label("—", "mutRate")
+        self.lbl_pop_sigma    = _label("—", "mutRate")
+        self.lbl_pop_weight_rate = _label("—", "mutRate")
+        self.lbl_pop_bias_rate   = _label("—", "mutRate")
+        self.lbl_pop_activ_rate  = _label("—", "mutRate")
         self.lbl_weight_rate.setToolTip(
             "Durchschnittliche Wahrscheinlichkeit, dass ein Gewicht pro Mutation verändert wird.\n"
             "Selbst-adaptiv: passt sich über Generationen an (shift_rate).")
@@ -498,11 +514,29 @@ class LeftPanel(QWidget):
         self.lbl_activ_rate.setToolTip(
             "Durchschnittliche Wahrscheinlichkeit, dass eine Node ihre\n"
             "Aktivierungsfunktion pro Mutation wechselt (custom_rate).")
+        self.lbl_pop_sigma.setToolTip(
+            "Durchschnittlicher sigma_global-Wert über die gesamte evaluierte Population.\n"
+            "Höher = Population exploriert global (große Schritte), niedriger = Feintuning.")
+        self.lbl_pop_weight_rate.setToolTip(
+            "Durchschnittliche Weight-shift-Rate über alle Verbindungen der gesamten Population.")
+        self.lbl_pop_bias_rate.setToolTip(
+            "Durchschnittliche Bias-shift-Rate über alle Nodes der gesamten Population.")
+        self.lbl_pop_activ_rate.setToolTip(
+            "Durchschnittliche Aktivierungswechsel-Rate über alle Nodes der gesamten Population.")
         wn.addRow("Weight rate:", self.lbl_weight_rate)
         wn.addRow("Weight Δ:",    self.lbl_weight_delta)
         wn.addRow("Bias rate:",   self.lbl_bias_rate)
         wn.addRow("Bias Δ:",      self.lbl_bias_delta)
         wn.addRow("Activation:",  self.lbl_activ_rate)
+        wn.addRow("Pop σ:",       self.lbl_pop_sigma)
+        wn.addRow("Pop wt rate:", self.lbl_pop_weight_rate)
+        wn.addRow("Pop bias:",    self.lbl_pop_bias_rate)
+        wn.addRow("Pop activ:",   self.lbl_pop_activ_rate)
+        self.sigma_chart = MutationRateChart()
+        self.sigma_chart.setToolTip(
+            "Verlauf der populationsweiten Mutationsraten.\n"
+            "Grün: sigma_global (Schrittweite)  Blau: Weight-shift-Rate.")
+        wn.addWidget(self.sigma_chart)
         layout.addWidget(wn)
 
         # ── Weight distribution histogram ─────────────────────────────────
@@ -641,6 +675,15 @@ class LeftPanel(QWidget):
         else:
             self.lbl_input_scales.setText("—")
 
+        # Output scales
+        out_nodes = genome.output_nodes
+        if out_nodes:
+            self.lbl_output_scales.setText(
+                "  ".join(f"Out{i}: ×{n.output_scale:.3f}" for i, n in enumerate(out_nodes))
+            )
+        else:
+            self.lbl_output_scales.setText("—")
+
         # Weight / Node rates (averaged over all nodes/connections)
         nodes = genome.nodes
         conns = [c for n in nodes for c in n.connections]
@@ -660,6 +703,21 @@ class LeftPanel(QWidget):
                 self.weight_hist.set_weights([c.weight for c in conns])
         elif do_heavy:
             self.weight_hist.set_weights([])
+
+        # Population-wide avg rates
+        def _fmt_pop(key: str) -> str:
+            v = mem.get(key)
+            return f"{v:.4f}" if v is not None else "—"
+        self.lbl_pop_sigma.setText(_fmt_pop("pop_avg_sigma_global"))
+        self.lbl_pop_weight_rate.setText(_fmt_pop("pop_avg_weight_rate"))
+        self.lbl_pop_bias_rate.setText(_fmt_pop("pop_avg_bias_rate"))
+        self.lbl_pop_activ_rate.setText(_fmt_pop("pop_avg_activ_rate"))
+
+        if do_heavy:
+            sigma = mem.get("pop_avg_sigma_global")
+            wt = mem.get("pop_avg_weight_rate")
+            if sigma is not None and wt is not None:
+                self.sigma_chart.add_point(sigma, wt)
 
 
 # ---------------------------------------------------------------------------
@@ -2531,6 +2589,7 @@ class MainWindow(QMainWindow):
         self._training_tab.training_started.connect(self._inspect_tab.reset_genome)
         self._training_tab.training_started.connect(self._reset_best_fitness_for_dot)
         self._training_tab.training_started.connect(self._debug_tab.on_training_started)
+        self._training_tab.training_started.connect(self._left.sigma_chart.clear)
         tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(tabs, stretch=1)
 

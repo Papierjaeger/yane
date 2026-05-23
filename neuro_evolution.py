@@ -160,6 +160,9 @@ class NeuroEvolution:
         self._convergence_min_stagnation: float = 1.0       # stagnation fraction required
         self._max_evaluations: int | None = None
         self._n_evaluations_done: int = 0
+        # Early stopping per genome (generator protocol)
+        self._early_stopping_factor: float | None = None   # None = disabled
+        self._n_early_stopped: int = 0
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -330,6 +333,26 @@ class NeuroEvolution:
         """
         self._convergence_spread_eps = fitness_spread_eps
         self._convergence_min_stagnation = max(0.0, min_stagnation)
+
+    def set_early_stopping(self, factor: float = 1.0) -> None:
+        """Enable early stopping for per-genome generator fitness functions.
+
+        When a generator-based fitness function is used (``yield``-based), each
+        yielded value is treated as one episode result.  After each episode the
+        running mean is compared to the worst-in-pool fitness:
+
+            stop if  mean_so_far  <  worst_fitness * factor
+
+        Lower ``factor`` values make stopping more aggressive (stop sooner).
+        Set to ``None`` to disable (default).
+
+        Args:
+            factor: Threshold multiplier on worst-pool fitness.  1.0 = stop when
+                    running mean drops below the worst genome currently in the pool.
+                    0.5 = stop when running mean is half that threshold.
+                    ``None`` disables early stopping entirely.
+        """
+        self._early_stopping_factor = factor
 
     def set_resource_limits(
         self,
@@ -707,21 +730,61 @@ class NeuroEvolution:
         self._ensure_configured()
         return self._population.get_top(k)
 
-    def forward_ensemble(self, inputs: list[float], k: int = 3) -> list[float]:
-        """Run inputs through the top-k genomes and return averaged outputs.
+    def forward_ensemble(
+        self,
+        inputs: list[float],
+        k: int = 3,
+        mode: str = "mean",
+    ) -> list[float]:
+        """Run inputs through the top-k genomes and aggregate outputs.
 
-        Provides more robust predictions than a single genome by averaging
-        the outputs of the k best-performing networks found so far.
+        Parameters
+        ----------
+        inputs : list[float]
+            Network inputs shared by all ensemble members.
+        k : int
+            Number of top genomes to include (by fitness).
+        mode : str
+            Aggregation strategy:
+            - ``"mean"``     — arithmetic mean of all outputs (default, original behaviour).
+            - ``"vote"``     — hard argmax vote per genome; returns one-hot of plurality class.
+              Requires discrete outputs (each genome's argmax is its vote).
+            - ``"weighted"`` — fitness-weighted mean; genomes with higher fitness
+              contribute proportionally more.
         """
         top_k = self.get_ensemble(k)
         if not top_k:
             raise RuntimeError("No evaluated genomes yet.")
         all_outputs = [g.forward(inputs) for g in top_k]
         n_out = len(all_outputs[0])
-        return [
-            sum(out[i] for out in all_outputs) / len(all_outputs)
-            for i in range(n_out)
-        ]
+
+        if mode == "mean":
+            return [
+                sum(out[i] for out in all_outputs) / len(all_outputs)
+                for i in range(n_out)
+            ]
+
+        if mode == "vote":
+            votes = [0] * n_out
+            for out in all_outputs:
+                winner = max(range(n_out), key=lambda i: out[i])
+                votes[winner] += 1
+            total = len(all_outputs)
+            return [v / total for v in votes]
+
+        if mode == "weighted":
+            fitnesses = [max(g.fitness, 0.0) for g in top_k]
+            total_fit = sum(fitnesses)
+            if total_fit == 0.0:
+                weights = [1.0 / len(top_k)] * len(top_k)
+            else:
+                weights = [f / total_fit for f in fitnesses]
+            return [
+                sum(w * out[i] for w, out in zip(weights, all_outputs))
+                for i in range(n_out)
+            ]
+
+        raise ValueError(f"Unknown ensemble mode {mode!r}. Use 'mean', 'vote', or 'weighted'.")
 
     def population_memory_info(self) -> dict:
         """Returns node/connection counts across all genomes — useful for diagnosing memory growth."""
@@ -776,6 +839,7 @@ class NeuroEvolution:
             "n_mutation_only":          self._population._n_mutation_only,
             "n_diversity_injection":    self._population._n_diversity_injection,
             "n_interspecies_crossover": self._population._n_interspecies_crossover,
+            "n_early_stopped":          self._n_early_stopped,
             # Lamarck diagnostics
             "lamarck_mode":          "explicit" if self._lamarck_steps > 0 else
                                      ("adaptive" if self._lamarck_max_steps > 0 else "off"),
@@ -796,6 +860,35 @@ class NeuroEvolution:
             # Best genome topology history: list of (total_submitted, n_nodes, n_conn, fitness)
             "best_topology_history": self._population._best_topology_history,
         }
+
+        # Population-wide average mutation rates
+        # Averaging across all evaluated genomes gives a sense of where the
+        # population's search strategy is converging — e.g. rising sigma_global
+        # population-wide signals an exploration phase.
+        evaluated = self._population._evaluated
+        if evaluated:
+            info["pop_avg_sigma_global"] = sum(
+                g.sigma_global for g in evaluated) / len(evaluated)
+            info["pop_avg_add_node"] = sum(
+                g.mutation_add_node.bool_rate for g in evaluated) / len(evaluated)
+            info["pop_avg_rem_node"] = sum(
+                g.mutation_remove_node.bool_rate for g in evaluated) / len(evaluated)
+            info["pop_avg_add_conn"] = sum(
+                g.mutation_add_connection.bool_rate for g in evaluated) / len(evaluated)
+            info["pop_avg_rem_conn"] = sum(
+                g.mutation_remove_connection.bool_rate for g in evaluated) / len(evaluated)
+            # Per-node rates (bias shift, activation change)
+            all_nodes = [n for g in evaluated for n in g.nodes]
+            if all_nodes:
+                info["pop_avg_bias_rate"]  = sum(
+                    n.mutation_bias.shift_rate for n in all_nodes) / len(all_nodes)
+                info["pop_avg_activ_rate"] = sum(
+                    n.mutation_activation.custom_rate for n in all_nodes) / len(all_nodes)
+            # Per-connection weight rates
+            all_conns = [c for g in evaluated for n in g.nodes for c in n.connections]
+            if all_conns:
+                info["pop_avg_weight_rate"] = sum(
+                    c.mutation.shift_rate for c in all_conns) / len(all_conns)
 
         # Eval-time statistics (computed on demand from current evaluated genomes)
         eval_times = [
@@ -933,6 +1026,7 @@ class NeuroEvolution:
             "lamarck_n_blocked_top_k": self._lamarck_n_blocked_top_k,
             "n_invalid_fitness": self._n_invalid_fitness,
             "n_clipped_fitness": self._n_clipped_fitness,
+            "n_early_stopped": self._n_early_stopped,
         }
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
@@ -970,6 +1064,7 @@ class NeuroEvolution:
         self._lamarck_n_blocked_top_k = payload.get("lamarck_n_blocked_top_k", 0)
         self._n_invalid_fitness       = payload.get("n_invalid_fitness", 0)
         self._n_clipped_fitness       = payload.get("n_clipped_fitness", 0)
+        self._n_early_stopped         = payload.get("n_early_stopped", 0)
         # Restore cached config so _config_dict() + logs are accurate.
         self._n_inputs           = cfg.get("n_inputs", self._n_inputs)
         self._n_outputs          = cfg.get("n_outputs", self._n_outputs)
@@ -1073,14 +1168,43 @@ class NeuroEvolution:
     ) -> EvaluationResult:
         """Evaluate genome (possibly multiple times) → EvaluationResult.
 
+        Supports two calling conventions for ``fitness_fn``:
+
+        1. **Regular function** — called ``n_evaluations`` times; results are
+           aggregated with the configured aggregation strategy.
+        2. **Generator function** — called once; each ``yield`` is one episode
+           result.  Early stopping (see ``set_early_stopping()``) aborts the
+           generator when the running mean drops below the worst-pool threshold.
+
         After the normal evaluation, adaptive Lamarck refinement fires when
         stagnation pressure is high and the genome ranks in the top fraction of
         the pool — improving weights without touching topology.  Explicit Lamarck
         (_lamarck_steps > 0) is handled in train() instead and skips this path.
         """
+        import inspect
         start = time.perf_counter()
         raw: list[float] = []
-        if self._n_evaluations <= 1:
+        stopped_early = False
+
+        if inspect.isgeneratorfunction(fitness_fn):
+            gen = fitness_fn(genome)
+            try:
+                for episode_fitness in gen:
+                    raw.append(episode_fitness)
+                    if self._early_stopping_factor is not None and len(raw) >= 1:
+                        running_mean = sum(raw) / len(raw)
+                        worst = self._population.worst_fitness()
+                        if worst is not None:
+                            threshold = worst * self._early_stopping_factor
+                            if running_mean < threshold:
+                                gen.close()
+                                stopped_early = True
+                                self._n_early_stopped += 1
+                                break
+            except StopIteration:
+                pass
+            fitness = _aggregate_fitnesses(raw, self._eval_aggregation, self._eval_sigma_penalty) if raw else 0.0
+        elif self._n_evaluations <= 1:
             fitness = fitness_fn(genome)
         else:
             for _ in range(self._n_evaluations):
@@ -1115,6 +1239,7 @@ class NeuroEvolution:
             fitness=fitness,
             elapsed_ms=elapsed_ms,
             n_lamarck_steps=n_lamarck_steps,
+            stopped_early=stopped_early,
             raw_fitnesses=raw,
         )
 

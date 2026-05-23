@@ -624,6 +624,88 @@ class SpeciesChart(QWidget):
 
 # ---------------------------------------------------------------------------
 
+class MutationRateChart(QWidget):
+    """Compact sparkline chart tracking population-wide sigma_global over time."""
+
+    _MAX_POINTS = 400
+    _C_LINE  = QColor("#a6e3a1")   # green
+    _C_LINE2 = QColor("#89b4fa")   # blue (weight rate)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._sigma: list[float] = []
+        self._wt_rate: list[float] = []
+        self.setMinimumHeight(65)
+        self.setMaximumHeight(75)
+
+    def add_point(self, sigma: float, wt_rate: float) -> None:
+        self._sigma.append(sigma)
+        self._wt_rate.append(wt_rate)
+        if len(self._sigma) > self._MAX_POINTS:
+            self._sigma = self._sigma[-self._MAX_POINTS:]
+            self._wt_rate = self._wt_rate[-self._MAX_POINTS:]
+        self.update()
+
+    def clear(self) -> None:
+        self._sigma.clear()
+        self._wt_rate.clear()
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            w, h = self.width(), self.height()
+            pad_l, pad_r, pad_t, pad_b = 36, 8, 5, 14
+
+            font = QFont(); font.setPointSize(7)
+            painter.setFont(font)
+
+            n = len(self._sigma)
+            if n < 2:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                                 "Waiting for data…")
+                return
+
+            all_vals = self._sigma + self._wt_rate
+            lo = max(0.0, min(all_vals))
+            hi = max(all_vals)
+            if hi <= lo:
+                hi = lo + 1.0
+
+            chart_h = h - pad_t - pad_b
+            def px(i): return pad_l + (w - pad_l - pad_r) * i / (n - 1)
+            def py(v): return h - pad_b - chart_h * (v - lo) / (hi - lo)
+
+            painter.setPen(QPen(_C_GRID, 1))
+            painter.drawLine(pad_l, pad_t, pad_l, h - pad_b)
+
+            painter.setPen(QPen(self._C_LINE, 1.5))
+            for i in range(1, n):
+                painter.drawLine(int(px(i - 1)), int(py(self._sigma[i - 1])),
+                                 int(px(i)),     int(py(self._sigma[i])))
+
+            if self._wt_rate:
+                painter.setPen(QPen(self._C_LINE2, 1.0))
+                for i in range(1, n):
+                    painter.drawLine(int(px(i - 1)), int(py(self._wt_rate[i - 1])),
+                                     int(px(i)),     int(py(self._wt_rate[i])))
+
+            painter.setPen(_C_TEXT)
+            painter.drawText(2, pad_t + 8,  f"{hi:.3f}")
+            painter.drawText(2, h - pad_b + 1, f"{lo:.3f}")
+            painter.setPen(self._C_LINE)
+            painter.drawText(pad_l + 4, pad_t + 9,
+                             f"σ: {self._sigma[-1]:.3f}  wt: {self._wt_rate[-1]:.3f}"
+                             if self._wt_rate else f"σ: {self._sigma[-1]:.3f}")
+        finally:
+            painter.end()
+
+
+# ---------------------------------------------------------------------------
+
 class WeightHistogram(QWidget):
     """Bar chart of connection-weight distribution for the best genome."""
 

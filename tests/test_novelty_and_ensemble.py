@@ -1,4 +1,5 @@
 """Tests for Novelty Search, Ensemble inference, and Stagnation Detection."""
+import math
 import unittest
 
 from yane import NeuroEvolution
@@ -248,6 +249,74 @@ class TestEnsemble(unittest.TestCase):
         ensemble_k1 = yane.forward_ensemble(inputs, k=1)
         best_out = yane.get_best().forward(inputs)
         self.assertAlmostEqual(ensemble_k1[0], best_out[0], places=10)
+
+    def test_forward_ensemble_mode_mean_equals_default(self):
+        yane = _make_yane()
+        for i in range(5):
+            yane.next_genome()
+            yane.submit_fitness(float(i))
+        inputs = [0.3, 0.7]
+        self.assertEqual(
+            yane.forward_ensemble(inputs, k=3, mode="mean"),
+            yane.forward_ensemble(inputs, k=3),
+        )
+
+    def test_forward_ensemble_mode_vote_returns_probabilities(self):
+        yane = _make_yane(n_outputs=3)
+        for i in range(5):
+            yane.next_genome()
+            yane.submit_fitness(float(i))
+        result = yane.forward_ensemble([0.5, 0.5], k=3, mode="vote")
+        self.assertEqual(len(result), 3)
+        self.assertAlmostEqual(sum(result), 1.0, places=10)
+        for v in result:
+            self.assertGreaterEqual(v, 0.0)
+            self.assertLessEqual(v, 1.0)
+
+    def test_forward_ensemble_mode_vote_one_class_gets_all_votes(self):
+        """When all genomes agree on the same class, that class gets all votes."""
+        from unittest.mock import patch
+        yane = _make_yane(n_outputs=2)
+        for i in range(3):
+            yane.next_genome()
+            yane.submit_fitness(float(i + 1))
+        # Force all genomes to output [10.0, -10.0] so argmax is always 0.
+        top_k = yane.get_ensemble(k=3)
+        with patch.object(top_k[0], "forward", return_value=[10.0, -10.0]), \
+             patch.object(top_k[1], "forward", return_value=[10.0, -10.0]), \
+             patch.object(top_k[2], "forward", return_value=[10.0, -10.0]):
+            result = yane.forward_ensemble([0.5, 0.5], k=3, mode="vote")
+        self.assertAlmostEqual(result[0], 1.0, places=10)
+        self.assertAlmostEqual(result[1], 0.0, places=10)
+
+    def test_forward_ensemble_mode_weighted_sums_to_finite(self):
+        yane = _make_yane()
+        for i in range(5):
+            yane.next_genome()
+            yane.submit_fitness(float(i + 1))
+        result = yane.forward_ensemble([0.2, 0.8], k=3, mode="weighted")
+        for v in result:
+            self.assertTrue(math.isfinite(v))
+
+    def test_forward_ensemble_mode_weighted_all_zero_fitness_uniform(self):
+        """When all fitnesses are 0 the weighted mode falls back to uniform (mean)."""
+        import math
+        yane = _make_yane()
+        for _ in range(3):
+            yane.next_genome()
+            yane.submit_fitness(0.0)
+        inputs = [0.5, 0.5]
+        weighted = yane.forward_ensemble(inputs, k=3, mode="weighted")
+        mean = yane.forward_ensemble(inputs, k=3, mode="mean")
+        for a, b in zip(weighted, mean):
+            self.assertAlmostEqual(a, b, places=10)
+
+    def test_forward_ensemble_unknown_mode_raises(self):
+        yane = _make_yane()
+        yane.next_genome()
+        yane.submit_fitness(1.0)
+        with self.assertRaises(ValueError):
+            yane.forward_ensemble([0.5, 0.5], mode="invalid")
 
 
 # ---------------------------------------------------------------------------

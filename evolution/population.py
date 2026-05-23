@@ -441,6 +441,12 @@ class Population:
         """Return up to k best evaluated genomes, sorted by fitness descending."""
         return sorted(self._evaluated, key=_fitness_key, reverse=True)[:k]
 
+    def worst_fitness(self) -> float | None:
+        """Return the fitness of the worst evaluated genome, or None if pool is empty."""
+        if not self._evaluated:
+            return None
+        return min(g.fitness for g in self._evaluated)
+
     @property
     def size(self) -> int:
         return len(self._evaluated) + len(self._unevaluated)

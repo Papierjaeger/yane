@@ -124,7 +124,7 @@ class Genome:
         self._triggered = next_triggered
 
     def get_outputs(self) -> list[float]:
-        return [node.value for node in self.output_nodes]
+        return [node.value * node.output_scale for node in self.output_nodes]
 
     def reset(self) -> None:
         """Reset all node values for a new episode — clears persistent memory too.
@@ -297,7 +297,7 @@ class Genome:
             for node, idx in zip(output_nodes, output_idx):
                 v = float(values[idx])
                 node.value = v
-                result.append(v)
+                result.append(v * node.output_scale)
             return result
 
         return _forward
@@ -343,7 +343,7 @@ class Genome:
                     node.fire_simple()
                 for node in exec_order:
                     node.fire_simple()
-                return [node.value for node in output_nodes]
+                return [node.value * node.output_scale for node in output_nodes]
         else:
             def _forward(data: list[float]) -> list[float]:
                 for node in reset_nodes:
@@ -357,7 +357,7 @@ class Genome:
                     node.value = 0.0
                 for node in exec_order:
                     node.fire_simple()
-                return [node.value for node in output_nodes]
+                return [node.value * node.output_scale for node in output_nodes]
 
         return _forward
 
