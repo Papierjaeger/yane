@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
 
-from yane.gui.canvas import NetworkCanvas, FitnessChart, SpeciesChart, WeightHistogram, MutationRateChart
+from yane.gui.canvas import NetworkCanvas, FitnessChart, SpeciesChart, WeightHistogram, MutationRateChart, FitnessHistogram
 from yane.gui.worker import TrainingWorker, EpisodeRunner, ServerThread
 from yane.gui.examples import load_examples
 
@@ -337,6 +337,18 @@ class LeftPanel(QWidget):
         pop.addRow("Efficiency weight:", self.lbl_eff_weight)
         pop.addRow("Invalid fitness:",   self.lbl_invalid_fitness)
         pop.addRow("Clipped fitness:",   self.lbl_clipped_fitness)
+        self.lbl_plateau = _label("—", "mutRate")
+        self.lbl_plateau.setToolTip(
+            "Plateau-Verhältnis: stagnation_count / stagnation_threshold.\n"
+            "0.0 = frischer Fortschritt, 1.0 = voll stagniert.\n"
+            "Zeigt, wie nah die Population an einem Plateau ist.")
+        pop.addRow("Plateau ratio:",     self.lbl_plateau)
+        self.fitness_hist = FitnessHistogram()
+        self.fitness_hist.setToolTip(
+            "Fitness-Verteilung der evaluierten Population.\n"
+            "Zeigt, ob die Fitness breit gestreut (Exploration)\n"
+            "oder eng gebündelt (Konvergenz) ist.")
+        pop.addRow("Fitness dist:",      self.fitness_hist)
         layout.addWidget(pop)
 
         # ── Lamarck ───────────────────────────────────────────────────────
@@ -370,6 +382,11 @@ class LeftPanel(QWidget):
             "typisch bei stochastischen Umgebungen mit n_evaluations=1.\n"
             "Abhilfe: lamarck_top_k erhöhen oder n_evaluations > 1 setzen.")
         lamarck_grp.addRow("Blocked (top-k):", self.lbl_lamarck_blocked)
+        self.lbl_lamarck_time = _label("—", "mutRate")
+        self.lbl_lamarck_time.setToolTip(
+            "Kumulative Zeit in Lamarck-Refinement (ms).\n"
+            "Zeigt den Overhead des Hill-Climbings.")
+        lamarck_grp.addRow("Time total (ms):", self.lbl_lamarck_time)
         layout.addWidget(lamarck_grp)
 
         # ── Evaluation timing ─────────────────────────────────────────────
@@ -439,6 +456,20 @@ class LeftPanel(QWidget):
         struct.addRow("Rem conn:",    self.lbl_rate_rem_conn)
         struct.addRow("Bypass prob:", self.lbl_bypass)
         layout.addWidget(struct)
+
+        # ── Mutation success rates (population-wide) ──────────────────────
+        mut_succ = _CollapsibleGroup("Mutation success", collapsed=True)
+        self._mut_success_labels: dict[str, QLabel] = {}
+        for mt in ("add_node", "remove_node", "add_connection", "remove_connection",
+                    "rewire", "disable", "enable"):
+            lbl = _label("—", "mutRate")
+            lbl.setToolTip(
+                f"Erfolgsrate der Mutation '{mt}': Anteil der Anwendungen,\n"
+                f"die zu einer Fitness-Verbesserung führten.\n"
+                f"Zeigt, welche Strukturänderungen tatsächlich helfen.")
+            self._mut_success_labels[mt] = lbl
+            mut_succ.addRow(f"{mt}:", lbl)
+        layout.addWidget(mut_succ)
 
         # ── Strategy genes (best genome) ──────────────────────────────────
         strat = _CollapsibleGroup("Strategy genes", collapsed=True)
@@ -617,6 +648,17 @@ class LeftPanel(QWidget):
             self.lbl_invalid_fitness.setText("—")
             self.lbl_clipped_fitness.setText("—")
 
+        # Plateau ratio
+        pr = mem.get("plateau_ratio")
+        if pr is not None:
+            self.lbl_plateau.setText(f"{pr:.2f}")
+        else:
+            self.lbl_plateau.setText("—")
+
+        # Fitness histogram
+        fh = mem.get("fitness_histogram")
+        self.fitness_hist.set_data(fh)
+
         # Eval-time statistics
         for key, lbl in (
             ("eval_time_mean_ms",   self.lbl_eval_mean),
@@ -657,6 +699,9 @@ class LeftPanel(QWidget):
         n_blocked = mem.get("lamarck_n_blocked_top_k")
         if n_blocked is not None:
             self.lbl_lamarck_blocked.setText(str(n_blocked))
+        lt = mem.get("lamarck_time_ms")
+        if lt is not None:
+            self.lbl_lamarck_time.setText(f"{lt:.1f}")
 
         # Structure mutations
         self.lbl_rate_add_node.setText(f"{genome.mutation_add_node.bool_rate:.4f}")
@@ -664,6 +709,17 @@ class LeftPanel(QWidget):
         self.lbl_rate_add_conn.setText(f"{genome.mutation_add_connection.bool_rate:.4f}")
         self.lbl_rate_rem_conn.setText(f"{genome.mutation_remove_connection.bool_rate:.4f}")
         self.lbl_bypass.setText(f"{genome.bypass_connection_prob:.4f}")
+
+        # Mutation success rates (population-wide)
+        m_succ = mem.get("mutation_success", {})
+        m_total = mem.get("mutation_total", {})
+        for mt, lbl in self._mut_success_labels.items():
+            total = m_total.get(mt, 0)
+            succ = m_succ.get(mt, 0)
+            if total > 0:
+                lbl.setText(f"{succ / total:.0%} ({succ}/{total})")
+            else:
+                lbl.setText("—")
 
         # Strategy genes
         self.lbl_crossover_prob.setText(f"{genome.crossover_prob:.4f}")
@@ -861,6 +917,102 @@ class TrainingTab(QWidget):
             "— = kein Zielwert (Training läuft bis du Stop drückst).\n"
             "Beispiel: CartPole gilt als gelöst ab Fitness 500.")
 
+        # --- Advanced settings -------------------------------------------------
+        self.chk_fitness_shaping = QCheckBox("aktiv")
+        self.chk_fitness_shaping.setChecked(False)
+        self.chk_fitness_shaping.setToolTip(
+            "Rank-basierte Fitness-Transformation (Fitness-Shaping).\n"
+            "Ersetzt shared_fitness durch lineare Ränge vor der Selektion.\n"
+            "Macht Selektion robust gegen Fitness-Ausreißer und Skalierungsunterschiede.\n"
+            "Empfohlen bei Aufgaben mit sehr unterschiedlichen Fitness-Größenordnungen.")
+
+        self.dspin_interspecies = QDoubleSpinBox()
+        self.dspin_interspecies.setRange(0.0, 0.2)
+        self.dspin_interspecies.setSingleStep(0.01)
+        self.dspin_interspecies.setValue(0.0)
+        self.dspin_interspecies.setDecimals(2)
+        self.dspin_interspecies.setSpecialValueText("—")
+        self.dspin_interspecies.setToolTip(
+            "Anteil der Crossover-Events, bei denen der zweite Elternteil\n"
+            "aus einer anderen Species gewählt wird (Interspecies Crossover).\n"
+            "0.0 = nur innerhalb der eigenen Species (Standard)\n"
+            "0.05 = 5 % aller Crossovers sind species-übergreifend\n"
+            "Hilft, lokale Optima aufzubrechen und Innovationen zu kombinieren.")
+
+        self.dspin_convergence_spread = QDoubleSpinBox()
+        self.dspin_convergence_spread.setRange(0.0, 1000.0)
+        self.dspin_convergence_spread.setSingleStep(0.1)
+        self.dspin_convergence_spread.setValue(0.0)
+        self.dspin_convergence_spread.setDecimals(4)
+        self.dspin_convergence_spread.setSpecialValueText("—")
+        self.dspin_convergence_spread.setToolTip(
+            "Konvergenz-Stop: Fitness-IQR-Schwelle.\n"
+            "Training stoppt, wenn der Interquartilsabstand (IQR) der Fitness\n"
+            "in der Population unter diesen Wert fällt UND die Population voll stagniert.\n"
+            "0.0 = deaktiviert.\n"
+            "0.01 = typisch für normalisierte Fitness, 1.0 für rohe Werte.")
+
+        self.dspin_convergence_stagnation = QDoubleSpinBox()
+        self.dspin_convergence_stagnation.setRange(0.1, 10.0)
+        self.dspin_convergence_stagnation.setSingleStep(0.1)
+        self.dspin_convergence_stagnation.setValue(1.0)
+        self.dspin_convergence_stagnation.setDecimals(1)
+        self.dspin_convergence_stagnation.setToolTip(
+            "Konvergenz-Stop: Mindest-Stagnation (Faktor).\n"
+            "1.0 = volle Stagnation nötig bevor Konvergenz geprüft wird.\n"
+            "0.5 = halbe Stagnation reicht (aggressiver).")
+
+        self.dspin_early_stop = QDoubleSpinBox()
+        self.dspin_early_stop.setRange(0.0, 10.0)
+        self.dspin_early_stop.setSingleStep(0.1)
+        self.dspin_early_stop.setValue(0.0)
+        self.dspin_early_stop.setDecimals(2)
+        self.dspin_early_stop.setSpecialValueText("—")
+        self.dspin_early_stop.setToolTip(
+            "Early-Stopping-Faktor für Generator-basierte Fitnessfunktionen.\n"
+            "Bricht die Evaluierung eines Genoms ab, wenn die extrapolierte\n"
+            "Fitness unter best - abs(best) * factor fällt.\n"
+            "0.0 = deaktiviert. 1.0 = großzügig (Standard wenn aktiv).\n"
+            "Nur relevant wenn die Fitnessfunktion yield verwendet.")
+
+        self.spin_efficiency_max_ms = QDoubleSpinBox()
+        self.spin_efficiency_max_ms.setRange(0.0, 10000.0)
+        self.spin_efficiency_max_ms.setSingleStep(10.0)
+        self.spin_efficiency_max_ms.setValue(0.0)
+        self.spin_efficiency_max_ms.setDecimals(1)
+        self.spin_efficiency_max_ms.setSpecialValueText("—")
+        self.spin_efficiency_max_ms.setToolTip(
+            "Effizienzstrafe: Referenzzeit in ms.\n"
+            "Genome, die schneller als diese Zeit evaluieren, bekommen\n"
+            "einen Bonus bei der Elternauswahl. Langsamere werden bestraft.")
+
+        self.dspin_efficiency_penalty = QDoubleSpinBox()
+        self.dspin_efficiency_penalty.setRange(0.0, 1.0)
+        self.dspin_efficiency_penalty.setSingleStep(0.001)
+        self.dspin_efficiency_penalty.setValue(0.0)
+        self.dspin_efficiency_penalty.setDecimals(4)
+        self.dspin_efficiency_penalty.setSpecialValueText("—")
+        self.dspin_efficiency_penalty.setToolTip(
+            "Effizienzstrafe: Strafe pro ms über der Referenzzeit.\n"
+            "0.0 = deaktiviert.\n"
+            "0.001 = moderat, 0.01 = strikt.")
+
+        self.spin_elite_global = QSpinBox()
+        self.spin_elite_global.setRange(0, 50)
+        self.spin_elite_global.setValue(1)
+        self.spin_elite_global.setToolTip(
+            "Globale Elite: Anzahl der Top-Genome, die nie aus der\n"
+            "Population entfernt werden (Elitismus). Default 1.\n"
+            "Höhere Werte bewahren mehr gute Lösungen, reduzieren aber Diversität.")
+
+        self.spin_elite_species = QSpinBox()
+        self.spin_elite_species.setRange(0, 10)
+        self.spin_elite_species.setValue(1)
+        self.spin_elite_species.setToolTip(
+            "Species-Elite: Anzahl der Top-Genome pro Species,\n"
+            "die nie entfernt werden. Schützt strukturelle Innovationen\n"
+            "auch in kleinen Species. Default 1.")
+
         self.combo_lamarck_mode = QComboBox()
         self.combo_lamarck_mode.addItems(["Adaptiv (Standard)", "Explizit", "Aus"])
         self.combo_lamarck_mode.setToolTip(
@@ -1014,7 +1166,42 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Memory:",        self.chk_memory)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
+
+        # --- Advanced settings group ---
+        advance_grp = QGroupBox("Advanced")
+        advance_form = QFormLayout(advance_grp)
+        advance_form.setSpacing(3)
+        advance_form.setContentsMargins(0, 0, 0, 0)
+        advance_form.addRow("Fitness shaping:",   self.chk_fitness_shaping)
+        advance_form.addRow("Interspecies crossover:", self.dspin_interspecies)
+        converge_row = QWidget()
+        converge_lay = QHBoxLayout(converge_row)
+        converge_lay.setContentsMargins(0, 0, 0, 0)
+        converge_lay.setSpacing(4)
+        converge_lay.addWidget(self.dspin_convergence_spread)
+        converge_lay.addWidget(QLabel("×"))
+        converge_lay.addWidget(self.dspin_convergence_stagnation)
+        advance_form.addRow("Convergence stop (eps × stag):", converge_row)
+        advance_form.addRow("Early stop factor:",  self.dspin_early_stop)
+        eff_row = QWidget()
+        eff_lay = QHBoxLayout(eff_row)
+        eff_lay.setContentsMargins(0, 0, 0, 0)
+        eff_lay.setSpacing(4)
+        eff_lay.addWidget(self.spin_efficiency_max_ms)
+        eff_lay.addWidget(QLabel("ms ×"))
+        eff_lay.addWidget(self.dspin_efficiency_penalty)
+        advance_form.addRow("Efficiency penalty:", eff_row)
+        elite_row = QWidget()
+        elite_lay = QHBoxLayout(elite_row)
+        elite_lay.setContentsMargins(0, 0, 0, 0)
+        elite_lay.setSpacing(4)
+        elite_lay.addWidget(self.spin_elite_global)
+        elite_lay.addWidget(QLabel("global /"))
+        elite_lay.addWidget(self.spin_elite_species)
+        elite_lay.addWidget(QLabel("per species"))
+        advance_form.addRow("Elitism:", elite_row)
         layout.addWidget(cfg)
+        layout.addWidget(advance_grp)
 
         # --- Controls ---
         ctrl = QWidget()
@@ -1244,6 +1431,29 @@ class TrainingTab(QWidget):
             # 0 = Auto (worker determines optimal count at runtime)
             self._yane.set_n_workers(self.spin_workers.value())
             self._yane.set_target_species(self.spin_species.value())
+
+            # --- Advanced settings ---
+            if self.chk_fitness_shaping.isChecked():
+                self._yane.set_fitness_shaping(True)
+            is_rate = self.dspin_interspecies.value()
+            if is_rate > 0.0:
+                self._yane.set_interspecies_crossover(is_rate)
+            conv_eps = self.dspin_convergence_spread.value()
+            if conv_eps > 0.0:
+                self._yane.set_convergence_stop(
+                    conv_eps, self.dspin_convergence_stagnation.value())
+            esf = self.dspin_early_stop.value()
+            if esf > 0.0:
+                self._yane.set_early_stopping(esf)
+            eff_max = self.spin_efficiency_max_ms.value()
+            eff_pen = self.dspin_efficiency_penalty.value()
+            if eff_max > 0.0 and eff_pen > 0.0:
+                self._yane.set_efficiency_penalty(eff_max, eff_pen)
+            self._yane.set_elitism(
+                self.spin_elite_global.value(),
+                self.spin_elite_species.value(),
+            )
+
             lamarck_mode = self.combo_lamarck_mode.currentText()
             if lamarck_mode == "Explizit":
                 self._yane.set_lamarck(n_steps=self.spin_lamarck.value())

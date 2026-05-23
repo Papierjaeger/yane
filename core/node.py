@@ -157,12 +157,12 @@ class Node:
         if self.type == NodeType.INPUT:
             self.input_index = self.mutation_input_index.mutate_int(self.input_index, 0, 255)
             new_scale = self.mutation_input_scale.mutate_value(self.input_scale, sigma)
-            self.input_scale = 1e-6 if new_scale < 1e-6 else new_scale
+            self.input_scale = max(1e-6, min(1e6, new_scale))
             self.mutation_input_scale.mutate_rates()
 
         if self.type == NodeType.OUTPUT:
             new_scale = self.mutation_output_scale.mutate_value(self.output_scale, sigma)
-            self.output_scale = 1e-6 if new_scale < 1e-6 else new_scale
+            self.output_scale = max(1e-6, min(1e6, new_scale))
             self.mutation_output_scale.mutate_rates()
 
         for conn in self.connections:

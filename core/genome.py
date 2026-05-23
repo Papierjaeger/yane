@@ -72,6 +72,14 @@ class Genome:
         self.bypass_connection_prob: float = 0.5
         self.mutation_bypass = Mutation()
 
+        # ── Mutation diagnostics ───────────────────────────────────────────
+        # Populated by mutate() — list of mutation type names that fired.
+        # Reset on each mutate() call. Used by Population to track success rates.
+        self._mutation_types_fired: list[str] = []
+        # Parent fitness at spawn time — set by Population, used to measure
+        # whether the mutations were beneficial.
+        self._parent_fitness: float | None = None
+
         # ── Self-adaptive strategy genes ─────────────────────────────────────
         # These are inherited and mutated like any other gene, so the
         # population discovers good values without any external tuning.
@@ -110,6 +118,14 @@ class Genome:
 
     def set_inputs(self, data: list[float]) -> None:
         n = len(data)
+        n_in = len(self.input_nodes)
+        if n != n_in:
+            import warnings
+            warnings.warn(
+                f"set_inputs: expected {n_in} inputs, got {n}. "
+                f"{'Padding with zeros.' if n < n_in else 'Ignoring extra inputs.'}",
+                stacklevel=2,
+            )
         for node in self.input_nodes:
             if node.input_index < n:
                 node.value = data[node.input_index] * node.input_scale
@@ -488,25 +504,30 @@ class Genome:
     def mutate(self, tracker=None) -> None:
         from yane.evolution import smart_mutation
 
+        self._mutation_types_fired = []  # reset diagnostics
+
         floor = self._STRUCT_FLOOR
         if self.mutation_add_node.mutate_bool(False) or random.random() < floor:
             smart_mutation.add_node(self, tracker)
+            self._mutation_types_fired.append("add_node")
         if self.mutation_remove_node.mutate_bool(False) or random.random() < floor:
             smart_mutation.remove_node(self, tracker)
+            self._mutation_types_fired.append("remove_node")
         if self.mutation_add_connection.mutate_bool(False) or random.random() < floor:
             smart_mutation.add_connection(self, tracker)
+            self._mutation_types_fired.append("add_connection")
         if self.mutation_remove_connection.mutate_bool(False) or random.random() < floor:
             smart_mutation.remove_connection(self, tracker)
-        # Rewire and disable/enable have no floor — purely self-adaptive.
-        # Rewire is net-neutral (remove + add) so it doesn't need a minimum
-        # exploration guarantee.  Disable/enable are reversible and should
-        # not skew the structural add/remove balance.
+            self._mutation_types_fired.append("remove_connection")
         if self.mutation_rewire.mutate_bool(False):
             smart_mutation.rewire_connection(self, tracker)
+            self._mutation_types_fired.append("rewire")
         if self.mutation_disable_connection.mutate_bool(False):
             smart_mutation.disable_connection(self)
+            self._mutation_types_fired.append("disable")
         if self.mutation_enable_connection.mutate_bool(False):
             smart_mutation.enable_connection(self)
+            self._mutation_types_fired.append("enable")
 
         sigma = self.sigma_global
         for node in self.nodes:
@@ -794,6 +815,7 @@ class Genome:
         self._forward_dispatch = None
         self._innov_cache = None
         self._species_stale = True  # topology changed → needs species re-assignment
+        self._last_species_id = None  # old species ID is now stale too
         self._values_arr = None     # will be reallocated in next _compile_forward()
         # Disconnect all connections from their weight arrays so stale array
         # references don't survive recompilation.

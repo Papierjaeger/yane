@@ -12,6 +12,7 @@ import numpy as np
 np.seterr(over='ignore', invalid='ignore')
 
 from yane.core.genome import Genome
+from yane.evolution.mutation import Mutation
 
 # Module-level key functions — C-level attrgetter is ~2× faster than a Python
 # lambda for attribute access in max()/min()/sorted() calls.
@@ -28,7 +29,7 @@ _COMPAT_NUMPY_THRESHOLD: int = 200
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _compatibility(g1: Genome, g2: Genome) -> float:
+def _compatibility(g1: Genome, g2: Genome, only_enabled: bool = False) -> float:
     """NEAT-style compatibility distance δ = c1·E/N + c2·D/N + c3·W̄
 
     Automatically switches between two implementations based on network size:
@@ -44,29 +45,50 @@ def _compatibility(g1: Genome, g2: Genome) -> float:
     Coefficients:  c1 = 1.0 (excess)   c2 = 1.0 (disjoint)   c3 = 0.4 (W̄)
     Cache: innovation dicts + frozensets + optional sorted arrays are built
     once per topology change and reused for all subsequent comparisons.
-    """
-    # ── Inline cache access (avoids function-call overhead on hot path) ────
-    _cache1 = g1._innov_cache
-    if _cache1 is None:
-        _d = {conn.innovation: conn
-              for src in g1.nodes for conn in src.connections
-              if conn.innovation >= 0}
-        _n = len(_d)
-        _sarr = np.array(sorted(_d), dtype=np.int32) if _n >= _COMPAT_NUMPY_THRESHOLD else None
-        _cache1 = (_d, max(_d, default=-1), _n, frozenset(_d), _sarr)
-        g1._innov_cache = _cache1
-    g1_innov, max_innov_g1, n1_innov, g1_keys, g1_sorted = _cache1
 
-    _cache2 = g2._innov_cache
-    if _cache2 is None:
-        _d = {conn.innovation: conn
-              for src in g2.nodes for conn in src.connections
-              if conn.innovation >= 0}
-        _n = len(_d)
-        _sarr = np.array(sorted(_d), dtype=np.int32) if _n >= _COMPAT_NUMPY_THRESHOLD else None
-        _cache2 = (_d, max(_d, default=-1), _n, frozenset(_d), _sarr)
-        g2._innov_cache = _cache2
-    g2_innov, max_innov_g2, n2_innov, g2_keys, g2_sorted = _cache2
+    If *only_enabled* is True, disabled connections are excluded from the
+    comparison — genomes that differ only in disabled connections become
+    more compatible.  Useful for species that evolve different disable patterns.
+    """
+    # ── Build innovation dictionaries ──────────────────────────────────────
+    def _build(g: Genome):
+        return {
+            conn.innovation: conn
+            for src in g.nodes for conn in src.connections
+            if conn.innovation >= 0 and (not only_enabled or conn.enabled)
+        }
+
+    if only_enabled:
+        # Skip cache — rebuild every time for the alternative metric.
+        g1_innov = _build(g1)
+        g2_innov = _build(g2)
+        n1_innov = len(g1_innov)
+        n2_innov = len(g2_innov)
+        max_innov_g1 = max(g1_innov, default=-1)
+        max_innov_g2 = max(g2_innov, default=-1)
+        g1_keys = frozenset(g1_innov)
+        g2_keys = frozenset(g2_innov)
+        g1_sorted = None
+        g2_sorted = None
+    else:
+        # ── Inline cache access (avoids function-call overhead on hot path) ────
+        _cache1 = g1._innov_cache
+        if _cache1 is None:
+            _d = _build(g1)
+            _n = len(_d)
+            _sarr = np.array(sorted(_d), dtype=np.int32) if _n >= _COMPAT_NUMPY_THRESHOLD else None
+            _cache1 = (_d, max(_d, default=-1), _n, frozenset(_d), _sarr)
+            g1._innov_cache = _cache1
+        g1_innov, max_innov_g1, n1_innov, g1_keys, g1_sorted = _cache1
+
+        _cache2 = g2._innov_cache
+        if _cache2 is None:
+            _d = _build(g2)
+            _n = len(_d)
+            _sarr = np.array(sorted(_d), dtype=np.int32) if _n >= _COMPAT_NUMPY_THRESHOLD else None
+            _cache2 = (_d, max(_d, default=-1), _n, frozenset(_d), _sarr)
+            g2._innov_cache = _cache2
+        g2_innov, max_innov_g2, n2_innov, g2_keys, g2_sorted = _cache2
 
     # ── Legacy fallback (no innovation tracking) ────────────────────────────
     if not g1_innov and not g2_innov:
@@ -191,7 +213,7 @@ def _compat_numpy(g1_innov, g2_innov, g1_sorted, g2_sorted,
 class Species:
     """A group of structurally similar genomes that compete internally."""
 
-    def __init__(self, representative: Genome) -> None:
+    def __init__(self, representative: Genome, spawn_count: int = 0, parent_id: int | None = None) -> None:
         self.representative = representative
         self.members: list[Genome] = []
         self.best_fitness_seen: float = float('-inf')
@@ -200,6 +222,20 @@ class Species:
         # Per-species Lamarck diagnostics (cumulative).
         self.lamarck_n_applied: int = 0
         self.lamarck_n_steps_total: int = 0
+        # Per-species mutation success tracking.
+        self._mut_success: dict[str, int] = {}
+        self._mut_total: dict[str, int] = {}
+        # Mutation biases: multiplier per mutation type, defaults to 1.0.
+        # Evolved per species; different species develop different tendencies.
+        self.mutation_biases: dict[str, float] = {
+            "add_node": 1.0, "remove_node": 1.0,
+            "add_connection": 1.0, "remove_connection": 1.0,
+            "rewire": 1.0, "disable": 1.0, "enable": 1.0,
+        }
+        # Lineage tracking
+        self.created_at_spawn: int = spawn_count     # spawn cycle when species was created
+        self.parent_species_id: int | None = parent_id  # id of parent species (None for bootstrap)
+        self.merge_count: int = 0                     # how many species were merged into this one
 
     def add(self, genome: Genome) -> None:
         self.members.append(genome)
@@ -290,6 +326,11 @@ class Population:
         # ([0, ~0.15] for bootstrap genomes) to avoid oscillation.
         self._target_species: int = target_species
         self._compat_threshold: float = 0.2
+        # Speciation metric: "topology" (default) or "topology_no_disabled"
+        self._speciation_metric: str = "topology"
+        # Small species protection: don't remove species younger than this (in spawn cycles).
+        self._min_species_age: int = max_size       # default: 1 full generation
+        self._min_species_size: int = 2             # species with fewer members are protected
         # Diagnostics: track last threshold adjustment for debugging.
         self._dbg_last_adj_n: int = -1       # n at last _assign_species() threshold check
         self._dbg_adj_count: int = 0         # how many times threshold was actually changed
@@ -329,6 +370,12 @@ class Population:
         self._n_diversity_injection: int = 0
         self._n_interspecies_crossover: int = 0
 
+        # Mutation success tracking — per-type counters for adaptive weighting.
+        # _mutation_success[type] = count where mutation type improved fitness
+        # _mutation_total[type]  = count where mutation type was applied
+        self._mutation_success: dict[str, int] = {}
+        self._mutation_total: dict[str, int] = {}
+
         # Fitness shaping: when enabled, shared_fitness values are replaced by
         # rank-normalised scores in [1/N, 1] before tournament selection.
         self._fitness_shaping: bool = False
@@ -354,7 +401,7 @@ class Population:
 
     def submit(self, genome: Genome, fitness: float, elapsed_ms: float | None = None) -> None:
         if genome not in self._unevaluated:
-            return
+            raise ValueError("Genome was not selected for evaluation or already submitted.")
         self._total_submitted += 1
         genome.fitness = fitness
         genome.shared_fitness = fitness
@@ -429,6 +476,23 @@ class Population:
             self._stagnation_count += 1
             self._since_last_injection += 1
             self._topology_stagnation_count += 1
+
+        # ── Mutation success tracking ─────────────────────────────────────
+        # Track which mutation types led to fitness improvements.
+        # "Improvement" = child fitness >= parent fitness.
+        parent_fit = getattr(genome, '_parent_fitness', None)
+        improved = parent_fit is not None and fitness >= parent_fit
+        for mt in getattr(genome, '_mutation_types_fired', []):
+            self._mutation_total[mt] = self._mutation_total.get(mt, 0) + 1
+            if improved:
+                self._mutation_success[mt] = self._mutation_success.get(mt, 0) + 1
+            # Per-species tracking: find the genome's species and update.
+            for sp in self._species:
+                if genome in sp.members:
+                    sp._mut_total[mt] = sp._mut_total.get(mt, 0) + 1
+                    if improved:
+                        sp._mut_success[mt] = sp._mut_success.get(mt, 0) + 1
+                    break
 
         self._prune()
 
@@ -611,13 +675,14 @@ class Population:
 
         Returns the newly created Species, or None if genome was force-assigned.
         """
-        cap = max(self._target_species, self.max_size // 2)
+        cap = max(self._effective_target_species(), self.max_size // 2)
+        _only_enabled = self._speciation_metric == "topology_no_disabled"
         if self._species and len(self._species) >= cap:
             # Force-assign to nearest existing species by compatibility distance.
             nearest = min(
                 self._species,
                 key=lambda sp: (
-                    _compatibility(genome, sp.representative)
+                    _compatibility(genome, sp.representative, _only_enabled)
                     if sp.representative is not None else float('inf')
                 ),
             )
@@ -627,12 +692,22 @@ class Population:
             genome._last_species_id = id(nearest)
             return None
         else:
-            new_sp = Species(genome)
+            new_sp = Species(genome, spawn_count=self._spawn_count, parent_id=None)
             new_sp.members.append(genome)
             new_sp._cached_best = genome
             self._species.append(new_sp)
             genome._last_species_id = id(new_sp)
             return new_sp
+
+    def _effective_target_species(self) -> int:
+        """Return the effective target species count.
+
+        When ``_target_species <= 0``, auto-compute from population size:
+        ``max(2, int(sqrt(max_size)))``. Otherwise return the configured value.
+        """
+        if self._target_species <= 0:
+            return max(2, int(self.max_size ** 0.5))
+        return self._target_species
 
     def _assign_one_genome(self, genome: Genome) -> None:
         """Assign a single genome to its species immediately after evaluation.
@@ -644,6 +719,7 @@ class Population:
         removes genomes that are evicted right after submission.
         """
         threshold = self._compat_threshold
+        _only_enabled = self._speciation_metric == "topology_no_disabled"
         placed = False
 
         # Try last-known species first (O(1) id-match with small species list).
@@ -652,7 +728,7 @@ class Population:
             for sp in self._species:
                 if id(sp) == last_id:
                     if (sp.representative is not None
-                            and _compatibility(genome, sp.representative) < threshold):
+                            and _compatibility(genome, sp.representative, _only_enabled) < threshold):
                         sp.members.append(genome)
                         if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                             sp._cached_best = genome
@@ -662,7 +738,7 @@ class Population:
         if not placed:
             for sp in self._species:
                 if (sp.representative is not None
-                        and _compatibility(genome, sp.representative) < threshold):
+                        and _compatibility(genome, sp.representative, _only_enabled) < threshold):
                     sp.members.append(genome)
                     if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                         sp._cached_best = genome
@@ -688,6 +764,7 @@ class Population:
         could accumulate from the incremental path over many generations.
         """
         threshold = self._compat_threshold
+        _only_enabled = self._speciation_metric == "topology_no_disabled"
 
         if (self._force_full_assign_interval > 0
                 and self._spawn_count % self._force_full_assign_interval == 0):
@@ -705,7 +782,7 @@ class Population:
                 last_sp_id = genome._last_species_id
                 if last_sp_id is not None:
                     sp = species_by_id.get(last_sp_id)
-                    if sp is not None and _compatibility(genome, sp.representative) < threshold:
+                    if sp is not None and _compatibility(genome, sp.representative, _only_enabled) < threshold:
                         sp.members.append(genome)
                         if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                             sp._cached_best = genome
@@ -713,7 +790,7 @@ class Population:
 
                 if not placed:
                     for sp in self._species:
-                        if _compatibility(genome, sp.representative) < threshold:
+                        if _compatibility(genome, sp.representative, _only_enabled) < threshold:
                             sp.members.append(genome)
                             if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                                 sp._cached_best = genome
@@ -747,7 +824,7 @@ class Population:
                 placed = False
                 for sp in self._species:
                     if (sp.members and sp.representative is not None
-                            and _compatibility(genome, sp.representative) < threshold):
+                            and _compatibility(genome, sp.representative, _only_enabled) < threshold):
                         sp.members.append(genome)
                         if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                             sp._cached_best = genome
@@ -768,7 +845,7 @@ class Population:
         # threshold they belong to the same species.  Stop once at target count.
         n_active = len(self._species)
         changed = True
-        while changed and n_active > self._target_species:
+        while changed and n_active > self._effective_target_species():
             changed = False
             for i in range(len(self._species)):
                 if not self._species[i].members:
@@ -777,7 +854,7 @@ class Population:
                     if not self._species[j].members:
                         continue
                     sp_a, sp_b = self._species[i], self._species[j]
-                    if _compatibility(sp_a.representative, sp_b.representative) < threshold:
+                    if _compatibility(sp_a.representative, sp_b.representative, _only_enabled) < threshold:
                         bigger, smaller = (
                             (sp_a, sp_b) if len(sp_a.members) >= len(sp_b.members)
                             else (sp_b, sp_a)
@@ -790,6 +867,7 @@ class Population:
                                 smaller._cached_best.fitness > bigger._cached_best.fitness)):
                             bigger._cached_best = smaller._cached_best
                         bigger.representative = bigger._cached_best or bigger.representative
+                        bigger.merge_count += 1
                         smaller.members = []
                         n_active -= 1
                         changed = True
@@ -810,10 +888,10 @@ class Population:
         n = len(self._species)
         self._dbg_last_adj_n = n
         _step = max(0.001, 0.3 / max(1, self.max_size))
-        if n > self._target_species:
+        if n > self._effective_target_species():
             self._compat_threshold = min(1.5, self._compat_threshold + _step)
             self._dbg_adj_count += 1
-        elif n < self._target_species:
+        elif n < self._effective_target_species():
             self._compat_threshold = max(0.01, self._compat_threshold - _step)
             self._dbg_adj_count += 1
 
@@ -858,6 +936,59 @@ class Population:
     # ------------------------------------------------------------------
     # Offspring spawning
     # ------------------------------------------------------------------
+
+    def _apply_mutation_success_weights(self) -> None:
+        """Adjust mutation bool_rates based on historical success.
+
+        Called once per spawn cycle. Mutation types with high success rates
+        get gentle rate boosts; low-success types are dampened. The update
+        is deliberately slow (momentum 0.9) to avoid oscillation.
+        """
+        if not self._evaluated:
+            return
+        base = self._evaluated[0]  # use first genome's rates as reference
+        for mt, gene_attr in (
+            ("add_node", "mutation_add_node"),
+            ("remove_node", "mutation_remove_node"),
+            ("add_connection", "mutation_add_connection"),
+            ("remove_connection", "mutation_remove_connection"),
+            ("rewire", "mutation_rewire"),
+            ("disable", "mutation_disable_connection"),
+            ("enable", "mutation_enable_connection"),
+        ):
+            total = self._mutation_total.get(mt, 0)
+            if total < 10:  # not enough data yet
+                continue
+            success_rate = self._mutation_success.get(mt, 0) / total
+            # Target rate: scale around current rate based on success.
+            # Success > 50% → boost (up to 2×), success < 10% → dampen (down to 0.5×).
+            target_mult = 0.5 + 1.5 * max(0.0, min(1.0, success_rate))
+            for genome in self._evaluated:
+                gene = getattr(genome, gene_attr)
+                # Gentle momentum update per genome
+                gene.bool_rate = gene.bool_rate * 0.9 + gene.bool_rate * target_mult * 0.1
+                # Clamp to Mutation's valid range
+                gene.bool_rate = max(Mutation.MIN_RATE, min(0.999, gene.bool_rate))
+
+    def _apply_species_mutation_biases(self) -> None:
+        """Update per-species mutation biases based on species-level success.
+
+        Each species develops its own mutation tendency profile. Successful
+        mutation types get boosted; unsuccessful ones are dampened.
+        """
+        for sp in self._species:
+            if not sp.members:
+                continue
+            for mt in sp.mutation_biases:
+                total = sp._mut_total.get(mt, 0)
+                if total < 5:  # not enough data
+                    continue
+                success_rate = sp._mut_success.get(mt, 0) / total
+                target = 0.5 + 1.5 * max(0.0, min(1.0, success_rate))
+                # Gentle momentum toward target
+                sp.mutation_biases[mt] = sp.mutation_biases[mt] * 0.9 + target * 0.1
+                # Clamp to reasonable range
+                sp.mutation_biases[mt] = max(0.3, min(3.0, sp.mutation_biases[mt]))
 
     def _inject_structural_diversity(self) -> None:
         """Force structural exploration when topology stagnates despite fitness gains.
@@ -986,6 +1117,22 @@ class Population:
         self._spawn_count += 1
         self._assign_species()
 
+        # Safety net: if all species have gone extinct (e.g., all pruned),
+        # rescue the population by creating a fresh species from the best genome.
+        if not self._species and self._evaluated:
+            best = max(self._evaluated, key=_fitness_key)
+            rescue_sp = Species(best, spawn_count=self._spawn_count)
+            rescue_sp.members = list(self._evaluated)
+            rescue_sp._cached_best = best
+            for g in self._evaluated:
+                g._last_species_id = id(rescue_sp)
+            self._species = [rescue_sp]
+
+        # Periodically adjust mutation rates based on success history.
+        if self._spawn_count % max(1, self.max_size // 2) == 0:
+            self._apply_mutation_success_weights()
+            self._apply_species_mutation_biases()
+
         if self._since_last_injection >= self.stagnation_threshold:
             self._inject_fresh_genome()
             return
@@ -1083,7 +1230,25 @@ class Population:
             child = parent.copy()
             self._n_mutation_only += 1
 
+        # Apply per-species mutation biases before mutating.
+        # Find parent's species and adjust mutation rates accordingly.
+        parent_sp = next((sp for sp in self._species if parent in sp.members), None)
+        if parent_sp is not None:
+            for mt, gene_attr in (
+                ("add_node", "mutation_add_node"),
+                ("remove_node", "mutation_remove_node"),
+                ("add_connection", "mutation_add_connection"),
+                ("remove_connection", "mutation_remove_connection"),
+                ("rewire", "mutation_rewire"),
+                ("disable", "mutation_disable_connection"),
+                ("enable", "mutation_enable_connection"),
+            ):
+                bias = parent_sp.mutation_biases.get(mt, 1.0)
+                gene = getattr(child, gene_attr)
+                gene.bool_rate = max(Mutation.MIN_RATE, min(0.999, gene.bool_rate * bias))
+
         child.mutate(self._tracker)
+        child._parent_fitness = parent.fitness
         child.fitness = 0.0
         self._unevaluated.append(child)
 
@@ -1113,6 +1278,12 @@ class Population:
         if self.species_elite_count > 0:
             for sp in self._species:
                 if not sp.members:
+                    continue
+                # Protect all members of very young or very small species —
+                # gives them time to establish before facing pruning pressure.
+                species_age = self._spawn_count - sp.created_at_spawn
+                if species_age < self._min_species_age or len(sp.members) < self._min_species_size:
+                    protected.update(sp.members)
                     continue
                 # Single-member species (typically fresh injection genomes) are only
                 # protected when the global elite count doesn't already cover them.

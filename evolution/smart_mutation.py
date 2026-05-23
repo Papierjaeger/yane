@@ -147,6 +147,8 @@ def rewire_connection(genome, tracker=None) -> None:
     Removes the weakest enabled connection (soft-min sampling from the bottom
     quartile) and immediately adds a new random connection.  Topology stays
     roughly the same size while the search space is explored.
+    If add_connection cannot find a valid new pair, the removed connection is
+    restored so the net count remains unchanged.
     """
     candidates = [(node, i, conn)
                   for node in genome.nodes
@@ -156,10 +158,15 @@ def rewire_connection(genome, tracker=None) -> None:
         return
     candidates.sort(key=lambda x: abs(x[2].weight))
     n_pool = max(1, len(candidates) // 4)
-    node, idx, _ = random.choice(candidates[:n_pool])
+    node, idx, removed_conn = random.choice(candidates[:n_pool])
     node.connections.pop(idx)
     genome._invalidate_topology()
+    count_before = genome.connection_count
     add_connection(genome, tracker)
+    if genome.connection_count == count_before:
+        # add_connection failed (no valid pair available) — restore removed connection
+        node.connections.insert(idx, removed_conn)
+        genome._invalidate_topology()
 
 
 def disable_connection(genome) -> None:

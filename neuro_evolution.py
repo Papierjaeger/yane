@@ -82,6 +82,7 @@ class EvaluationResult:
     elapsed_ms: float
     n_lamarck_steps: int = 0
     stopped_early: bool = False
+    early_stop_reason: str = ""     # "budget", "threshold", or "" if not stopped
     raw_fitnesses: list[float] = dataclasses.field(default_factory=list)
 
 
@@ -131,6 +132,7 @@ class NeuroEvolution:
         self._lamarck_top_k: float = 0.2   # only refine top 20 % of evaluated pool
         self._lamarck_n_applied: int = 0   # cumulative refinements performed
         self._lamarck_n_steps_total: int = 0  # cumulative hill-climbing steps
+        self._lamarck_time_ms: float = 0.0    # cumulative time spent in Lamarck refinement
         self._lamarck_n_blocked_top_k: int = 0  # refinements skipped by top-k gate
         self._n_evaluations: int = 1
         self._eval_aggregation: str = "mean"
@@ -653,8 +655,8 @@ class NeuroEvolution:
                         tmp = snap_path.with_suffix(".tmp")
                         tmp.write_text(json.dumps(snap), encoding="utf-8")
                         tmp.replace(snap_path)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _li("Failed to write crash state snapshot: %s", e)
 
             if self.min_fitness is not None and fitness >= self.min_fitness:
                 stop_reason = "target_reached"
@@ -853,11 +855,15 @@ class NeuroEvolution:
             "n_diversity_injection":    self._population._n_diversity_injection,
             "n_interspecies_crossover": self._population._n_interspecies_crossover,
             "n_early_stopped":          self._n_early_stopped,
+            # Mutation success tracking
+            "mutation_success":         dict(self._population._mutation_success),
+            "mutation_total":           dict(self._population._mutation_total),
             # Lamarck diagnostics
             "lamarck_mode":          "explicit" if self._lamarck_steps > 0 else
                                      ("adaptive" if self._lamarck_max_steps > 0 else "off"),
             "lamarck_n_applied":        self._lamarck_n_applied,
             "lamarck_n_steps_total":    self._lamarck_n_steps_total,
+            "lamarck_time_ms":          self._lamarck_time_ms,
             "lamarck_n_blocked_top_k":  self._lamarck_n_blocked_top_k,
             # Per-species Lamarck diagnostics (for GUI / debugging).
             "lamarck_per_species": [
@@ -867,6 +873,27 @@ class NeuroEvolution:
                     "stagnation_count": sp.stagnation_count,
                     "lamarck_n_applied": sp.lamarck_n_applied,
                     "lamarck_n_steps_total": sp.lamarck_n_steps_total,
+                }
+                for i, sp in enumerate(self._population._species)
+            ],
+            # Per-species mutation biases (for GUI / debugging).
+            "species_mutation_biases": [
+                {
+                    "species_idx": i,
+                    "members": len(sp.members),
+                    "biases": dict(sp.mutation_biases),
+                }
+                for i, sp in enumerate(self._population._species)
+            ],
+            # Species lineage (for GUI / debugging).
+            "species_lineage": [
+                {
+                    "species_idx": i,
+                    "members": len(sp.members),
+                    "age": self._population._spawn_count - sp.created_at_spawn,
+                    "parent_species_id": sp.parent_species_id,
+                    "merge_count": sp.merge_count,
+                    "stagnation_count": sp.stagnation_count,
                 }
                 for i, sp in enumerate(self._population._species)
             ],
@@ -918,6 +945,32 @@ class NeuroEvolution:
             info["eval_time_p95_ms"]    = sorted_times[max(0, p95_idx)]
             info["eval_time_max_ms"]    = sorted_times[-1]
 
+        # ── Fitness landscape diagnostics ──────────────────────────────────
+        # Plateau ratio: how close to full stagnation (0 = fresh progress, 1 = hard stuck)
+        stag_th = max(1, self._population.stagnation_threshold)
+        info["plateau_ratio"] = min(1.0, self._population.stagnation_count / stag_th)
+
+        # Fitness histogram: 10 equal-width bins covering [min, max] across evaluated genomes
+        fitnesses = [g.fitness for g in self._population._evaluated]
+        if len(fitnesses) >= 2:
+            f_min, f_max = min(fitnesses), max(fitnesses)
+            if f_max > f_min:
+                bins = 10
+                bin_width = (f_max - f_min) / bins
+                hist = [0] * bins
+                for f in fitnesses:
+                    idx = min(bins - 1, int((f - f_min) / bin_width))
+                    hist[idx] += 1
+                info["fitness_histogram"] = {
+                    "min": f_min, "max": f_max, "bins": bins,
+                    "counts": hist,
+                    "bin_edges": [f_min + i * bin_width for i in range(bins + 1)],
+                }
+            else:
+                info["fitness_histogram"] = None
+        else:
+            info["fitness_histogram"] = None
+
         return info
 
     def set_target_species(self, n: int) -> None:
@@ -928,12 +981,58 @@ class NeuroEvolution:
         more structural niches and help escape local optima (especially for
         XOR-like tasks where intermediate structures are temporarily worse).
 
+        Pass 0 to auto-compute from population size: ``sqrt(pop_size)``.
         Default: 5.  For small discrete-mapping tasks (binary increment,
         XOR variants): 10–20 works significantly better.
         """
-        n = max(1, n)
         if self._population is not None:
-            self._population._target_species = n
+            self._population._target_species = max(1, n) if n > 0 else 0
+
+    def set_speciation_metric(self, metric: str) -> None:
+        """Choose the compatibility metric used for species assignment.
+
+        ``"topology"`` (default):
+            Standard NEAT compatibility — considers all connections including
+            disabled ones.  Fast, cached.
+
+        ``"topology_no_disabled"``:
+            Ignores disabled connections.  Genomes that differ only in their
+            disable/enable patterns become more compatible, encouraging species
+            to specialise in different structural subsets.  Slightly slower
+            (cache is skipped for accuracy).
+        """
+        if metric not in ("topology", "topology_no_disabled"):
+            raise ValueError(f"Unknown speciation metric: {metric}")
+        if self._population is not None:
+            self._population._speciation_metric = metric
+
+    # ── Getters ────────────────────────────────────────────────────────────
+
+    def get_config(self) -> dict:
+        """Return the full configuration dict (same format as config.json)."""
+        return self._config_dict()
+
+    def get_target_species(self) -> int:
+        return (self._population._target_species if self._population is not None
+                else self._config_dict().get("target_species", 5))
+
+    def get_elitism(self) -> tuple[int, int]:
+        if self._population is not None:
+            return self._population.elite_count, self._population.species_elite_count
+        return self._elite_count, self._species_elite_count
+
+    def get_lamarck_mode(self) -> str:
+        if self._lamarck_steps > 0:
+            return "explicit"
+        if self._lamarck_max_steps > 0:
+            return "adaptive"
+        return "off"
+
+    def get_speciation_metric(self) -> str:
+        return (self._population._speciation_metric if self._population is not None
+                else "topology")
+
+    # ── Advanced configuration setters ────────────────────────────────────
 
     def set_fitness_shaping(self, enabled: bool) -> None:
         """Enable or disable rank-based fitness shaping before selection.
@@ -966,6 +1065,24 @@ class NeuroEvolution:
         rate = max(0.0, min(1.0, rate))
         if self._population is not None:
             self._population._interspecies_crossover_rate = rate
+
+    def set_spike_rate(self, rate: float) -> None:
+        """Set the initial spike mutation rate for new connections.
+
+        Spike mutation replaces a connection's weight with a fresh random
+        sample from N(0, sigma_global) instead of perturbing it — a form
+        of "hard reset" that helps escape local optima.  The rate self-adapts
+        from this initial value.
+
+        Default: 0.05.  Range: [0.001, 0.3].
+        """
+        rate = max(0.001, min(0.3, rate))
+        # Apply to all existing connections' spike_rate attribute.
+        if self._population is not None:
+            for genome in self._population._evaluated:
+                for node in genome.nodes:
+                    for conn in node.connections:
+                        conn.spike_rate = rate
 
     def set_elitism(
         self,
@@ -1036,6 +1153,7 @@ class NeuroEvolution:
             "tracker": self._tracker,
             "lamarck_n_applied": self._lamarck_n_applied,
             "lamarck_n_steps_total": self._lamarck_n_steps_total,
+            "lamarck_time_ms": self._lamarck_time_ms,
             "lamarck_n_blocked_top_k": self._lamarck_n_blocked_top_k,
             "n_invalid_fitness": self._n_invalid_fitness,
             "n_clipped_fitness": self._n_clipped_fitness,
@@ -1070,11 +1188,27 @@ class NeuroEvolution:
         payload = pickle.loads(path.read_bytes())
         if not isinstance(payload, dict) or payload.get("version") != 1:
             raise ValueError(f"Unsupported checkpoint format in {path}")
+        # Validate required keys exist to catch corruption early.
+        _required = {"config", "population", "tracker"}
+        _missing = _required - payload.keys()
+        if _missing:
+            raise ValueError(
+                f"Checkpoint is missing required keys: {_missing}. "
+                f"The file may be corrupted or from an older version."
+            )
+        # Type validation: prevent malicious/corrupted pickles from injecting wrong types.
+        from yane.evolution.population import Population
+        from yane.evolution.innovation import InnovationTracker
+        if not isinstance(payload["population"], Population):
+            raise TypeError("Checkpoint 'population' is not a Population object")
+        if not isinstance(payload["tracker"], (InnovationTracker, type(None))):
+            raise TypeError("Checkpoint 'tracker' is not an InnovationTracker")
         cfg = payload["config"]
         self._population  = payload["population"]
         self._tracker     = payload["tracker"]
         self._lamarck_n_applied       = payload.get("lamarck_n_applied", 0)
         self._lamarck_n_steps_total   = payload.get("lamarck_n_steps_total", 0)
+        self._lamarck_time_ms         = payload.get("lamarck_time_ms", 0.0)
         self._lamarck_n_blocked_top_k = payload.get("lamarck_n_blocked_top_k", 0)
         self._n_invalid_fitness       = payload.get("n_invalid_fitness", 0)
         self._n_clipped_fitness       = payload.get("n_clipped_fitness", 0)
@@ -1200,6 +1334,7 @@ class NeuroEvolution:
         start = time.perf_counter()
         raw: list[float] = []
         stopped_early = False
+        early_stop_reason = ""
 
         if inspect.isgeneratorfunction(fitness_fn):
             gen = fitness_fn(genome)
@@ -1222,6 +1357,7 @@ class NeuroEvolution:
                             if estimated < threshold:
                                 gen.close()
                                 stopped_early = True
+                                early_stop_reason = "threshold"
                                 self._n_early_stopped += 1
                                 break
             except StopIteration:
@@ -1266,6 +1402,7 @@ class NeuroEvolution:
             elapsed_ms=elapsed_ms,
             n_lamarck_steps=n_lamarck_steps,
             stopped_early=stopped_early,
+            early_stop_reason=early_stop_reason,
             raw_fitnesses=raw,
         )
 
@@ -1301,6 +1438,7 @@ class NeuroEvolution:
         if not (0.0 < sigma < 1e6):
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
+        t0 = time.perf_counter()
         best_fitness = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
 
         for _ in range(steps):
@@ -1319,6 +1457,7 @@ class NeuroEvolution:
                 for n, b in zip(nodes, saved_biases):
                     n.bias = b
 
+        self._lamarck_time_ms += (time.perf_counter() - t0) * 1000.0
         return best_fitness
 
     def _adaptive_lamarck_steps(self, genome: Genome, fitness: float) -> int:

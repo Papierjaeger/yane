@@ -774,3 +774,63 @@ class WeightHistogram(QWidget):
             painter.drawText(pad_l + 2, pad_t + 8, f"Weights ({len(self._weights)})")
         finally:
             painter.end()
+
+
+class FitnessHistogram(QWidget):
+    """Bar chart of fitness distribution across the evaluated population."""
+
+    _BINS = 10
+    _C_BAR = QColor("#a6e3a170")      # green-ish bar (fitness = good)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._data: dict | None = None
+        self.setMinimumHeight(55)
+        self.setMaximumHeight(65)
+
+    def set_data(self, data: dict | None) -> None:
+        """*data* is the ``fitness_histogram`` dict from population_memory_info()."""
+        self._data = data
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            w, h = self.width(), self.height()
+            pad_l, pad_r, pad_t, pad_b = 6, 6, 5, 14
+
+            font = QFont(); font.setPointSize(6)
+            painter.setFont(font)
+
+            if not self._data:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                                 "No fitness data")
+                return
+
+            counts = self._data["counts"]
+            f_min = self._data["min"]
+            f_max = self._data["max"]
+            max_count = max(counts) if counts else 1
+            n_bins = len(counts)
+            chart_w = w - pad_l - pad_r
+            chart_h = h - pad_t - pad_b
+            bar_w = chart_w / n_bins
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self._C_BAR))
+            for i, count in enumerate(counts):
+                bh = chart_h * count / max_count if max_count > 0 else 0
+                painter.drawRect(QRectF(pad_l + i * bar_w + 0.5,
+                                        h - pad_b - bh, bar_w - 1.0, bh))
+
+            painter.setPen(_C_TEXT)
+            painter.drawText(pad_l, h - 2, f"{f_min:.2f}")
+            tw = len(f"{f_max:.2f}") * 5
+            painter.drawText(w - pad_r - tw, h - 2, f"{f_max:.2f}")
+            total = sum(counts)
+            painter.drawText(pad_l + 2, pad_t + 8, f"Fitness ({total})")
+        finally:
+            painter.end()

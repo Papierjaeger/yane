@@ -235,10 +235,10 @@ class TrainingWorker(QThread):
                     genomes = self._yane.next_genome_batch(n_workers)
                     futures = [pool.submit(self._yane._run_evaluations, g, fn) for fn, g in zip(eval_fns, genomes)]
                     timed = [f.result() for f in futures]
-                    fitnesses = [fitness for fitness, _elapsed_ms in timed]
+                    fitnesses = [r.fitness for r in timed]
                     results = [
-                        (genome, fitness, elapsed_ms)
-                        for genome, (fitness, elapsed_ms) in zip(genomes, timed)
+                        (genome, r.fitness, r.elapsed_ms)
+                        for genome, r in zip(genomes, timed)
                     ]
                     self._yane.submit_fitness_batch(results)
                     self._iteration += len(results)
@@ -297,7 +297,8 @@ class TrainingWorker(QThread):
             try:
                 seed_fn = self._make_eval_fn(None)
                 seed_g  = self._yane.next_genome()
-                seed_fit, eval_ms = self._yane._run_evaluations(seed_g, seed_fn)
+                seed_result = self._yane._run_evaluations(seed_g, seed_fn)
+                seed_fit, eval_ms = seed_result.fitness, seed_result.elapsed_ms
                 self._yane.submit_fitness(seed_fit, eval_ms)
                 self._iteration += 1
                 _close_env(seed_fn)

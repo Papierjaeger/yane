@@ -25,11 +25,12 @@ class TestPopulation(unittest.TestCase):
         self.assertEqual(pop.evaluated_count, 1)
         self.assertEqual(pop.unevaluated_count, 0)
 
-    def test_double_submit_is_noop(self):
+    def test_double_submit_raises_error(self):
         pop = self._make_population()
         g = pop.select_for_evaluation()
         pop.submit(g, -1.0)
-        pop.submit(g, -0.5)   # second submit must be ignored
+        with self.assertRaises(ValueError):
+            pop.submit(g, -0.5)   # second submit must raise
         self.assertEqual(pop.evaluated_count, 1)
 
     def test_population_stays_bounded(self):
