@@ -869,6 +869,41 @@ class Population:
                 smart_mutation.add_connection(g, self._tracker)
             self._unevaluated.append(g)
 
+    def _select_parent_species(self) -> Species | None:
+        """Pick which species contributes the next offspring.
+
+        Score per species = avg_shared_fitness (shifted ≥ 0)
+                           × stagnation_factor   (0.1–1.0)
+                           × youth_bonus         (1.0–2.0 for new species)
+
+        Every species gets at least a tiny floor weight so no species is ever
+        completely shut out — premature loss of structural variants would otherwise
+        defeat the purpose of speciation.
+        """
+        active = [sp for sp in self._species if sp.members]
+        if not active:
+            return None
+        if len(active) == 1:
+            return active[0]
+
+        scores: list[float] = []
+        for sp in active:
+            avg_fit = sp.avg_shared_fitness()
+            shifted = max(0.0, avg_fit - self._min_shared_fitness + 1e-6)
+            stag_factor = max(0.1, 1.0 - sp.stagnation_count / max(1, self.stagnation_threshold))
+            age = self._spawn_count - sp.created_at_spawn
+            youth_bonus = 1.0 + max(0.0, 1.0 - age / max(1, self._min_species_age))
+            scores.append(max(1e-6, shifted * stag_factor * youth_bonus))
+
+        total = sum(scores)
+        r = random.random() * total
+        acc = 0.0
+        for sp, score in zip(active, scores):
+            acc += score
+            if r <= acc:
+                return sp
+        return active[-1]
+
     def _spawn_offspring(self) -> None:
         if not self._evaluated:
             if not self._unevaluated:
@@ -934,8 +969,6 @@ class Population:
         # and novelty — multiplying a negative shared_fitness by offspring_factor
         # inverts the ranking (larger factor → more negative → worse), which would
         # cause selection to prefer genomes with smaller offspring_factor.
-        k = min(3, len(self._evaluated))
-        candidates = random.sample(self._evaluated, k)
         min_fit = self._min_shared_fitness   # cached by _compute_shared_fitness(), O(1)
         def _selection_score(g: Genome) -> float:
             efficiency_factor = 1.0 - ew * (1.0 - g.efficiency_score)
@@ -949,6 +982,16 @@ class Population:
             g.selection_score = score
             return score
 
+        # Species-budget selection: choose which species spawns next (proportional
+        # to avg shared fitness × stagnation_factor × youth_bonus), then run
+        # tournament within that species only.  Falls back to global pool when
+        # no species is assigned yet or the selected species has no members.
+        _parent_sp = self._select_parent_species()
+        _pool = (_parent_sp.members
+                 if _parent_sp is not None and _parent_sp.members
+                 else self._evaluated)
+        k = min(3, len(_pool))
+        candidates = random.sample(_pool, k)
         parent = max(candidates, key=_selection_score)
 
         # Note: elite protection is handled by _prune() which never removes the

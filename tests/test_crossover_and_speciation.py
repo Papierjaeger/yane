@@ -588,5 +588,69 @@ class TestPopulationAPI(unittest.TestCase):
                            "Crossover must produce a genome with nodes")
 
 
+class TestSpeciesBudget(unittest.TestCase):
+    """Tests for _select_parent_species() species-budget selection."""
+
+    def _pop_with_two_species(self, fit_a=1.0, fit_b=0.1, stag_a=0, stag_b=0):
+        """Return a Population with two manually-constructed species."""
+        pop = Population(max_size=20)
+        g_a = Genome(); g_a.fitness = fit_a; g_a.shared_fitness = fit_a
+        g_b = Genome(); g_b.fitness = fit_b; g_b.shared_fitness = fit_b
+        pop._evaluated = [g_a, g_b]
+        pop._min_shared_fitness = min(fit_a, fit_b)
+        from yane.evolution.species import Species
+        sp_a = Species(g_a, spawn_count=0)
+        sp_a.members = [g_a]
+        sp_a.stagnation_count = stag_a
+        sp_b = Species(g_b, spawn_count=0)
+        sp_b.members = [g_b]
+        sp_b.stagnation_count = stag_b
+        pop._species = [sp_a, sp_b]
+        return pop, sp_a, sp_b
+
+    def test_high_fitness_species_selected_more_often(self):
+        pop, sp_a, sp_b = self._pop_with_two_species(fit_a=10.0, fit_b=0.01)
+        counts = {id(sp_a): 0, id(sp_b): 0}
+        for _ in range(500):
+            chosen = pop._select_parent_species()
+            counts[id(chosen)] += 1
+        self.assertGreater(counts[id(sp_a)], counts[id(sp_b)],
+                           "High-fitness species must be chosen more often")
+
+    def test_stagnating_species_selected_less(self):
+        # sp_b stagnates heavily, sp_a fresh
+        pop, sp_a, sp_b = self._pop_with_two_species(fit_a=1.0, fit_b=1.0,
+                                                      stag_a=0, stag_b=100)
+        counts = {id(sp_a): 0, id(sp_b): 0}
+        for _ in range(500):
+            chosen = pop._select_parent_species()
+            counts[id(chosen)] += 1
+        self.assertGreater(counts[id(sp_a)], counts[id(sp_b)],
+                           "Non-stagnating species must win over stagnating one")
+
+    def test_no_species_returns_none(self):
+        pop = Population(max_size=10)
+        pop._species = []
+        self.assertIsNone(pop._select_parent_species())
+
+    def test_single_species_returned_directly(self):
+        pop = Population(max_size=10)
+        g = Genome(); g.shared_fitness = 1.0
+        from yane.evolution.species import Species
+        sp = Species(g); sp.members = [g]
+        pop._species = [sp]
+        pop._min_shared_fitness = 1.0
+        self.assertIs(pop._select_parent_species(), sp)
+
+    def test_stagnating_species_never_fully_excluded(self):
+        """Even a fully-stagnated species must be chosen occasionally (floor ≥ 0.1)."""
+        pop, sp_a, sp_b = self._pop_with_two_species(fit_a=1.0, fit_b=1.0,
+                                                      stag_a=0, stag_b=10_000)
+        chosen_b = sum(1 for _ in range(500)
+                       if pop._select_parent_species() is sp_b)
+        self.assertGreater(chosen_b, 0,
+                           "Stagnating species must still occasionally be chosen")
+
+
 if __name__ == '__main__':
     unittest.main()
