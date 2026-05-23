@@ -73,16 +73,16 @@ class TestConfigureEndpoint(unittest.TestCase):
     def test_configure_lamarck_steps(self):
         r = self._post(n_inputs=2, n_outputs=1, lamarck_steps=5, lamarck_sigma=0.8)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(self.state._lamarck_steps, 5)
-        self.assertAlmostEqual(self.state._lamarck_sigma, 0.8)
+        self.assertEqual(self.state._lamarck.steps, 5)
+        self.assertAlmostEqual(self.state._lamarck.sigma, 0.8)
 
     def test_configure_lamarck_adaptive(self):
         r = self._post(n_inputs=2, n_outputs=1,
                        lamarck_adaptive_max_steps=4,
                        lamarck_adaptive_top_k=0.3)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(self.state._lamarck_max_steps, 4)
-        self.assertAlmostEqual(self.state._lamarck_top_k, 0.3)
+        self.assertEqual(self.state._lamarck.max_steps, 4)
+        self.assertAlmostEqual(self.state._lamarck.top_k, 0.3)
 
     def test_configure_missing_n_inputs_returns_422(self):
         r = self._post(n_outputs=1)

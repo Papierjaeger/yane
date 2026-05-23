@@ -226,9 +226,9 @@ class TestMultiEval(unittest.TestCase):
     def test_set_multi_eval_stores_params(self):
         yane = self._make(n_inputs=2, n_outputs=1)
         yane.set_multi_eval(n=5, aggregation="median", sigma_penalty=0.3)
-        self.assertEqual(yane._n_evaluations, 5)
-        self.assertEqual(yane._eval_aggregation, "median")
-        self.assertAlmostEqual(yane._eval_sigma_penalty, 0.3)
+        self.assertEqual(yane._runner.n_evaluations, 5)
+        self.assertEqual(yane._runner.aggregation, "median")
+        self.assertAlmostEqual(yane._runner.sigma_penalty, 0.3)
 
     def test_set_multi_eval_invalid_n(self):
         yane = self._make(n_inputs=2, n_outputs=1)
@@ -337,7 +337,7 @@ class TestMultiEval(unittest.TestCase):
         from yane import NeuroEvolution
         yane = NeuroEvolution()
         yane.configure(n_inputs=1, n_outputs=1)
-        self.assertEqual(yane._n_evaluations, 1)
+        self.assertEqual(yane._runner.n_evaluations, 1)
         yane.set_max_iterations(1)
         call_count = [0]
 
@@ -396,30 +396,30 @@ class TestFitnessSanitizing(unittest.TestCase):
 
     def test_invalid_counter_increments(self):
         yane = self._make(sanitize=True, fallback=0.0)
-        self.assertEqual(yane._n_invalid_fitness, 0)
+        self.assertEqual(yane._sanitizer.n_invalid, 0)
         g = yane.next_genome()
         yane.submit_fitness(float("nan"))
-        self.assertEqual(yane._n_invalid_fitness, 1)
+        self.assertEqual(yane._sanitizer.n_invalid, 1)
         g = yane.next_genome()
         yane.submit_fitness(float("-inf"))
-        self.assertEqual(yane._n_invalid_fitness, 2)
+        self.assertEqual(yane._sanitizer.n_invalid, 2)
 
     def test_clipped_counter_increments(self):
         yane = self._make(sanitize=True, clip_low=0.0, clip_high=1.0)
         g = yane.next_genome()
         yane.submit_fitness(-5.0)
-        self.assertEqual(yane._n_clipped_fitness, 1)
+        self.assertEqual(yane._sanitizer.n_clipped, 1)
         g = yane.next_genome()
         yane.submit_fitness(99.0)
-        self.assertEqual(yane._n_clipped_fitness, 2)
+        self.assertEqual(yane._sanitizer.n_clipped, 2)
 
     def test_sanitize_disabled_by_default(self):
         yane = self._make(sanitize=False)
-        self.assertFalse(yane._sanitize)
+        self.assertFalse(yane._sanitizer.enabled)
         # nan passes through unmodified when disabled
         g = yane.next_genome()
         yane.submit_fitness(float("nan"))
-        self.assertEqual(yane._n_invalid_fitness, 0)
+        self.assertEqual(yane._sanitizer.n_invalid, 0)
 
     def test_invalid_fitness_in_train(self):
         yane = self._make(sanitize=True, fallback=-999.0)
@@ -429,7 +429,7 @@ class TestFitnessSanitizing(unittest.TestCase):
             call_count[0] += 1
             return float("nan")
         yane.train(evaluate)
-        self.assertEqual(yane._n_invalid_fitness, 3)
+        self.assertEqual(yane._sanitizer.n_invalid, 3)
         # Best genome should have fallback fitness, not nan
         import math
         self.assertTrue(math.isfinite(yane.get_best().fitness))
@@ -454,7 +454,7 @@ class TestFitnessSanitizing(unittest.TestCase):
         yane.submit_fitness(1.0)  # first eval needed for batch
         g2 = yane.next_genome_batch(1)
         yane.submit_fitness_batch([(g2[0], float("nan"), None)])
-        self.assertEqual(yane._n_invalid_fitness, 1)
+        self.assertEqual(yane._sanitizer.n_invalid, 1)
 
 
 class TestPopulationMemoryInfo(unittest.TestCase):
@@ -539,7 +539,7 @@ class TestEarlyStopping(unittest.TestCase):
     def test_set_early_stopping_stores_factor(self):
         yane = self._make()
         yane.set_early_stopping(factor=0.5)
-        self.assertEqual(yane._early_stopping_factor, 0.5)
+        self.assertEqual(yane._runner.early_stopping_factor, 0.5)
 
     def test_generator_fn_all_episodes_run_when_no_early_stopping(self):
         """Without early stopping, all yielded episodes are consumed."""
@@ -566,7 +566,7 @@ class TestEarlyStopping(unittest.TestCase):
 
         yane.set_early_stopping(factor=0.0)  # stop when estimated < best (no slack)
         # Pre-calibrate N so stopping fires immediately without a warm-up run.
-        yane._early_stopping_n = 100
+        yane._runner.early_stopping_n = 100
 
         episode_count = [0]
 
@@ -594,7 +594,7 @@ class TestEarlyStopping(unittest.TestCase):
 
         yane.set_max_iterations(3)
         yane.train(poor_gen)
-        self.assertGreater(yane._n_early_stopped, 0)
+        self.assertGreater(yane._runner.n_early_stopped, 0)
 
     def test_n_early_stopped_in_mem_info(self):
         yane = self._make()
