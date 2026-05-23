@@ -1,9 +1,11 @@
 from __future__ import annotations
 import gc
+import json
 import math
 import random
 import statistics
 import time
+from pathlib import Path
 from typing import Callable
 
 
@@ -66,6 +68,32 @@ from yane.evolution.efficiency_penalty import EfficiencyPenalty
 from yane.util.resource_guard import ResourceGuard
 
 
+def _derive_run_name(fitness_fn: Callable) -> str:
+    """Derive a log category name from a fitness function.
+
+    Uses ``fitness_fn.__name__`` unless it is a lambda or other unhelpful
+    name — then falls back to ``"training"``.
+    """
+    raw = getattr(fitness_fn, '__name__', None)
+    if raw and raw != '<lambda>':
+        return raw
+    return "training"
+
+
+def _compute_fitness_iqr(evaluated: list) -> float:
+    """Compute the interquartile range (IQR) of fitness values.
+
+    Returns 0.0 if fewer than 4 genomes are evaluated.
+    """
+    if len(evaluated) < 4:
+        return 0.0
+    fits = sorted(g.fitness for g in evaluated)
+    n = len(fits)
+    q1 = fits[max(0, int(n * 0.25))]
+    q3 = fits[min(n - 1, int(n * 0.75))]
+    return q3 - q1
+
+
 class NeuroEvolution:
     def __init__(self) -> None:
         self._population: Population | None = None
@@ -85,6 +113,7 @@ class NeuroEvolution:
         self._lamarck_top_k: float = 0.2   # only refine top 20 % of evaluated pool
         self._lamarck_n_applied: int = 0   # cumulative refinements performed
         self._lamarck_n_steps_total: int = 0  # cumulative hill-climbing steps
+        self._lamarck_n_blocked_top_k: int = 0  # refinements skipped by top-k gate
         self._n_evaluations: int = 1
         self._eval_aggregation: str = "mean"
         self._eval_sigma_penalty: float = 0.0
@@ -97,7 +126,17 @@ class NeuroEvolution:
         self._sanitize_clip_low: float | None = None
         self._sanitize_clip_high: float | None = None
         self._n_invalid_fitness: int = 0   # nan / inf seen
-        self._n_clipped_fitness: int = 0   # values clamped by clip bounds
+        self._n_clipped_fitness: int = 0   # values clipped by clip bounds
+        # Cached configure() parameters for logging / introspection.
+        self._n_inputs: int = 0
+        self._n_outputs: int = 0
+        self._max_nodes: int | None = None
+        self._max_connections: int | None = None
+        self._n_initial_hidden: int = 0
+        self._stateful: bool = True
+        # Structured logging
+        self._log_run_dir: Path | None = None
+        self._log_run_name: str | None = None
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -136,6 +175,14 @@ class NeuroEvolution:
         from yane.core.connection import Connection
         from yane.util.activation import ActivationType
         import random
+
+        # Cache for logging / introspection.
+        self._n_inputs = n_inputs
+        self._n_outputs = n_outputs
+        self._max_nodes = max_nodes
+        self._max_connections = max_connections
+        self._n_initial_hidden = n_initial_hidden
+        self._stateful = stateful
 
         tracker = self._tracker
         initial = Genome()
@@ -322,19 +369,94 @@ class NeuroEvolution:
         self._lamarck_sigma = sigma
         self._lamarck_steps = 0  # adaptive mode requires explicit to be off
 
+    def _config_dict(self) -> dict:
+        """Return all NeuroEvolution settings as a JSON-serializable dict."""
+        pop = self._population
+        return {
+            # Network
+            "n_inputs": self._n_inputs,
+            "n_outputs": self._n_outputs,
+            "max_nodes": self._max_nodes,
+            "max_connections": self._max_connections,
+            "n_initial_hidden": self._n_initial_hidden,
+            "stateful": self._stateful,
+            # Population
+            "population_size": self._population_size,
+            "n_workers": self._n_workers,
+            "target_species": pop._target_species if pop else None,
+            "compat_threshold": pop._compat_threshold if pop else None,
+            "elite_count": self._elite_count,
+            "species_elite_count": self._species_elite_count,
+            # Stopping criteria
+            "min_fitness": self.min_fitness,
+            "max_iterations": self.max_iterations,
+            # Evaluation
+            "n_evaluations": self._n_evaluations,
+            "eval_aggregation": self._eval_aggregation,
+            "eval_sigma_penalty": self._eval_sigma_penalty,
+            # Lamarck
+            "lamarck_mode": ("explicit" if self._lamarck_steps > 0 else
+                             ("adaptive" if self._lamarck_max_steps > 0 else "off")),
+            "lamarck_steps": self._lamarck_steps,
+            "lamarck_max_steps": self._lamarck_max_steps,
+            "lamarck_top_k": self._lamarck_top_k,
+            "lamarck_sigma": self._lamarck_sigma,
+            # Efficiency penalty
+            "efficiency_penalty": (
+                {"max_ms": self._efficiency_penalty.max_ms,
+                 "penalty_per_ms": self._efficiency_penalty.penalty_per_ms}
+                if self._efficiency_penalty is not None else None
+            ),
+            # Resource limits
+            "resource_check_interval": self._resource_check_interval,
+            "memory_limit_gb": self._resource_guard.max_process_gb,
+            # Fitness sanitizing
+            "sanitize_enabled": self._sanitize,
+            "sanitize_fallback": self._sanitize_fallback,
+            "sanitize_clip_low": self._sanitize_clip_low,
+            "sanitize_clip_high": self._sanitize_clip_high,
+        }
+
     # -------------------------------------------------------------------------
     # Training (automatic loop)
     # -------------------------------------------------------------------------
 
-    def train(self, fitness_fn: Callable[[Genome], float]) -> int:
+    def train(
+        self,
+        fitness_fn: Callable[[Genome], float],
+        run_name: str | None = None,
+    ) -> int:
         """Run the evolutionary loop.
 
         Runs until min_fitness is reached or max_iterations is hit.
         If neither is set, runs indefinitely.
         Automatically pauses when system memory is low and resumes when it recovers.
-        Returns the number of iterations performed.
+
+        Structured logging is automatically set up: a timestamped directory
+        under ``logs/<run_name>/`` receives ``run.log``, ``config.json``,
+        ``fitness_history.csv`` and ``best_genome.json``.
+
+        Args:
+            fitness_fn: Function that evaluates a genome and returns fitness.
+            run_name: Category name for logs (default: derived from *fitness_fn*).
+        Returns:
+            Number of iterations performed.
         """
         self._ensure_configured()
+
+        # --- Structured logging setup ----------------------------------------
+        name = run_name or _derive_run_name(fitness_fn)
+        self._log_run_name = name
+        from yane.util.logger import setup_logging as _setup, write_json as _wj, write_csv as _wc, log_info as _li
+        self._log_run_dir = _setup(name)
+        _li("Training started  run_name=%s  pop_size=%d  max_iter=%s  min_fitness=%s",
+            name, self._population_size, self.max_iterations, self.min_fitness)
+        _wj(self._log_run_dir / "config.json", self._config_dict())
+
+        # --- Logging state ---------------------------------------------------
+        _log_interval = max(1, self._population_size // 10)  # log ~10× per generation
+        _csv_header = "iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections"
+        _csv_path = self._log_run_dir / "fitness_history.csv"
 
         lamarck = self._lamarck_steps > 0
 
@@ -354,15 +476,95 @@ class NeuroEvolution:
             self._population.submit(genome, fitness, elapsed_ms)
             iterations += 1
 
+            # --- Periodic CSV logging ---------------------------------------
+            if iterations % _log_interval == 0:
+                mem = self.population_memory_info()
+                _wc(_csv_path, _csv_header,
+                    f"{iterations},"
+                    f"{mem.get('max_fitness', 0)},"
+                    f"{mem.get('avg_fitness', 0)},"
+                    f"{mem.get('median_fitness', 0)},"
+                    f"{mem.get('fitness_iqr', 0)},"
+                    f"{mem.get('species_count', 0)},"
+                    f"{mem.get('stagnation_count', 0)},"
+                    f"{mem.get('largest_genome_nodes', 0)},"
+                    f"{mem.get('largest_genome_connections', 0)}")
+
+            # --- Periodic heartbeat + crash-safe snapshot (every 100) -------
+            if iterations % 100 == 0:
+                mem = self.population_memory_info()
+                _li("iter=%d  best=%.4f  avg=%.2f  species=%d  stagn=%d  nodes=%d  conns=%d",
+                    iterations,
+                    mem.get("max_fitness", 0.0),
+                    mem.get("avg_fitness", 0.0),
+                    mem.get("species_count", 0),
+                    mem.get("stagnation_count", 0),
+                    mem.get("largest_genome_nodes", 0),
+                    mem.get("largest_genome_connections", 0))
+                # Crash-safe state snapshot — survives segfaults.
+                if self._log_run_dir is not None:
+                    try:
+                        import json
+                        snap = {
+                            "iteration": iterations,
+                            "best_fitness": mem.get("max_fitness"),
+                            "avg_fitness": mem.get("avg_fitness"),
+                            "fitness_iqr": mem.get("fitness_iqr"),
+                            "species_count": mem.get("species_count"),
+                            "stagnation_count": mem.get("stagnation_count"),
+                            "nodes": mem.get("largest_genome_nodes"),
+                            "connections": mem.get("largest_genome_connections"),
+                            "lamarck_n_applied": mem.get("lamarck_n_applied"),
+                        }
+                        snap_path = self._log_run_dir / "_crash_state.json"
+                        tmp = snap_path.with_suffix(".tmp")
+                        tmp.write_text(json.dumps(snap), encoding="utf-8")
+                        tmp.replace(snap_path)
+                    except Exception:
+                        pass
+
             if self.min_fitness is not None and fitness >= self.min_fitness:
+                _li("Training stopped: target fitness reached  fitness=%.6f  iterations=%d",
+                    fitness, iterations)
                 break
             if self.max_iterations is not None and iterations >= self.max_iterations:
+                _li("Training stopped: max iterations reached  iterations=%d", iterations)
                 break
 
             if iterations % self._resource_check_interval == 0:
                 self._enforce_memory_limit()
                 while not self._resource_guard.system_ok():
                     time.sleep(0.5)
+
+        # --- End-of-run artefacts -------------------------------------------
+        if self._log_run_dir is not None:
+            import pickle
+            best = self.get_best()
+            pkl_path = self._log_run_dir / "best_genome.pkl"
+            pkl_path.write_bytes(pickle.dumps(best))
+            # Human-readable summary.
+            mem = self.population_memory_info()
+            _wj(self._log_run_dir / "summary.json", {
+                "run_name": name,
+                "stop_reason": ("target_reached" if self.min_fitness is not None and best.fitness >= self.min_fitness
+                                else "max_iterations" if self.max_iterations is not None
+                                else "manual"),
+                "iterations": iterations,
+                "best_fitness": best.fitness,
+                "best_nodes": len(best.nodes),
+                "best_connections": best.connection_count,
+                "final_species_count": mem.get("species_count", 0),
+                "final_stagnation": mem.get("stagnation_count", 0),
+                "lamarck_n_applied":       mem.get("lamarck_n_applied", 0),
+                "lamarck_n_steps_total":   mem.get("lamarck_n_steps_total", 0),
+                "lamarck_n_blocked_top_k": mem.get("lamarck_n_blocked_top_k", 0),
+                "n_invalid_fitness": mem.get("n_invalid_fitness", 0),
+                "n_clipped_fitness": mem.get("n_clipped_fitness", 0),
+            })
+            _li("Training finished  best_fitness=%.6f  nodes=%d  connections=%d  iterations=%d  "
+                "lamarck_applied=%d  lamarck_blocked_top_k=%d",
+                best.fitness, len(best.nodes), best.connection_count, iterations,
+                mem.get("lamarck_n_applied", 0), mem.get("lamarck_n_blocked_top_k", 0))
 
         return iterations
 
@@ -427,6 +629,9 @@ class NeuroEvolution:
             "max_fitness": max((g.fitness for g in self._population._evaluated), default=0.0),
             "avg_fitness": (sum(g.fitness for g in self._population._evaluated)
                             / max(1, len(self._population._evaluated))),
+            "median_fitness": (statistics.median(g.fitness for g in self._population._evaluated)
+                               if self._population._evaluated else 0.0),
+            "fitness_iqr": _compute_fitness_iqr(self._population._evaluated),
             "n_evaluations":    self._n_evaluations,
             "eval_aggregation": self._eval_aggregation,
             # Elitism configuration
@@ -443,8 +648,20 @@ class NeuroEvolution:
             # Lamarck diagnostics
             "lamarck_mode":          "explicit" if self._lamarck_steps > 0 else
                                      ("adaptive" if self._lamarck_max_steps > 0 else "off"),
-            "lamarck_n_applied":     self._lamarck_n_applied,
-            "lamarck_n_steps_total": self._lamarck_n_steps_total,
+            "lamarck_n_applied":        self._lamarck_n_applied,
+            "lamarck_n_steps_total":    self._lamarck_n_steps_total,
+            "lamarck_n_blocked_top_k":  self._lamarck_n_blocked_top_k,
+            # Per-species Lamarck diagnostics (for GUI / debugging).
+            "lamarck_per_species": [
+                {
+                    "species_idx": i,
+                    "members": len(sp.members),
+                    "stagnation_count": sp.stagnation_count,
+                    "lamarck_n_applied": sp.lamarck_n_applied,
+                    "lamarck_n_steps_total": sp.lamarck_n_steps_total,
+                }
+                for i, sp in enumerate(self._population._species)
+            ],
             # Best genome topology history: list of (total_submitted, n_nodes, n_conn, fitness)
             "best_topology_history": self._population._best_topology_history,
         }
@@ -634,7 +851,7 @@ class NeuroEvolution:
         # Adaptive Lamarck: fires after the baseline is known, only when
         # _lamarck_steps == 0 (explicit mode is off) and stagnation is high.
         if self._lamarck_steps == 0:
-            n_steps = self._adaptive_lamarck_steps(fitness)
+            n_steps = self._adaptive_lamarck_steps(genome, fitness)
             if n_steps > 0:
                 fitness = self._lamarck_refine(
                     genome, fitness_fn,
@@ -643,6 +860,11 @@ class NeuroEvolution:
                 )
                 self._lamarck_n_applied += 1
                 self._lamarck_n_steps_total += n_steps
+                # Per-species tracking for diagnostics.
+                sp = self._population.get_species_for_genome(genome)
+                if sp is not None:
+                    sp.lamarck_n_applied += 1
+                    sp.lamarck_n_steps_total += n_steps
 
         return fitness, elapsed_ms
 
@@ -698,15 +920,31 @@ class NeuroEvolution:
 
         return best_fitness
 
-    def _adaptive_lamarck_steps(self, fitness: float) -> int:
-        """Compute how many Lamarck steps to apply based on stagnation + top-K.
+    def _adaptive_lamarck_steps(self, genome: Genome, fitness: float) -> int:
+        """Compute how many Lamarck steps to apply based on *species* stagnation + top-K.
+
+        Uses the genome's own species stagnation count when available, falling
+        back to the global population stagnation.  This targets refinement
+        effort at species that are locally stuck rather than spreading it
+        uniformly across the whole population.
 
         Returns 0 if adaptive mode is off or conditions aren't met.
         """
         if self._lamarck_max_steps <= 0 or self._population is None:
             return 0
         pop = self._population
-        stag_frac = min(1.0, pop.stagnation_count / max(1, pop.stagnation_threshold))
+
+        # --- Per-species stagnation (preferred) -------------------------------
+        sp = pop.get_species_for_genome(genome)
+        if sp is not None and sp.stagnation_count > 0:
+            stag_count = sp.stagnation_count
+            stag_threshold = pop.stagnation_threshold
+        else:
+            # Fallback: global stagnation (e.g. genome not yet assigned).
+            stag_count = pop.stagnation_count
+            stag_threshold = max(1, pop.stagnation_threshold)
+
+        stag_frac = min(1.0, stag_count / max(1, stag_threshold))
         n_steps = round(stag_frac * self._lamarck_max_steps)
         if n_steps <= 0:
             return 0
@@ -721,6 +959,21 @@ class NeuroEvolution:
                 [g.fitness for g in evaluated], reverse=True
             )[min(k - 1, len(evaluated) - 1)]
             if fitness < threshold:
+                self._lamarck_n_blocked_top_k += 1
+                # Warn at milestones when the gate consistently blocks at high stagnation.
+                # Common cause: n_evaluations=1 with a stochastic environment — stored
+                # pool fitness values are biased toward lucky episodes, making the
+                # threshold artificially high.  Fix: raise lamarck_top_k or increase
+                # n_evaluations.
+                if stag_frac >= 1.0 and self._lamarck_n_blocked_top_k in (100, 1000, 10_000):
+                    from yane.util.logger import log_warning
+                    log_warning(
+                        "Lamarck blocked %d× by top-k gate despite full stagnation "
+                        "(fitness=%.4f < pool-threshold=%.4f, top_k=%.2f). "
+                        "Consider n_evaluations>1 or lamarck_top_k=1.0 for noisy environments.",
+                        self._lamarck_n_blocked_top_k, fitness, threshold,
+                        self._lamarck_top_k,
+                    )
                 return 0
 
         return n_steps

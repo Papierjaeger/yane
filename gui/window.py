@@ -352,6 +352,18 @@ class LeftPanel(QWidget):
         lamarck_grp.addRow("Mode:",        self.lbl_lamarck_mode)
         lamarck_grp.addRow("Applied:",     self.lbl_lamarck_applied)
         lamarck_grp.addRow("Steps total:", self.lbl_lamarck_steps)
+        self.lbl_lamarck_per_species = _label("—", "mutRate")
+        self.lbl_lamarck_per_species.setToolTip(
+            "Mittlere Lamarck-Steps pro Species (nur Species mit >0 Mitgliedern).\n"
+            "Zeigt, ob die Lamarck-Last gleichmäßig oder auf wenige Species konzentriert ist.")
+        lamarck_grp.addRow("Ø steps/species:", self.lbl_lamarck_per_species)
+        self.lbl_lamarck_blocked = _label("—", "mutRate")
+        self.lbl_lamarck_blocked.setToolTip(
+            "Anzahl der Fälle, in denen Lamarck durch den top-k-Filter geblockt wurde.\n"
+            "Ein hoher Wert bei null 'Applied' deutet auf ein zu enges top-k-Gate hin —\n"
+            "typisch bei stochastischen Umgebungen mit n_evaluations=1.\n"
+            "Abhilfe: lamarck_top_k erhöhen oder n_evaluations > 1 setzen.")
+        lamarck_grp.addRow("Blocked (top-k):", self.lbl_lamarck_blocked)
         layout.addWidget(lamarck_grp)
 
         # ── Evaluation timing ─────────────────────────────────────────────
@@ -593,6 +605,17 @@ class LeftPanel(QWidget):
         n_steps_total = mem.get("lamarck_n_steps_total")
         if n_steps_total is not None:
             self.lbl_lamarck_steps.setText(str(n_steps_total))
+        per_species = mem.get("lamarck_per_species")
+        if per_species is not None:
+            non_empty = [s for s in per_species if s["members"] > 0]
+            if non_empty:
+                avg = sum(s["lamarck_n_steps_total"] for s in non_empty) / len(non_empty)
+                self.lbl_lamarck_per_species.setText(f"{avg:.1f}")
+            else:
+                self.lbl_lamarck_per_species.setText("—")
+        n_blocked = mem.get("lamarck_n_blocked_top_k")
+        if n_blocked is not None:
+            self.lbl_lamarck_blocked.setText(str(n_blocked))
 
         # Structure mutations
         self.lbl_rate_add_node.setText(f"{genome.mutation_add_node.bool_rate:.4f}")
@@ -1119,6 +1142,7 @@ class TrainingTab(QWidget):
 
         try:
             from yane import NeuroEvolution
+            from yane.util.logger import setup_logging as _setup_log, write_json as _wj, log_info as _li
             self._yane = NeuroEvolution()
             self._yane.configure(
                 n_inputs=self.spin_inputs.value(),
@@ -1157,6 +1181,18 @@ class TrainingTab(QWidget):
                 make_eval_fn = functools.partial(ex.make_eval, normalize=False)
             else:
                 make_eval_fn = ex.make_eval
+
+            # --- Structured logging for GUI runs ---------------------------
+            _log_dir = _setup_log(f"gui/{ex.name}")
+            self._yane._log_run_dir = _log_dir
+            self._yane._log_run_name = ex.name
+            _wj(_log_dir / "config.json", self._yane._config_dict())
+            _li("GUI training started  example=%s  pop_size=%d  target=%s",
+                ex.name, self.spin_pop.value(),
+                self.dspin_target.value() if self.dspin_target.value() > -1e9 else "none")
+            self._log_csv_path = _log_dir / "fitness_history.csv"
+            self._log_csv_header = "iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections"
+            self._log_csv_interval = max(1, self.spin_pop.value() // 10)
         except Exception as e:
             QMessageBox.critical(self, "Setup Error", str(e))
             return
@@ -1238,6 +1274,68 @@ class TrainingTab(QWidget):
         self.lbl_speed.setText(f"{iter_s:.1f} iter/s   {elapsed_str}")
         self.chart.add_point(fitness)
 
+        # --- Periodic CSV logging -------------------------------------------
+        csv_path = getattr(self, '_log_csv_path', None)
+        if csv_path is not None and iteration % self._log_csv_interval == 0:
+            try:
+                from yane.util.logger import write_csv
+                write_csv(csv_path, self._log_csv_header,
+                    f"{iteration},"
+                    f"{mem.get('max_fitness', 0)},"
+                    f"{mem.get('avg_fitness', 0)},"
+                    f"{mem.get('median_fitness', 0)},"
+                    f"{mem.get('fitness_iqr', 0)},"
+                    f"{mem.get('species_count', 0)},"
+                    f"{mem.get('stagnation_count', 0)},"
+                    f"{mem.get('largest_genome_nodes', 0)},"
+                    f"{mem.get('largest_genome_connections', 0)}")
+            except Exception as _e:
+                from yane.util.logger import log_warning
+                log_warning("CSV write failed at iteration %d: %s", iteration, _e)
+
+        # Track iteration count for summary.json.
+        self._log_iter_count = iteration
+
+        # --- Crash-safe state snapshot + heartbeat (every 100 iters) -------
+        # A segfault kills the process instantly — no atexit, no except.
+        # By writing state *before* the crash happens we can at least see
+        # the last known iteration, fitness, species, and topology.
+        if iteration % 100 == 0:
+            try:
+                import json
+                log_dir = getattr(self, '_log_run_dir', None)
+                if log_dir is not None:
+                    snap = {
+                        "iteration": iteration,
+                        "best_fitness": mem.get("max_fitness"),
+                        "avg_fitness": mem.get("avg_fitness"),
+                        "fitness_iqr": mem.get("fitness_iqr"),
+                        "species_count": mem.get("species_count"),
+                        "stagnation_count": mem.get("stagnation_count"),
+                        "nodes": mem.get("largest_genome_nodes"),
+                        "connections": mem.get("largest_genome_connections"),
+                        "lamarck_n_applied": mem.get("lamarck_n_applied"),
+                        "lamarck_mode": mem.get("lamarck_mode"),
+                        "n_invalid_fitness": mem.get("n_invalid_fitness"),
+                    }
+                    snap_path = log_dir / "_crash_state.json"
+                    tmp = snap_path.with_suffix(".tmp")
+                    tmp.write_text(json.dumps(snap), encoding="utf-8")
+                    tmp.replace(snap_path)
+
+                from yane.util.logger import log_info
+                log_info("iter=%d  best=%.4f  avg=%.2f  species=%d  stagn=%d  nodes=%d  conns=%d",
+                         iteration,
+                         mem.get("max_fitness", 0.0),
+                         mem.get("avg_fitness", 0.0),
+                         mem.get("species_count", 0),
+                         mem.get("stagnation_count", 0),
+                         mem.get("largest_genome_nodes", 0),
+                         mem.get("largest_genome_connections", 0))
+            except Exception as _e:
+                from yane.util.logger import log_warning
+                log_warning("Crash-state snapshot failed at iteration %d: %s", iteration, _e)
+
         # Heavy widgets (species chart, weight histogram, network canvas) are
         # throttled to 1 Hz — they involve non-trivial paint work and don't
         # need to update as often as the fitness chart or labels.
@@ -1315,6 +1413,41 @@ class TrainingTab(QWidget):
             try:
                 best = self._yane.get_best().copy()
                 mem  = self._yane.population_memory_info()
+
+                # --- Save best genome and summary to log directory ---------
+                log_dir = getattr(self._yane, '_log_run_dir', None)
+                if log_dir is not None:
+                    import pickle
+                    try:
+                        (log_dir / "best_genome.pkl").write_bytes(pickle.dumps(best))
+                        from yane.util.logger import write_json, log_info
+                        total_iters = getattr(self, '_log_iter_count', 0)
+                        write_json(log_dir / "summary.json", {
+                            "run_name": getattr(self._yane, '_log_run_name', "gui"),
+                            "stop_reason": "manual",
+                            "iterations": total_iters,
+                            "best_fitness": best.fitness,
+                            "best_nodes": len(best.nodes),
+                            "best_connections": best.connection_count,
+                            "final_species_count": mem.get("species_count", 0),
+                            "final_stagnation": mem.get("stagnation_count", 0),
+                            "lamarck_n_applied":       mem.get("lamarck_n_applied", 0),
+                            "lamarck_n_steps_total":   mem.get("lamarck_n_steps_total", 0),
+                            "lamarck_n_blocked_top_k": mem.get("lamarck_n_blocked_top_k", 0),
+                            "n_invalid_fitness": mem.get("n_invalid_fitness", 0),
+                            "n_clipped_fitness": mem.get("n_clipped_fitness", 0),
+                        })
+                        log_info(
+                            "GUI training finished  best_fitness=%.6f  nodes=%d  connections=%d  "
+                            "iterations=%d  lamarck_applied=%d  lamarck_blocked_top_k=%d",
+                            best.fitness, len(best.nodes), best.connection_count, total_iters,
+                            mem.get("lamarck_n_applied", 0),
+                            mem.get("lamarck_n_blocked_top_k", 0),
+                        )
+                    except Exception as _e:
+                        from yane.util.logger import log_warning
+                        log_warning("Failed to write end-of-run artefacts: %s", _e)
+
                 if self._best_genome is not None:
                     self._best_genome._clear()
                 self._best_genome = best

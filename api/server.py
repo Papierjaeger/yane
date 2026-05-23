@@ -1,13 +1,36 @@
 """YANE API server — run with:  uvicorn yane.api.server:app --reload"""
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from yane.neuro_evolution import NeuroEvolution
 from yane.api.routes import network, population as pop_routes
+from yane.util.logger import setup_logging as _setup_log, log_info, log_warning, log_error
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Set up structured logging on startup."""
+    _setup_log("api")
+    log_info("API server starting")
+    yield
+    log_info("API server shutting down")
+
 
 app = FastAPI(
     title="YANE",
     description="Yet Another Neuro Evolution — HTTP interface",
     version="0.1.0",
+    lifespan=_lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 state: NeuroEvolution = NeuroEvolution()

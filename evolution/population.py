@@ -197,6 +197,9 @@ class Species:
         self.best_fitness_seen: float = float('-inf')
         self.stagnation_count: int = 0   # spawn-cycles without fitness improvement
         self._cached_best: Genome | None = None  # maintained by _assign_species()
+        # Per-species Lamarck diagnostics (cumulative).
+        self.lamarck_n_applied: int = 0
+        self.lamarck_n_steps_total: int = 0
 
     def add(self, genome: Genome) -> None:
         self.members.append(genome)
@@ -453,6 +456,19 @@ class Population:
     def stagnation_threshold(self) -> int:
         """Evaluations without improvement before diversity injection triggers."""
         return self.max_size
+
+    def get_species_for_genome(self, genome: Genome) -> Species | None:
+        """Return the Species that *genome* currently belongs to, or None.
+
+        Uses the cached ``_last_species_id`` for O(species) id-match. Returns
+        None if the genome was never assigned or its species was removed.
+        """
+        last_id = genome._last_species_id
+        if last_id is not None:
+            for sp in self._species:
+                if id(sp) == last_id:
+                    return sp
+        return None
 
     @property
     def novelty_weight(self) -> float:
