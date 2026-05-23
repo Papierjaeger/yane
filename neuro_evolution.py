@@ -2,7 +2,6 @@ from __future__ import annotations
 import dataclasses
 import gc
 import json
-import math
 import random
 import statistics
 import time
@@ -43,6 +42,7 @@ from yane.evolution.population import Population
 from yane.evolution.efficiency_penalty import EfficiencyPenalty
 from yane.evolution.fitness_sanitizer import FitnessSanitizer, sanitize_fitness  # noqa: F401
 from yane.evolution.lamarck_refiner import LamarckRefiner
+from yane.evolution.diagnostics import build_population_info
 from yane.util.resource_guard import ResourceGuard
 
 
@@ -75,18 +75,6 @@ def _derive_run_name(fitness_fn: Callable) -> str:
     return "training"
 
 
-def _compute_fitness_iqr(evaluated: list) -> float:
-    """Compute the interquartile range (IQR) of fitness values.
-
-    Returns 0.0 if fewer than 4 genomes are evaluated.
-    """
-    if len(evaluated) < 4:
-        return 0.0
-    fits = sorted(g.fitness for g in evaluated)
-    n = len(fits)
-    q1 = fits[max(0, int(n * 0.25))]
-    q3 = fits[min(n - 1, int(n * 0.75))]
-    return q3 - q1
 
 
 class NeuroEvolution:
@@ -749,186 +737,16 @@ class NeuroEvolution:
         raise ValueError(f"Unknown ensemble mode {mode!r}. Use 'mean', 'vote', or 'weighted'.")
 
     def population_memory_info(self) -> dict:
-        """Returns node/connection counts across all genomes — useful for diagnosing memory growth."""
+        """Returns node/connection/fitness/species diagnostics for the population."""
         self._ensure_configured()
-        all_genomes = self._population._evaluated + list(self._population._unevaluated)
-        if not all_genomes:
-            return {"total_genomes": 0}
-        infos = [g.memory_info() for g in all_genomes]
-        total_nodes = sum(i["nodes"] for i in infos)
-        total_connections = sum(i["connections"] for i in infos)
-        max_nodes = max(i["nodes"] for i in infos)
-        max_connections = max(i["connections"] for i in infos)
-        info = {
-            "total_genomes": len(all_genomes),
-            "pop_evaluated":  len(self._population._evaluated),
-            "pop_max":        self._population.max_size,
-            "total_nodes": total_nodes,
-            "total_connections": total_connections,
-            "avg_nodes_per_genome": total_nodes / len(all_genomes),
-            "avg_connections_per_genome": total_connections / len(all_genomes),
-            "largest_genome_nodes": max_nodes,
-            "largest_genome_connections": max_connections,
-            "species_count":           self._population.species_count,
-            "target_species":          self._population._target_species,
-            "compat_threshold":        self._population._compat_threshold,
-            "stagnation_count":        self._population.stagnation_count,
-            "stagnation_threshold":    self._population.stagnation_threshold,
-            "since_last_injection":    self._population._since_last_injection,
-            "spawn_count":             self._population._spawn_count,
-            "dbg_last_adj_n":          self._population._dbg_last_adj_n,
-            "dbg_adj_count":           self._population._dbg_adj_count,
-            "novelty_weight":          self._population.novelty_weight,
-            "efficiency_weight":       self._population.efficiency_weight,
-            "min_fitness": min((g.fitness for g in self._population._evaluated), default=0.0),
-            "max_fitness": max((g.fitness for g in self._population._evaluated), default=0.0),
-            "avg_fitness": (sum(g.fitness for g in self._population._evaluated)
-                            / max(1, len(self._population._evaluated))),
-            "top5_avg_fitness": (
-                sum(f for f in sorted(
-                    (g.fitness for g in self._population._evaluated),
-                    reverse=True
-                )[:5]) / min(5, len(self._population._evaluated))
-                if self._population._evaluated else 0.0
-            ),
-            "median_fitness": (statistics.median(g.fitness for g in self._population._evaluated)
-                               if self._population._evaluated else 0.0),
-            "fitness_iqr": _compute_fitness_iqr(self._population._evaluated),
-            "n_evaluations":    self._n_evaluations,
-            "eval_aggregation": self._eval_aggregation,
-            # Elitism configuration
-            "elite_count":         self._population.elite_count,
-            "species_elite_count": self._population.species_elite_count,
-            # Fitness sanitizing diagnostics
-            "sanitize_enabled":    self._sanitizer.enabled,
-            "n_invalid_fitness":   self._sanitizer.n_invalid,
-            "n_clipped_fitness":   self._sanitizer.n_clipped,
-            # Offspring counters
-            "n_crossover":              self._population._n_crossover,
-            "n_mutation_only":          self._population._n_mutation_only,
-            "n_diversity_injection":    self._population._n_diversity_injection,
-            "n_interspecies_crossover": self._population._n_interspecies_crossover,
-            "n_early_stopped":          self._n_early_stopped,
-            # Mutation success tracking
-            "mutation_success":         dict(self._population._mutation_success),
-            "mutation_total":           dict(self._population._mutation_total),
-            # Lamarck diagnostics
-            "lamarck_mode":             self._lamarck.mode,
-            "lamarck_n_applied":        self._lamarck.n_applied,
-            "lamarck_n_steps_total":    self._lamarck.n_steps_total,
-            "lamarck_time_ms":          self._lamarck.time_ms,
-            "lamarck_n_blocked_top_k":  self._lamarck.n_blocked_top_k,
-            # Per-species Lamarck diagnostics (for GUI / debugging).
-            "lamarck_per_species": [
-                {
-                    "species_idx": i,
-                    "members": len(sp.members),
-                    "stagnation_count": sp.stagnation_count,
-                    "lamarck_n_applied": sp.lamarck_n_applied,
-                    "lamarck_n_steps_total": sp.lamarck_n_steps_total,
-                }
-                for i, sp in enumerate(self._population._species)
-            ],
-            # Per-species mutation biases (for GUI / debugging).
-            "species_mutation_biases": [
-                {
-                    "species_idx": i,
-                    "members": len(sp.members),
-                    "biases": dict(sp.mutation_biases),
-                }
-                for i, sp in enumerate(self._population._species)
-            ],
-            # Species lineage (for GUI / debugging).
-            "species_lineage": [
-                {
-                    "species_idx": i,
-                    "members": len(sp.members),
-                    "age": self._population._spawn_count - sp.created_at_spawn,
-                    "parent_species_id": sp.parent_species_id,
-                    "merge_count": sp.merge_count,
-                    "stagnation_count": sp.stagnation_count,
-                }
-                for i, sp in enumerate(self._population._species)
-            ],
-            # Best genome topology history: list of (total_submitted, n_nodes, n_conn, fitness)
-            "best_topology_history": self._population._best_topology_history,
-        }
-
-        # Population-wide average mutation rates
-        # Averaging across all evaluated genomes gives a sense of where the
-        # population's search strategy is converging — e.g. rising sigma_global
-        # population-wide signals an exploration phase.
-        evaluated = self._population._evaluated
-        if evaluated:
-            info["pop_avg_sigma_global"] = sum(
-                g.sigma_global for g in evaluated) / len(evaluated)
-            info["pop_avg_add_node"] = sum(
-                g.mutation_add_node.bool_rate for g in evaluated) / len(evaluated)
-            info["pop_avg_rem_node"] = sum(
-                g.mutation_remove_node.bool_rate for g in evaluated) / len(evaluated)
-            info["pop_avg_add_conn"] = sum(
-                g.mutation_add_connection.bool_rate for g in evaluated) / len(evaluated)
-            info["pop_avg_rem_conn"] = sum(
-                g.mutation_remove_connection.bool_rate for g in evaluated) / len(evaluated)
-            # Per-node rates (bias shift, activation change)
-            all_nodes = [n for g in evaluated for n in g.nodes]
-            if all_nodes:
-                info["pop_avg_bias_rate"]  = sum(
-                    n.mutation_bias.shift_rate for n in all_nodes) / len(all_nodes)
-                info["pop_avg_activ_rate"] = sum(
-                    n.mutation_activation.custom_rate for n in all_nodes) / len(all_nodes)
-            # Per-connection weight rates
-            all_conns = [c for g in evaluated for n in g.nodes for c in n.connections]
-            if all_conns:
-                info["pop_avg_weight_rate"] = sum(
-                    c.mutation.shift_rate for c in all_conns) / len(all_conns)
-
-        # Eval-time statistics (computed on demand from current evaluated genomes)
-        eval_times = [
-            g.eval_time_ms
-            for g in self._population._evaluated
-            if g.eval_time_ms is not None and math.isfinite(g.eval_time_ms)
-        ]
-        if eval_times:
-            sorted_times = sorted(eval_times)
-            n = len(sorted_times)
-            p95_idx = min(int(math.ceil(0.95 * n)) - 1, n - 1)
-            info["eval_time_mean_ms"]   = statistics.mean(sorted_times)
-            info["eval_time_median_ms"] = statistics.median(sorted_times)
-            info["eval_time_p95_ms"]    = sorted_times[max(0, p95_idx)]
-            info["eval_time_max_ms"]    = sorted_times[-1]
-
-        # ── Fitness landscape diagnostics ──────────────────────────────────
-        # Plateau ratio: how close to full stagnation (0 = fresh progress, 1 = hard stuck)
-        stag_th = max(1, self._population.stagnation_threshold)
-        info["plateau_ratio"] = min(1.0, self._population.stagnation_count / stag_th)
-
-        # Jump rate: fraction of evaluated genomes that beat the previous best fitness.
-        n_sub = self._population._total_submitted
-        info["jump_rate"] = self._population._n_new_best / n_sub if n_sub > 0 else 0.0
-
-        # Fitness histogram: 10 equal-width bins covering [min, max] across evaluated genomes
-        fitnesses = [g.fitness for g in self._population._evaluated]
-        if len(fitnesses) >= 2:
-            f_min, f_max = min(fitnesses), max(fitnesses)
-            if f_max > f_min:
-                bins = 10
-                bin_width = (f_max - f_min) / bins
-                hist = [0] * bins
-                for f in fitnesses:
-                    idx = min(bins - 1, int((f - f_min) / bin_width))
-                    hist[idx] += 1
-                info["fitness_histogram"] = {
-                    "min": f_min, "max": f_max, "bins": bins,
-                    "counts": hist,
-                    "bin_edges": [f_min + i * bin_width for i in range(bins + 1)],
-                }
-            else:
-                info["fitness_histogram"] = None
-        else:
-            info["fitness_histogram"] = None
-
-        return info
+        return build_population_info(
+            self._population,
+            self._lamarck,
+            self._sanitizer,
+            self._n_evaluations,
+            self._eval_aggregation,
+            self._n_early_stopped,
+        )
 
     def set_target_species(self, n: int) -> None:
         """Set the target number of species the population tries to maintain.
