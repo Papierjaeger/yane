@@ -916,6 +916,10 @@ steady-state zu generationsbasiertem Spawn-Modell (zu grosse Architekturanderung
 - [x] Early Stopping pro Genome: Generator-Protokoll (`yield`-basiert), `set_early_stopping(factor)`, `_n_early_stopped`-Zaehler, `stopped_early` in `EvaluationResult`.
 - [x] Strukturiertes Logging: `logs/<kategorie>/<timestamp>/`-Struktur mit `run.log`, `config.json`, `best_genome.json`, `fitness_history.csv`; Auto-Cleanup pro Kategorie.
 - [x] Testabdeckung ausbauen: Ensemble-Modi, Early-Stopping, Output-Scale, API-/configure — 355 Tests gesamt.
+- [x] Early-Stopping rework: Formel auf `estimated < best - abs(best) * factor` umgestellt; Auto-N-Kalibrierung aus erstem vollstaendigen Run; 20%-Warmup; Hochrechnung `estimated = cumulative * (N/k)`. `_early_stopping_n` in Checkpoint. 359 Tests.
+- [x] GUI Top-5-Avg-Fitness: `top5_avg_fitness` in `population_memory_info()` + `lbl_top5_avg`-Label im LeftPanel Population-Bereich.
+- [x] CI-pytest-Mark: `markers = ci: ...` in `pytest.ini`; `@pytest.mark.ci` auf 97 schnellen Unit-Tests; `pytest -m ci` laeuft in < 1 s.
+- [x] Coverage >= 80% fuer `core/` und `evolution/`: `TestGenomeLargeNetworkPath` deckt Large-Network-Forward-Pfad ab; `core/genome.py` 90%, alle anderen Module >= 80%.
 
 ---
 

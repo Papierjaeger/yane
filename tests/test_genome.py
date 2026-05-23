@@ -362,5 +362,91 @@ class TestGenomePickle(unittest.TestCase):
             "Obsolete allow_output_memory attribute should not leak through")
 
 
+class TestGenomeLargeNetworkPath(unittest.TestCase):
+    """Coverage for the large-network (_FIRE_NUMPY_THRESHOLD) forward path."""
+
+    def _make_with_connections(self, n_inputs=3, n_outputs=2):
+        """Build a genome where every input connects to every output."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs, n_outputs)
+        g = yane.next_genome()
+        tracker = yane._tracker
+        for inp in g.input_nodes:
+            for out in g.output_nodes:
+                innov = tracker.get_connection(inp.innovation, out.innovation)
+                conn = Connection(out, innovation=innov)
+                conn.weight = 1.0
+                inp.connections.append(conn)
+        g._invalidate_topology()
+        return g
+
+    def test_large_path_forward_produces_outputs(self):
+        """Force the large-network path by lowering the threshold."""
+        from yane.core.genome import Genome
+        g = self._make_with_connections(n_inputs=3, n_outputs=2)
+        old_thr = Genome._FIRE_NUMPY_THRESHOLD
+        try:
+            Genome._FIRE_NUMPY_THRESHOLD = 0  # every node triggers large path
+            g._compiled_forward = None
+            g._forward_dispatch = None
+            outs = g.forward([1.0, 2.0, 3.0])
+            self.assertEqual(len(outs), 2)
+        finally:
+            Genome._FIRE_NUMPY_THRESHOLD = old_thr
+
+    def test_large_path_reset_clears_values_arr(self):
+        """reset() must zero the pre-allocated values array."""
+        from yane.core.genome import Genome
+        g = self._make_with_connections(n_inputs=2, n_outputs=1)
+        old_thr = Genome._FIRE_NUMPY_THRESHOLD
+        try:
+            Genome._FIRE_NUMPY_THRESHOLD = 0
+            g._compiled_forward = None
+            g._forward_dispatch = None
+            g.forward([1.0, 1.0])
+            self.assertIsNotNone(g._values_arr)
+            g.reset()
+            self.assertTrue((g._values_arr == 0.0).all())
+        finally:
+            Genome._FIRE_NUMPY_THRESHOLD = old_thr
+
+    def test_large_path_forward_multiple_calls_consistent(self):
+        """Large-network forward must give same result on repeated calls."""
+        from yane.core.genome import Genome
+        g = self._make_with_connections(n_inputs=2, n_outputs=2)
+        old_thr = Genome._FIRE_NUMPY_THRESHOLD
+        try:
+            Genome._FIRE_NUMPY_THRESHOLD = 0
+            g._compiled_forward = None
+            g._forward_dispatch = None
+            outs1 = g.forward([0.5, -0.5])
+            g.reset()
+            outs2 = g.forward([0.5, -0.5])
+            self.assertAlmostEqual(outs1[0], outs2[0], places=10)
+        finally:
+            Genome._FIRE_NUMPY_THRESHOLD = old_thr
+
+    def test_innov_cache_built_on_first_call(self):
+        """_get_innov_cache must populate _innov_cache on first access."""
+        from yane import NeuroEvolution
+        from yane.core.connection import Connection
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+        tracker = yane._tracker
+        for inp in g.input_nodes:
+            for out in g.output_nodes:
+                innov = tracker.get_connection(inp.innovation, out.innovation)
+                conn = Connection(out, innovation=innov)
+                conn.weight = 0.5
+                inp.connections.append(conn)
+        g._invalidate_topology()
+        g._innov_cache = None  # force rebuild
+        cache = g._get_innov_cache()
+        self.assertIsNotNone(cache)
+        self.assertIsNotNone(g._innov_cache)
+
+
 if __name__ == "__main__":
     unittest.main()
