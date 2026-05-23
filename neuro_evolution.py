@@ -504,11 +504,7 @@ class NeuroEvolution:
                 self._lamarck_refine(genome, fitness_fn)  # refines weights in-place
 
             result = self._run_evaluations(genome, fitness_fn)
-            fitness = self._apply_sanitize(result.fitness)
-
-            if self._efficiency_penalty is not None:
-                fitness = self._efficiency_penalty.apply(fitness, result.elapsed_ms)
-
+            fitness = self._finalize_fitness(result.fitness, result.elapsed_ms)
             self._population.submit(genome, fitness, result.elapsed_ms)
             iterations += 1
             self._n_evaluations_done += self._runner.n_evaluations
@@ -901,7 +897,7 @@ class NeuroEvolution:
     def submit_fitness(self, fitness: float, elapsed_ms: float | None = None) -> None:
         if self._current_genome is None:
             raise RuntimeError("Call next_genome() before submit_fitness().")
-        self._population.submit(self._current_genome, self._apply_sanitize(fitness), elapsed_ms)
+        self._population.submit(self._current_genome, self._finalize_fitness(fitness, elapsed_ms), elapsed_ms)
         self._current_genome = None
 
     def next_genome_batch(self, n: int) -> list[Genome]:
@@ -928,7 +924,7 @@ class NeuroEvolution:
             else:
                 genome, fitness = item
                 elapsed_ms = None
-            self._population.submit(genome, self._apply_sanitize(fitness), elapsed_ms)
+            self._population.submit(genome, self._finalize_fitness(fitness, elapsed_ms), elapsed_ms)
 
     # -------------------------------------------------------------------------
     # Tick mode (operates on current_genome)
@@ -956,6 +952,13 @@ class NeuroEvolution:
 
     def _apply_sanitize(self, fitness: float) -> float:
         return self._sanitizer.apply(fitness)
+
+    def _finalize_fitness(self, fitness: float, elapsed_ms: float | None) -> float:
+        """Sanitize + efficiency penalty. Applied by every submission path."""
+        fitness = self._sanitizer.apply(fitness)
+        if self._efficiency_penalty is not None and elapsed_ms is not None:
+            fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)
+        return fitness
 
     def _run_evaluations(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]

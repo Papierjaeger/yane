@@ -478,5 +478,55 @@ class TestGenomePickle(unittest.TestCase):
         self.assertGreaterEqual(elapsed_ms, 0.0)
 
 
+# ---------------------------------------------------------------------------
+# _finalize_fitness: efficiency penalty applied via all submission paths
+# ---------------------------------------------------------------------------
+
+class TestFinalizeFitness(unittest.TestCase):
+    """Verify efficiency penalty is applied consistently across submission paths."""
+
+    def _make(self):
+        yane = _make_yane(n_inputs=1, n_outputs=1)
+        yane.set_efficiency_penalty(max_ms=0.0, penalty_per_ms=1.0)
+        return yane
+
+    def test_submit_fitness_applies_efficiency_penalty(self):
+        yane = self._make()
+        g = yane.next_genome()
+        yane.submit_fitness(10.0, elapsed_ms=2.0)
+        # penalty: 2 ms over max_ms=0 → fitness reduced by 2.0
+        self.assertAlmostEqual(yane.get_best().fitness, 8.0, places=6)
+
+    def test_submit_fitness_no_elapsed_skips_penalty(self):
+        yane = self._make()
+        g = yane.next_genome()
+        yane.submit_fitness(10.0, elapsed_ms=None)
+        # no elapsed_ms → penalty skipped, only sanitize
+        self.assertAlmostEqual(yane.get_best().fitness, 10.0, places=6)
+
+    def test_submit_fitness_batch_applies_efficiency_penalty(self):
+        yane = self._make()
+        g = yane.next_genome()
+        yane.submit_fitness(5.0, elapsed_ms=1.0)  # seed
+        g2 = yane.next_genome_batch(1)
+        yane.submit_fitness_batch([(g2[0], 10.0, 3.0)])
+        # penalty for g2: 3 ms over 0 → 10 - 3 = 7
+        best = yane.get_best()
+        self.assertLessEqual(best.fitness, 7.0 + 1e-9)
+
+    def test_train_applies_efficiency_penalty(self):
+        yane = _make_yane(n_inputs=1, n_outputs=1)
+        yane.set_efficiency_penalty(max_ms=0.0, penalty_per_ms=1000.0)
+        yane.set_max_iterations(1)
+        # With a huge penalty, fitness must be heavily penalised
+        raw_fitnesses = []
+        def ff(genome):
+            import time; time.sleep(0); return 1000.0
+        yane.train(ff)
+        best = yane.get_best()
+        # elapsed is always >0 ms even for no-op, so penalty fires
+        self.assertLess(best.fitness, 1000.0)
+
+
 if __name__ == '__main__':
     unittest.main()
