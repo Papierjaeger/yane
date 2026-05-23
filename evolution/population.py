@@ -389,6 +389,12 @@ class Population:
         self._topology_history_max: int = 200
         self._best_topology_history: list[tuple[int, int, int, float]] = []
         self._total_submitted: int = 0
+        self._n_new_best: int = 0  # how many submits beat the previous best fitness
+
+        # Weight/bias clipping — None = disabled (default).
+        # When set to (w_max, b_max), all weights and biases are clamped to
+        # [-w_max, w_max] and [-b_max, b_max] after each mutation.
+        self._weight_clip: tuple[float, float] | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -454,6 +460,7 @@ class Population:
         _cc = genome.connection_count   # cache property once; avoids descriptor overhead in the two reads below
         topo = (len(genome.nodes), _cc)
         if fitness > self._best_fitness_seen:
+            self._n_new_best += 1
             self._best_fitness_seen = fitness
             self._stagnation_count = 0
             self._since_last_injection = 0
@@ -1248,6 +1255,12 @@ class Population:
                 gene.bool_rate = max(Mutation.MIN_RATE, min(0.999, gene.bool_rate * bias))
 
         child.mutate(self._tracker)
+        if self._weight_clip is not None:
+            w_max, b_max = self._weight_clip
+            for node in child.nodes:
+                node.bias = max(-b_max, min(b_max, node.bias))
+                for conn in node.connections:
+                    conn.weight = max(-w_max, min(w_max, conn.weight))
         child._parent_fitness = parent.fitness
         child.fitness = 0.0
         self._unevaluated.append(child)

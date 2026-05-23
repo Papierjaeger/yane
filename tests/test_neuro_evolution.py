@@ -669,5 +669,51 @@ class TestOutputScale(unittest.TestCase):
         self.assertAlmostEqual(n.output_scale, 5.0)
 
 
+@pytest.mark.ci
+class TestWeightClipping(unittest.TestCase):
+    """set_weight_clipping() bounds weights and biases after each mutation."""
+
+    def _make(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(n_inputs=2, n_outputs=1)
+        return yane
+
+    def test_weights_clamped_after_mutation(self):
+        import random
+        random.seed(0)
+        yane = self._make()
+        yane.set_weight_clipping(w_max=0.01, b_max=0.01)
+        # Force many mutations to drive weights up, then verify clipping.
+        yane.set_max_iterations(5)
+        yane.train(lambda g: 0.0)
+        for genome in yane._population._evaluated:
+            for node in genome.nodes:
+                self.assertLessEqual(abs(node.bias), 0.01 + 1e-9)
+                for conn in node.connections:
+                    self.assertLessEqual(abs(conn.weight), 0.01 + 1e-9)
+
+    def test_clipping_disabled_by_default(self):
+        yane = self._make()
+        self.assertIsNone(yane._population._weight_clip)
+
+    def test_disable_clipping_with_none(self):
+        yane = self._make()
+        yane.set_weight_clipping(w_max=1.0)
+        self.assertIsNotNone(yane._population._weight_clip)
+        yane.set_weight_clipping()
+        self.assertIsNone(yane._population._weight_clip)
+
+    def test_b_max_defaults_to_w_max(self):
+        yane = self._make()
+        yane.set_weight_clipping(w_max=5.0)
+        self.assertEqual(yane._population._weight_clip, (5.0, 5.0))
+
+    def test_b_max_can_differ_from_w_max(self):
+        yane = self._make()
+        yane.set_weight_clipping(w_max=3.0, b_max=1.0)
+        self.assertEqual(yane._population._weight_clip, (3.0, 1.0))
+
+
 if __name__ == "__main__":
     unittest.main()

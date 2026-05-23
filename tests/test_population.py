@@ -243,6 +243,27 @@ class TestPopulation(unittest.TestCase):
         pop._inject_structural_diversity()
         self.assertEqual(pop._n_diversity_injection, before + 2)
 
+    def test_jump_rate_counts_new_bests(self):
+        pop = self._make_population(max_size=10)
+        # Submit ascending fitnesses — every genome beats the previous best.
+        for i in range(5):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+        self.assertEqual(pop._n_new_best, 5)
+        # Submit a worse genome — should NOT increment.
+        g = pop.select_for_evaluation()
+        pop.submit(g, -999.0)
+        self.assertEqual(pop._n_new_best, 5)
+        self.assertAlmostEqual(pop._total_submitted, 6)
+        # jump_rate = 5/6
+        expected_rate = 5 / 6
+        import yane
+        ne = yane.NeuroEvolution()
+        ne.configure(2, 1)
+        ne._population = pop
+        info = ne.population_memory_info()
+        self.assertAlmostEqual(info["jump_rate"], expected_rate, places=5)
+
 
 if __name__ == "__main__":
     unittest.main()

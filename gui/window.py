@@ -343,6 +343,12 @@ class LeftPanel(QWidget):
             "0.0 = frischer Fortschritt, 1.0 = voll stagniert.\n"
             "Zeigt, wie nah die Population an einem Plateau ist.")
         pop.addRow("Plateau ratio:",     self.lbl_plateau)
+        self.lbl_jump_rate = _label("—", "mutRate")
+        self.lbl_jump_rate.setToolTip(
+            "Anteil der Evaluierungen, bei denen ein neues Fitness-Maximum erreicht wurde.\n"
+            "Hoher Wert = Population verbessert sich noch schnell.\n"
+            "Niedriger Wert = Optimierungsfortschritt verlangsamt sich.")
+        pop.addRow("Jump rate:",         self.lbl_jump_rate)
         self.fitness_hist = FitnessHistogram()
         self.fitness_hist.setToolTip(
             "Fitness-Verteilung der evaluierten Population.\n"
@@ -654,6 +660,13 @@ class LeftPanel(QWidget):
             self.lbl_plateau.setText(f"{pr:.2f}")
         else:
             self.lbl_plateau.setText("—")
+
+        # Jump rate
+        jr = mem.get("jump_rate")
+        if jr is not None:
+            self.lbl_jump_rate.setText(f"{jr:.4f}")
+        else:
+            self.lbl_jump_rate.setText("—")
 
         # Fitness histogram
         fh = mem.get("fitness_histogram")

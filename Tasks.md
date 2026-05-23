@@ -30,15 +30,13 @@ Nutzen:
 - Komplexe Aufgaben werden schrittweise lernbar.
 - Besonders nützlich für lange Sequenzen und Control-Aufgaben.
 
-### P1: Fitness-Landscape Diagnostics ⚡
+### P1: Fitness-Landscape Diagnostics ✅
 
 Wie verteilt sich Fitness in der Population? Gibt es Sprünge, Plateaus, bimodale Verteilungen?
 
-**Bereits implementiert:** IQR der Fitness in `population_memory_info()`, Fitness-Histogramm (10 Bins) in GUI (`FitnessHistogram`-Widget), Plateau-Ratio (`stagnation_count / stagnation_threshold`) als GUI-Label.
+**Bereits implementiert:** IQR der Fitness in `population_memory_info()`, Fitness-Histogramm (10 Bins) in GUI (`FitnessHistogram`-Widget), Plateau-Ratio (`stagnation_count / stagnation_threshold`) als GUI-Label, Fitness-Sprungrate (`jump_rate = n_new_best / n_submitted`) in `population_memory_info()` und GUI.
 
-**Noch offen:**
-
-- Fitness-Sprungrate verfolgen (Anteil Evaluierungen, die neuen Bestwert setzen).
+**Noch offen:** — (alle geplanten Diagnostics sind jetzt implementiert).
 
 Nutzen:
 
@@ -335,16 +333,13 @@ Nutzen:
 - Weniger doppelte Logik.
 - Features greifen automatisch in GUI, Skripten und API.
 
-### P0: Forward-Performance weiter messen
+### P0: Forward-Performance weiter messen ✅
 
 Der Fast Path ist bereits optimiert, aber große Netze brauchen Benchmarks.
 
-Aufgaben:
+**Bereits implementiert:** `benchmarks/forward_bench.py` — Microbenchmarks für `forward()` über hidden-Node-Größen {10, 50, 200, 1000}, azyklisch vs. zyklisch, Median-µs/call, CLI mit `--sizes` und `--save`.
 
-- Microbenchmarks für `forward()` erstellen.
-- Azyklische vs. zyklische Netze vergleichen.
-- Kosten pro Node/Connection messen.
-- Performance-Regressions in Tests aufnehmen.
+**Noch offen:** — (Basis-Benchmarks sind implementiert; Kosten-pro-Node/Regression-Tests können bei Bedarf ergänzt werden).
 
 Nutzen:
 
@@ -398,16 +393,13 @@ Nutzen:
 
 ## 6. Robustheit und Reproduzierbarkeit
 
-### P1: Sicherheitslimits für Werte
+### P1: Sicherheitslimits für Werte ✅
 
 Sehr große Gewichte/Aktivierungen können Netze instabil machen.
 
-Aufgaben:
+**Bereits implementiert:** `set_weight_clipping(w_max, b_max)` in `NeuroEvolution` — klemmt alle Gewichte auf `[-w_max, w_max]` und alle Biases auf `[-b_max, b_max]` nach jeder Mutation. `b_max` defaults zu `w_max`. `None` (default) deaktiviert Clipping.
 
-- Optionales Weight-Clipping.
-- Optionales Bias-Clipping.
-- Output-Sanitizing pro Forward.
-- Zähler für Clipping-/Overflow-Ereignisse.
+**Noch offen:** Output-Sanitizing pro Forward; Zähler für Clipping-Ereignisse.
 
 Nutzen:
 
@@ -553,13 +545,15 @@ Nutzen:
 - [x] Testabdeckung: 359 Tests, pytest -m ci < 1 s, Coverage ≥ 80% für core/ und evolution/.
 - [x] GUI: Advanced-Sektion mit Fitness-Shaping, Interspecies-Crossover, Convergence-Stop, Early-Stop, Effizienzstrafe, Elitismus.
 - [x] API: Checkpoint-Endpunkte, Best-Genom-Export, Diagnostics-Endpunkt.
-- [x] Fitness-Landscape: Histogramm (FitnessHistogram-Widget) + Plateau-Ratio in GUI.
+- [x] Fitness-Landscape: Histogramm (FitnessHistogram-Widget) + Plateau-Ratio + Sprungrate (jump_rate) in GUI.
 - [x] Lamarck: Kumulative Refinement-Zeitmessung in GUI.
 - [x] Adaptive Strukturmutation: Erfolgsrate-Tracking, Nutzen-Gewichtung, Per-Species-Tendenzen.
+- [x] Weight/Bias-Clipping: set_weight_clipping(w_max, b_max) nach jeder Mutation.
+- [x] Forward-Microbenchmarks: benchmarks/forward_bench.py (acyclic vs cyclic, n∈{10,50,200,1000}).
 
 ### ⚡ Teilweise implementiert (Rest siehe Task-Detail oben)
 
-- [ ] Fitness-Landscape Diagnostics: IQR + Histogramm + Plateau-Ratio done; Sprungrate fehlt.
+- [x] Fitness-Landscape Diagnostics: IQR + Histogramm + Plateau-Ratio + Sprungrate done.
 - [x] Speciation robuster: Dynamische Ziel-Species, alternative Metrik, kleine Species geschützt, Stammbaum.
 - [ ] Lamarck Rest: per-Species + Zeitmessung done; separate Sigma-Strategie fehlt.
 - [ ] Worker-Abstraktion: _run_evaluations() + EvaluationResult done; GUI-Pfad noch nicht vereinheitlicht.
@@ -582,11 +576,9 @@ Nutzen:
 - [ ] Lokale Optimierer (Simulated Annealing, CMA-ES)
 - [ ] Backprop-Hybrid
 - [ ] NES als Lamarck-Alternative
-- [ ] Forward-Microbenchmarks
 - [ ] Vektorisierte Batch-Auswertung
 - [ ] Genom-Serialisierung optimieren
 - [ ] GPU-Unterstützung
-- [ ] Sicherheitslimits (Weight/Bias-Clipping)
 - [ ] Ablation Tests
 - [ ] Dokumentation aktuell halten
 - [ ] Entwicklerdokumentation

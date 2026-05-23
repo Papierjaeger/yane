@@ -950,6 +950,10 @@ class NeuroEvolution:
         stag_th = max(1, self._population.stagnation_threshold)
         info["plateau_ratio"] = min(1.0, self._population.stagnation_count / stag_th)
 
+        # Jump rate: fraction of evaluated genomes that beat the previous best fitness.
+        n_sub = self._population._total_submitted
+        info["jump_rate"] = self._population._n_new_best / n_sub if n_sub > 0 else 0.0
+
         # Fitness histogram: 10 equal-width bins covering [min, max] across evaluated genomes
         fitnesses = [g.fitness for g in self._population._evaluated]
         if len(fitnesses) >= 2:
@@ -1083,6 +1087,36 @@ class NeuroEvolution:
                 for node in genome.nodes:
                     for conn in node.connections:
                         conn.spike_rate = rate
+
+    def set_weight_clipping(
+        self,
+        w_max: float | None = None,
+        b_max: float | None = None,
+    ) -> None:
+        """Clamp all weights and biases after each mutation.
+
+        After a child genome is mutated, every connection weight is clamped to
+        ``[-w_max, w_max]`` and every node bias to ``[-b_max, b_max]``.
+
+        This prevents weight explosion in recurrent or deep networks and keeps
+        the search space bounded, at the cost of losing very large-weight
+        solutions.
+
+        Args:
+            w_max: Maximum absolute weight value.  ``None`` (default) disables
+                   weight clipping.
+            b_max: Maximum absolute bias value.  ``None`` inherits ``w_max``
+                   when ``w_max`` is provided; otherwise disables bias clipping.
+
+        Pass both as ``None`` (or call with no arguments) to disable clipping.
+        """
+        if w_max is None:
+            clip = None
+        else:
+            effective_b = b_max if b_max is not None else w_max
+            clip = (float(w_max), float(effective_b))
+        if self._population is not None:
+            self._population._weight_clip = clip
 
     def set_elitism(
         self,
