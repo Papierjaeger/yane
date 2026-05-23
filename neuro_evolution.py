@@ -23,6 +23,7 @@ from yane.evolution.efficiency_penalty import EfficiencyPenalty
 from yane.evolution.fitness_sanitizer import FitnessSanitizer, sanitize_fitness  # noqa: F401
 from yane.evolution.lamarck_refiner import LamarckRefiner
 from yane.evolution.diagnostics import build_population_info, _fitness_iqr as _compute_fitness_iqr
+from yane.evolution import checkpoint as _ckpt
 from yane.evolution.evaluation import (  # noqa: F401  (EvaluationResult re-exported for GUI)
     EvaluationResult,
     EvaluationRunner,
@@ -832,27 +833,21 @@ class NeuroEvolution:
         Args:
             path: Destination file path (e.g. ``"checkpoints/run1.pkl"``).
         """
-        import pickle
         self._ensure_configured()
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 1,
+        _ckpt.write(path, {
+            "version": _ckpt.VERSION,
             "config": self._config_dict(),
             "population": self._population,
             "tracker": self._tracker,
-            "lamarck_n_applied": self._lamarck.n_applied,
+            "lamarck_n_applied":     self._lamarck.n_applied,
             "lamarck_n_steps_total": self._lamarck.n_steps_total,
-            "lamarck_time_ms": self._lamarck.time_ms,
+            "lamarck_time_ms":       self._lamarck.time_ms,
             "lamarck_n_blocked_top_k": self._lamarck.n_blocked_top_k,
-            "n_invalid_fitness": self._sanitizer.n_invalid,
-            "n_clipped_fitness": self._sanitizer.n_clipped,
-            "n_early_stopped": self._runner.n_early_stopped,
-            "early_stopping_n": self._runner.early_stopping_n,
-        }
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
-        tmp.replace(path)
+            "n_invalid_fitness":     self._sanitizer.n_invalid,
+            "n_clipped_fitness":     self._sanitizer.n_clipped,
+            "n_early_stopped":       self._runner.n_early_stopped,
+            "early_stopping_n":      self._runner.early_stopping_n,
+        })
 
     def load_checkpoint(self, path: str | Path) -> None:
         """Restore population state from a checkpoint file.
@@ -871,28 +866,7 @@ class NeuroEvolution:
             FileNotFoundError: if *path* does not exist.
             ValueError: if the checkpoint format is unrecognised.
         """
-        import pickle
-        path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {path}")
-        payload = pickle.loads(path.read_bytes())
-        if not isinstance(payload, dict) or payload.get("version") != 1:
-            raise ValueError(f"Unsupported checkpoint format in {path}")
-        # Validate required keys exist to catch corruption early.
-        _required = {"config", "population", "tracker"}
-        _missing = _required - payload.keys()
-        if _missing:
-            raise ValueError(
-                f"Checkpoint is missing required keys: {_missing}. "
-                f"The file may be corrupted or from an older version."
-            )
-        # Type validation: prevent malicious/corrupted pickles from injecting wrong types.
-        from yane.evolution.population import Population
-        from yane.evolution.innovation import InnovationTracker
-        if not isinstance(payload["population"], Population):
-            raise TypeError("Checkpoint 'population' is not a Population object")
-        if not isinstance(payload["tracker"], (InnovationTracker, type(None))):
-            raise TypeError("Checkpoint 'tracker' is not an InnovationTracker")
+        payload = _ckpt.read(path)
         cfg = payload["config"]
         self._population  = payload["population"]
         self._tracker     = payload["tracker"]
