@@ -163,6 +163,7 @@ class NeuroEvolution:
         # Early stopping per genome (generator protocol)
         self._early_stopping_factor: float | None = None   # None = disabled
         self._n_early_stopped: int = 0
+        self._early_stopping_n: int | None = None          # calibrated from first complete run
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -338,19 +339,24 @@ class NeuroEvolution:
         """Enable early stopping for per-genome generator fitness functions.
 
         When a generator-based fitness function is used (``yield``-based), each
-        yielded value is treated as one episode result.  After each episode the
-        running mean is compared to the worst-in-pool fitness:
+        yielded value is treated as one episode result.  After N is calibrated
+        from the first complete (non-stopped) run, subsequent evaluations use
+        extrapolation and a 20 % warmup before checking:
 
-            stop if  mean_so_far  <  worst_fitness * factor
+            estimated = cumulative_so_far * (N / episodes_so_far)
+            stop if  estimated  <  best_fitness - abs(best_fitness) * factor
 
-        Lower ``factor`` values make stopping more aggressive (stop sooner).
-        Set to ``None`` to disable (default).
+        The sign-independent threshold means the rule works correctly for both
+        positive and negative fitness scales.  N is calibrated automatically —
+        no configuration needed.  Until N is known (first run) the generator
+        always runs to completion.
 
         Args:
-            factor: Threshold multiplier on worst-pool fitness.  1.0 = stop when
-                    running mean drops below the worst genome currently in the pool.
-                    0.5 = stop when running mean is half that threshold.
-                    ``None`` disables early stopping entirely.
+            factor: Tolerance fraction relative to the current best fitness.
+                    0.0 = stop only when extrapolated fitness is below the
+                    current best.  1.0 (default) = stop when extrapolated
+                    fitness is more than 100 % below the best (very lenient).
+                    Smaller values make stopping more aggressive.
         """
         self._early_stopping_factor = factor
 
@@ -822,6 +828,13 @@ class NeuroEvolution:
             "max_fitness": max((g.fitness for g in self._population._evaluated), default=0.0),
             "avg_fitness": (sum(g.fitness for g in self._population._evaluated)
                             / max(1, len(self._population._evaluated))),
+            "top5_avg_fitness": (
+                sum(f for f in sorted(
+                    (g.fitness for g in self._population._evaluated),
+                    reverse=True
+                )[:5]) / min(5, len(self._population._evaluated))
+                if self._population._evaluated else 0.0
+            ),
             "median_fitness": (statistics.median(g.fitness for g in self._population._evaluated)
                                if self._population._evaluated else 0.0),
             "fitness_iqr": _compute_fitness_iqr(self._population._evaluated),
@@ -1027,6 +1040,7 @@ class NeuroEvolution:
             "n_invalid_fitness": self._n_invalid_fitness,
             "n_clipped_fitness": self._n_clipped_fitness,
             "n_early_stopped": self._n_early_stopped,
+            "early_stopping_n": self._early_stopping_n,
         }
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
@@ -1065,6 +1079,7 @@ class NeuroEvolution:
         self._n_invalid_fitness       = payload.get("n_invalid_fitness", 0)
         self._n_clipped_fitness       = payload.get("n_clipped_fitness", 0)
         self._n_early_stopped         = payload.get("n_early_stopped", 0)
+        self._early_stopping_n        = payload.get("early_stopping_n", None)
         # Restore cached config so _config_dict() + logs are accurate.
         self._n_inputs           = cfg.get("n_inputs", self._n_inputs)
         self._n_outputs          = cfg.get("n_outputs", self._n_outputs)
@@ -1188,21 +1203,32 @@ class NeuroEvolution:
 
         if inspect.isgeneratorfunction(fitness_fn):
             gen = fitness_fn(genome)
+            N = self._early_stopping_n   # snapshot; None until calibrated
+            cumulative = 0.0
+            episode_count = 0
             try:
-                for episode_fitness in gen:
+                for k, episode_fitness in enumerate(gen, 1):
                     raw.append(episode_fitness)
-                    if self._early_stopping_factor is not None and len(raw) >= 1:
-                        running_mean = sum(raw) / len(raw)
-                        worst = self._population.worst_fitness()
-                        if worst is not None:
-                            threshold = worst * self._early_stopping_factor
-                            if running_mean < threshold:
+                    cumulative += episode_fitness
+                    episode_count = k
+                    if (self._early_stopping_factor is not None
+                            and N is not None
+                            and k >= max(1, N // 5)):
+                        estimated = cumulative * (N / k)
+                        evaluated = self._population._evaluated
+                        if evaluated:
+                            best = max(g.fitness for g in evaluated)
+                            threshold = best - abs(best) * self._early_stopping_factor
+                            if estimated < threshold:
                                 gen.close()
                                 stopped_early = True
                                 self._n_early_stopped += 1
                                 break
             except StopIteration:
                 pass
+            # Calibrate N from the first non-stopped complete run.
+            if not stopped_early and episode_count > 0 and self._early_stopping_n is None:
+                self._early_stopping_n = episode_count
             fitness = _aggregate_fitnesses(raw, self._eval_aggregation, self._eval_sigma_penalty) if raw else 0.0
         elif self._n_evaluations <= 1:
             fitness = fitness_fn(genome)

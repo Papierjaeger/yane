@@ -1,6 +1,8 @@
 import unittest
+import pytest
 
 
+@pytest.mark.ci
 class TestNeuroEvolutionConfig(unittest.TestCase):
 
     def _make(self, **kwargs):
@@ -171,6 +173,7 @@ class TestNeuroEvolutionForwardMode(unittest.TestCase):
         yane.submit_fitness(outs[0])
 
 
+@pytest.mark.ci
 class TestGenomeClearGuard(unittest.TestCase):
     """_clear() must not cause crashes when a cleared genome is re-used."""
 
@@ -346,6 +349,7 @@ class TestMultiEval(unittest.TestCase):
         self.assertEqual(call_count[0], 1)
 
 
+@pytest.mark.ci
 class TestFitnessSanitizing(unittest.TestCase):
 
     def _make(self, sanitize=True, **kw):
@@ -522,6 +526,7 @@ class TestPopulationMemoryInfo(unittest.TestCase):
         self.assertGreaterEqual(n_inj, 0)
 
 
+@pytest.mark.ci
 class TestEarlyStopping(unittest.TestCase):
     """Generator-protocol early stopping per genome."""
 
@@ -551,26 +556,28 @@ class TestEarlyStopping(unittest.TestCase):
         self.assertEqual(call_counts[0], 5)
 
     def test_generator_fn_stopped_early_when_running_mean_below_threshold(self):
-        """Early stopping aborts generator when running mean < worst * factor."""
+        """Early stopping aborts generator when extrapolated fitness < threshold."""
         yane = self._make()
         yane.set_population_size(5)
-        # Seed the pool so worst_fitness() returns something meaningful.
+        # Seed the pool so there are evaluated genomes to compute best fitness from.
         for _ in range(5):
             g = yane.next_genome()
             yane.submit_fitness(10.0)
 
-        yane.set_early_stopping(factor=1.0)
+        yane.set_early_stopping(factor=0.0)  # stop when estimated < best (no slack)
+        # Pre-calibrate N so stopping fires immediately without a warm-up run.
+        yane._early_stopping_n = 100
 
         episode_count = [0]
 
         def poor_gen(genome):
             for _ in range(100):
                 episode_count[0] += 1
-                yield -999.0  # always far below worst (10.0)
+                yield -999.0  # extrapolated fitness far below best=10
 
         yane.set_max_iterations(1)
         yane.train(poor_gen)
-        # Should have stopped well before 100 episodes.
+        # Should have stopped after the 20-episode warmup (N//5 = 20), well before 100.
         self.assertLess(episode_count[0], 100)
 
     def test_n_early_stopped_incremented(self):
@@ -612,6 +619,7 @@ class TestEarlyStopping(unittest.TestCase):
         self.assertEqual(calls[0], 3)
 
 
+@pytest.mark.ci
 class TestOutputScale(unittest.TestCase):
     """output_scale strategy gene on OUTPUT nodes."""
 
