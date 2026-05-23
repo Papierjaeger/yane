@@ -279,6 +279,7 @@ class LeftPanel(QWidget):
         self.lbl_avg_conns   = _label("—", "statValue")
         self.lbl_pop_min     = _label("—", "mutRate")
         self.lbl_pop_avg     = _label("—", "mutRate")
+        self.lbl_top5_avg    = _label("—", "mutRate")
         self.lbl_pop_max     = _label("—", "mutRate")
         self.lbl_stagnation      = _label("—", "statValue")
         self.lbl_next_injection  = _label("—", "statValue")
@@ -296,6 +297,9 @@ class LeftPanel(QWidget):
                        "Große Spanne = viel Diversität.")
         self.lbl_pop_min.setToolTip(_spread_tip)
         self.lbl_pop_avg.setToolTip(_spread_tip)
+        self.lbl_top5_avg.setToolTip(
+            "Durchschnittliche Fitness der Top-5-Genome (nach Fitness sortiert).\n"
+            "Zeigt die Leistung der Elite unabhängig vom Populations-Durchschnitt.")
         self.lbl_pop_max.setToolTip(_spread_tip)
         self.lbl_stagnation.setToolTip(
             "Wie viele Iterationen seit der letzten Fitness-Verbesserung.\n"
@@ -325,6 +329,7 @@ class LeftPanel(QWidget):
         pop.addRow("Avg conns:",         self.lbl_avg_conns)
         pop.addRow("Min fitness:",       self.lbl_pop_min)
         pop.addRow("Avg fitness:",       self.lbl_pop_avg)
+        pop.addRow("Top-5 avg:",         self.lbl_top5_avg)
         pop.addRow("Max fitness:",       self.lbl_pop_max)
         pop.addRow("Stagnation (total):", self.lbl_stagnation)
         pop.addRow("Next injection:",    self.lbl_next_injection)
@@ -585,9 +590,10 @@ class LeftPanel(QWidget):
         avg_c = mem.get("avg_connections_per_genome")
         self.lbl_avg_nodes.setText(f"{avg_n:.1f}" if avg_n is not None else "—")
         self.lbl_avg_conns.setText(f"{avg_c:.1f}" if avg_c is not None else "—")
-        for key, lbl in (("min_fitness", self.lbl_pop_min),
-                         ("avg_fitness", self.lbl_pop_avg),
-                         ("max_fitness", self.lbl_pop_max)):
+        for key, lbl in (("min_fitness",    self.lbl_pop_min),
+                         ("avg_fitness",    self.lbl_pop_avg),
+                         ("top5_avg_fitness", self.lbl_top5_avg),
+                         ("max_fitness",    self.lbl_pop_max)):
             v = mem.get(key)
             lbl.setText(f"{v:.4f}" if v is not None else "—")
         stag  = mem.get("stagnation_count")
