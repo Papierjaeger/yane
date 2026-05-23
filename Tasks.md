@@ -832,25 +832,46 @@ Nutzen:
 
 ### Phase 1: Stabilisieren und sichtbar machen
 
-- Effizienzstrafe in alle Trainingspfade bringen.
-- Evaluation-Statistiken zentralisieren.
-- Seeding einfuehren.
-- Checkpoints fuer Population und Best-Genome.
-- GUI-Diagnostik erweitern.
+**Abgeschlossen:** Effizienzstrafe, Evaluation-Statistiken, GUI-Diagnostik, Elitismus,
+Fitness-Sanitizing, Mehrfachbewertung, Adaptive Strukturmutation, Adaptives Lamarck,
+Inkrementelle Speziation, Debug-Tab, Strukturiertes Logging, Connection Enable/Disable.
+
+**Noch offen:**
+
+- Seeding: `NeuroEvolution(seed=...)` — setzt `random` und `numpy.random` reproduzierbar;
+  Seed in Logs und `config.json`. Gym-Env-Seeds liegen beim Nutzer (YANE kann keine externen
+  Umgebungen kontrollieren).
+- Checkpoints: Population + InnovationTracker atomar speichern und laden (`save_checkpoint` /
+  `load_checkpoint`); GUI Save/Load-Buttons.
+- `EvaluationResult`-Objekt: interner Dataclass-Container fuer `_run_evaluations()`-Rueckgabe
+  (`genome`, `fitness`, `elapsed_ms`, `n_lamarck_steps`, `stopped_early`, `raw_fitnesses`).
+  Oeffentliche API (`submit_fitness`, `submit_fitness_batch`) bleibt unveraendert.
 
 ### Phase 2: Evolution robuster machen
 
-- Expliziter Elitismus.
-- Species-Budget-Reproduktion.
-- Adaptive Strukturmutation.
-- Fitness-Sanitizing.
-- Standard-Benchmarks und Ablations.
+**Abgeschlossen:** Elitismus, Adaptive Strukturmutation, Fitness-Sanitizing.
 
-### Phase 3: Skalierung
+**Noch offen:**
 
+- Interspecies Crossover (~5%): zweiter Elternteil aus anderer Species.
+  `set_interspecies_crossover(rate: float)` in `NeuroEvolution`, Zaehler
+  `n_interspecies_crossover` in `population_memory_info()`.
+- Fitness-Shaping: Rang-basierte Transformation der `shared_fitness` vor Selektion.
+  `set_fitness_shaping(enabled: bool)` in `NeuroEvolution`, Toggle in GUI.
+- Convergence Detection: `set_convergence_stop(fitness_spread_eps, min_stagnation)`,
+  `set_max_evaluations(n)`, `on_stop`-Callback in `train()` mit Stoppgrundstring.
+  GUI-Anzeige des Stoppgrundes.
+- Standard-Benchmark-Suite: `benchmarks/run_suite.py` mit XOR, basic_multiplication,
+  CartPole-v1, Acrobot-v1; Ergebnisse als JSON in `benchmarks/results/`.
+
+**Bewusst aufgeschoben (Phase 3):** Species-Budget-Reproduktion — erfordert Umbau von
+steady-state zu generationsbasiertem Spawn-Modell (zu grosse Architekturanderung fuer Phase 2).
+
+### Phase 3: Skalierung und robuste Reproduktion
+
+- Species-Budget-Reproduktion: generationsbasierter Spawn proportional zu Species-Fitness.
 - Batch-Forward fuer azyklische Netze.
-- Bessere Serialisierung.
-- Worker-Pipeline vereinheitlichen.
+- Bessere Serialisierung und Worker-Pipeline vereinheitlichen.
 - Optional GPU/PyTorch-Export fuer grosse Batch-Aufgaben.
 
 ### Phase 4: Schwierige Aufgaben
@@ -858,8 +879,8 @@ Nutzen:
 - Curriculum Learning.
 - Multi-Objective Optimization.
 - Quality Diversity / MAP-Elites.
-- Bessere Memory Nodes.
-- Hybrid-Optimierung fuer Gewichte.
+- Bessere Memory Nodes und Gating.
+- Hybrid-Optimierung: NES, CMA-ES, Backprop-Hybrid.
 
 ## 13. Erste konkrete TODO-Liste
 
@@ -880,20 +901,20 @@ Nutzen:
 - [x] Species-Hard-Cap gegen Pop-Overflow bei extremer Stagnation.
 - [x] Threshold-Adjustment-Diagnostics (dbg_last_adj_n, dbg_adj_count) im Log und GUI.
 - [x] UI: Collapsible Groups im LeftPanel, Uebersetzung auf Englisch, Visual Polish.
-- [ ] `EvaluationResult`-Objekt einfuehren: `genome`, `fitness: float`, `elapsed_ms: float`, `n_lamarck_steps: int`, `stopped_early: bool`, `raw_fitnesses: list[float]` (bei Multi-Eval die Einzelwerte vor Aggregation). Ersetzt die aktuellen `(Genome, float, float)`-Tupel in Worker-Pfaden.
-- [ ] Seed-Parameter fuer `NeuroEvolution` einfuehren.
-- [ ] Checkpoint-Speicherung fuer Population und InnovationTracker.
-- [ ] Benchmark-Suite mit mehreren Seeds erstellen.
+- [x] `EvaluationResult`-Objekt einfuehren: `genome`, `fitness: float`, `elapsed_ms: float`, `n_lamarck_steps: int`, `stopped_early: bool`, `raw_fitnesses: list[float]` (bei Multi-Eval die Einzelwerte vor Aggregation). Ersetzt die aktuellen `(Genome, float, float)`-Tupel in Worker-Pfaden.
+- [x] Seed-Parameter fuer `NeuroEvolution` einfuehren.
+- [x] Checkpoint-Speicherung fuer Population und InnovationTracker.
+- [x] Benchmark-Suite mit mehreren Seeds erstellen.
 - [ ] Durchschnittliche Mutationsraten populationsweit ausgeben (Ergaenzung zu Best-Genome-Raten).
 - [ ] Mutationsraten-Historie in GUI plotten.
 - [ ] API-`/configure` um wichtige Konfigurationsparameter erweitern.
-- [ ] Fitness-Shaping (Rank-basierte Transformation vor Selektion) einfuehren.
-- [ ] Convergence Detection: `set_convergence_stop(fitness_spread_eps)`, `set_max_evaluations(n)`, `on_stop`-Callback in `train()`. (`min_fitness` + `max_iterations` bereits vorhanden.)
-- [ ] Interspecies Crossover (kleiner Anteil, ~5%) implementieren.
+- [x] Fitness-Shaping (Rank-basierte Transformation vor Selektion) einfuehren.
+- [x] Convergence Detection: `set_convergence_stop(fitness_spread_eps)`, `set_max_evaluations(n)`, `on_stop`-Callback in `train()`. (`min_fitness` + `max_iterations` bereits vorhanden.)
+- [x] Interspecies Crossover (kleiner Anteil, ~5%) implementieren.
 - [ ] Output-Scale als Strategie-Gen auf Output-Nodes (analog zu input_scale).
 - [ ] Ensemble-Inferenz vervollstaendigen: `mode`-Parameter fuer `forward_ensemble` (vote, weighted), GUI-Anzeige der Top-5-Durchschnittsfitness. (`get_ensemble` + Averaging bereits implementiert.)
 - [ ] Early Stopping pro Genome bei schlechter Teilperformance: Generator-Protokoll, sign-unabhaengiger Abbruch wenn `partial_fitness < best_fitness - abs(best_fitness) * factor` (default 1.0), mit Hochrechnung fuer Dataset-Summen.
-- [ ] Strukturiertes Logging: `logs/<kategorie>/<timestamp>/`-Struktur mit `run.log`, `config.json`, `best_genome.json`, `fitness_history.csv`; Auto-Cleanup pro Kategorie.
+- [x] Strukturiertes Logging: `logs/<kategorie>/<timestamp>/`-Struktur mit `run.log`, `config.json`, `best_genome.json`, `fitness_history.csv`; Auto-Cleanup pro Kategorie.
 - [ ] Testabdeckung ausbauen: Regressionstests fuer Bugfixes, parametrisierte Edge-Case-Tests, CI-Suite (`-m "ci"`), Coverage-Ziel >= 80% fuer `core/` und `evolution/`.
 
 ---

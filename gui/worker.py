@@ -171,7 +171,8 @@ class TrainingWorker(QThread):
 
             try:
                 genome = self._yane.next_genome()
-                fitness, elapsed_ms = self._yane._run_evaluations(genome, self._evaluate)
+                result = self._yane._run_evaluations(genome, self._evaluate)
+                fitness, elapsed_ms = result.fitness, result.elapsed_ms
                 self._yane.submit_fitness(fitness, elapsed_ms)
                 self._iteration += 1
                 if self._yane.min_fitness is not None and fitness >= self._yane.min_fitness:

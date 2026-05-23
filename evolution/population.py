@@ -327,6 +327,15 @@ class Population:
         self._n_crossover: int = 0
         self._n_mutation_only: int = 0
         self._n_diversity_injection: int = 0
+        self._n_interspecies_crossover: int = 0
+
+        # Fitness shaping: when enabled, shared_fitness values are replaced by
+        # rank-normalised scores in [1/N, 1] before tournament selection.
+        self._fitness_shaping: bool = False
+
+        # Interspecies crossover: probability that the second parent comes from
+        # a *different* species.  0.0 = intraspecies only (default).
+        self._interspecies_crossover_rate: float = 0.0
 
         # Best-genome topology history — one entry per fitness improvement.
         # Each entry: (total_submitted, n_nodes, n_connections, fitness)
@@ -822,6 +831,24 @@ class Population:
         # Cache so _spawn_offspring() can skip the O(N) min() scan.
         self._min_shared_fitness = min_sf if min_sf != float('inf') else 0.0
 
+    def _apply_fitness_shaping(self) -> None:
+        """Replace shared_fitness values with rank-normalised scores [1/N, 1].
+
+        Rank 1 = worst, rank N = best.  The scores are in (0, 1] so the
+        existing tournament selection formula ``max(0, sf - min_sf + 1e-6)``
+        produces a linear spread from ~0 to ~(N-1)/N regardless of raw fitness
+        scale — selection pressure stays constant across tasks with very
+        different fitness ranges.
+        """
+        evaluated = self._evaluated
+        n = len(evaluated)
+        if n < 2:
+            return
+        sorted_genomes = sorted(evaluated, key=_shared_fitness_key)
+        for rank, genome in enumerate(sorted_genomes, 1):
+            genome.shared_fitness = rank / n
+        self._min_shared_fitness = 1.0 / n
+
     # ------------------------------------------------------------------
     # Offspring spawning
     # ------------------------------------------------------------------
@@ -966,6 +993,8 @@ class Population:
             self._inject_structural_diversity()
             return
         self._compute_shared_fitness()
+        if self._fitness_shaping:
+            self._apply_fitness_shaping()
         self._compute_efficiency_scores()
 
         if self._novelty_evals_since_recompute >= max(1, self.max_size // 2):
@@ -1010,14 +1039,37 @@ class Population:
         # children — otherwise a small population fills with unmutated clones and
         # exploration stalls (especially critical with the empty-connection start).
         if random.random() < parent.crossover_prob and len(self._evaluated) >= 2:
-            sp_members = next(
-                (sp.members for sp in self._species if parent in sp.members),
-                self._evaluated,
+            # Interspecies crossover: with a small probability pick the second
+            # parent from a *different* species to combine structural innovations.
+            use_interspecies = (
+                self._interspecies_crossover_rate > 0.0
+                and len(self._species) >= 2
+                and random.random() < self._interspecies_crossover_rate
             )
-            candidates = [g for g in sp_members if g is not parent]
-            if not candidates:
-                candidates = [g for g in self._evaluated if g is not parent]
-            other = random.choice(candidates)
+            if use_interspecies:
+                # Find parent's species, then pick from any other species.
+                parent_sp = next(
+                    (sp for sp in self._species if parent in sp.members),
+                    None,
+                )
+                other_species_members = [
+                    g for sp in self._species
+                    if sp is not parent_sp
+                    for g in sp.members
+                    if g is not parent
+                ]
+                candidates = other_species_members or [g for g in self._evaluated if g is not parent]
+                other = random.choice(candidates)
+                self._n_interspecies_crossover += 1
+            else:
+                sp_members = next(
+                    (sp.members for sp in self._species if parent in sp.members),
+                    self._evaluated,
+                )
+                candidates = [g for g in sp_members if g is not parent]
+                if not candidates:
+                    candidates = [g for g in self._evaluated if g is not parent]
+                other = random.choice(candidates)
             fitter, weaker = (parent, other) if parent.fitness >= other.fitness else (other, parent)
             child = fitter.crossover(weaker)
             self._n_crossover += 1

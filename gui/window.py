@@ -1,6 +1,7 @@
 """Main application window."""
 from __future__ import annotations
 import time as _time
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QTabWidget,
@@ -981,6 +982,29 @@ class TrainingTab(QWidget):
         ctrl_row.addStretch()
         layout.addWidget(ctrl)
 
+        # --- Checkpoint row ---
+        chk_row_w = QWidget()
+        chk_row = QHBoxLayout(chk_row_w)
+        chk_row.setContentsMargins(0, 0, 0, 0)
+        chk_row.setSpacing(4)
+        self.btn_save_ckpt = QPushButton("💾  Save checkpoint")
+        self.btn_load_ckpt = QPushButton("📂  Load checkpoint")
+        self.btn_save_ckpt.setEnabled(False)
+        self.btn_save_ckpt.setToolTip(
+            "Save the current population + InnovationTracker to a .pkl file\n"
+            "so training can be resumed later."
+        )
+        self.btn_load_ckpt.setToolTip(
+            "Load a checkpoint file to resume a previous training run.\n"
+            "The current population will be replaced."
+        )
+        self.btn_save_ckpt.clicked.connect(self._save_checkpoint)
+        self.btn_load_ckpt.clicked.connect(self._load_checkpoint)
+        chk_row.addWidget(self.btn_save_ckpt)
+        chk_row.addWidget(self.btn_load_ckpt)
+        chk_row.addStretch()
+        layout.addWidget(chk_row_w)
+
         # --- Progress ---
         prog = QGroupBox("Progress")
         prog_layout = QVBoxLayout(prog)
@@ -1221,6 +1245,7 @@ class TrainingTab(QWidget):
         worker.start(QThread.Priority.LowPriority)
         self._worker = worker
         self.training_started.emit()
+        self.btn_save_ckpt.setEnabled(True)
         self.btn_run_best.setEnabled(False)
         self._render_widget.clear_frame()
         self._score_lbl.setVisible(False)
@@ -1385,6 +1410,46 @@ class TrainingTab(QWidget):
     def _on_episode_finished(self) -> None:
         self.btn_run_best.setText("▶  Run Best")
         self._episode_runner = None
+
+    def _save_checkpoint(self) -> None:
+        if self._yane is None:
+            return
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Checkpoint", "checkpoint.pkl",
+            "Checkpoint files (*.pkl);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            self._yane.save_checkpoint(path)
+            self.status_lbl.setText(f"Saved → {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Checkpoint Error", str(e))
+
+    def _load_checkpoint(self) -> None:
+        if self._worker and self._worker.isRunning():
+            QMessageBox.warning(
+                self, "Load Checkpoint",
+                "Stop the current training run before loading a checkpoint."
+            )
+            return
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Checkpoint", "",
+            "Checkpoint files (*.pkl);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            from yane import NeuroEvolution
+            self._yane = NeuroEvolution()
+            self._yane.load_checkpoint(path)
+            self.btn_save_ckpt.setEnabled(True)
+            self.status_lbl.setText(f"Loaded ← {Path(path).name}")
+        except Exception as e:
+            self._yane = None
+            QMessageBox.critical(self, "Load Checkpoint Error", str(e))
 
     def _reset_training_buttons(self) -> None:
         self.btn_start.setEnabled(True)

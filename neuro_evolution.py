@@ -1,4 +1,5 @@
 from __future__ import annotations
+import dataclasses
 import gc
 import json
 import math
@@ -68,6 +69,22 @@ from yane.evolution.efficiency_penalty import EfficiencyPenalty
 from yane.util.resource_guard import ResourceGuard
 
 
+@dataclasses.dataclass
+class EvaluationResult:
+    """Structured result from evaluating a single genome.
+
+    Returned by ``NeuroEvolution._run_evaluations()`` — used internally by the
+    training loop and GUI worker paths.  The public API (``submit_fitness``,
+    ``submit_fitness_batch``) is not affected.
+    """
+    genome: Genome
+    fitness: float
+    elapsed_ms: float
+    n_lamarck_steps: int = 0
+    stopped_early: bool = False
+    raw_fitnesses: list[float] = dataclasses.field(default_factory=list)
+
+
 def _derive_run_name(fitness_fn: Callable) -> str:
     """Derive a log category name from a fitness function.
 
@@ -95,10 +112,11 @@ def _compute_fitness_iqr(evaluated: list) -> float:
 
 
 class NeuroEvolution:
-    def __init__(self) -> None:
+    def __init__(self, seed: int | None = None) -> None:
         self._population: Population | None = None
         self.min_fitness: float | None = None
         self.max_iterations: int | None = None
+        self._seed: int | None = seed
         self._current_genome: Genome | None = None
         self._efficiency_penalty: EfficiencyPenalty | None = None
         self._resource_guard = ResourceGuard()
@@ -137,6 +155,11 @@ class NeuroEvolution:
         # Structured logging
         self._log_run_dir: Path | None = None
         self._log_run_name: str | None = None
+        # Convergence detection
+        self._convergence_spread_eps: float | None = None   # IQR threshold for convergence
+        self._convergence_min_stagnation: float = 1.0       # stagnation fraction required
+        self._max_evaluations: int | None = None
+        self._n_evaluations_done: int = 0
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -175,6 +198,8 @@ class NeuroEvolution:
         from yane.core.connection import Connection
         from yane.util.activation import ActivationType
         import random
+
+        self._apply_seed()
 
         # Cache for logging / introspection.
         self._n_inputs = n_inputs
@@ -232,6 +257,31 @@ class NeuroEvolution:
         self._population.elite_count = self._elite_count
         self._population.species_elite_count = self._species_elite_count
 
+    def set_seed(self, seed: int | None) -> None:
+        """Set or clear the random seed.
+
+        Seeds Python's ``random`` module and NumPy's global RNG so that network
+        initialisation and evolutionary operators are reproducible.
+
+        Note: gym environment seeds are not controlled by YANE — call
+        ``env.reset(seed=...)`` inside your fitness function for full
+        reproducibility with stochastic environments.
+
+        The seed is applied at the start of every ``configure()`` call.
+        """
+        self._seed = seed
+
+    def _apply_seed(self) -> None:
+        """Apply the stored seed to all framework-controlled RNGs."""
+        if self._seed is None:
+            return
+        random.seed(self._seed)
+        try:
+            import numpy as np
+            np.random.seed(self._seed)
+        except ImportError:
+            pass
+
     def set_min_fitness(self, value: float) -> None:
         self.min_fitness = value
 
@@ -242,6 +292,44 @@ class NeuroEvolution:
 
     def set_max_iterations(self, n: int) -> None:
         self.max_iterations = n
+
+    def set_max_evaluations(self, n: int) -> None:
+        """Stop training after n total fitness evaluations.
+
+        Unlike max_iterations which counts spawned genomes, this counts actual
+        fitness-function calls — so with n_evaluations=3 per genome each
+        iteration uses 3 evaluations toward this limit.
+
+        Args:
+            n: Maximum number of fitness-function calls before training stops.
+        """
+        self._max_evaluations = max(1, n)
+
+    def set_convergence_stop(
+        self,
+        fitness_spread_eps: float,
+        min_stagnation: float = 1.0,
+    ) -> None:
+        """Stop training when the population has converged.
+
+        Training stops when **both** conditions hold simultaneously:
+        - ``stagnation_count >= stagnation_threshold * min_stagnation``
+        - IQR of fitness in the evaluated population < ``fitness_spread_eps``
+
+        The IQR check detects when all genomes cluster at similar fitness
+        (evolutionary plateau); the stagnation guard prevents premature stops
+        during warm-up phases when the population is small.
+
+        Args:
+            fitness_spread_eps: IQR threshold below which the population is
+                considered converged.  A small positive value (e.g. 0.01) works
+                well for normalised fitness; tune to your fitness scale.
+            min_stagnation: Fraction of ``stagnation_threshold`` that must be
+                reached before convergence is checked.  Default 1.0 = full
+                stagnation required. Lower values allow earlier stops.
+        """
+        self._convergence_spread_eps = fitness_spread_eps
+        self._convergence_min_stagnation = max(0.0, min_stagnation)
 
     def set_resource_limits(
         self,
@@ -373,6 +461,8 @@ class NeuroEvolution:
         """Return all NeuroEvolution settings as a JSON-serializable dict."""
         pop = self._population
         return {
+            # Reproducibility
+            "seed": self._seed,
             # Network
             "n_inputs": self._n_inputs,
             "n_outputs": self._n_outputs,
@@ -390,6 +480,9 @@ class NeuroEvolution:
             # Stopping criteria
             "min_fitness": self.min_fitness,
             "max_iterations": self.max_iterations,
+            "max_evaluations": self._max_evaluations,
+            "convergence_spread_eps": self._convergence_spread_eps,
+            "convergence_min_stagnation": self._convergence_min_stagnation,
             # Evaluation
             "n_evaluations": self._n_evaluations,
             "eval_aggregation": self._eval_aggregation,
@@ -425,11 +518,17 @@ class NeuroEvolution:
         self,
         fitness_fn: Callable[[Genome], float],
         run_name: str | None = None,
+        on_stop: Callable[[str], None] | None = None,
     ) -> int:
         """Run the evolutionary loop.
 
-        Runs until min_fitness is reached or max_iterations is hit.
-        If neither is set, runs indefinitely.
+        Runs until a stop condition is reached or indefinitely if none is set.
+        Stop conditions (checked in priority order):
+        - ``min_fitness`` — stops when a genome reaches the target fitness.
+        - ``max_evaluations`` — stops after N total fitness-function calls.
+        - ``max_iterations`` — stops after N genome evaluations.
+        - Convergence — stops when IQR < ``fitness_spread_eps`` at full stagnation.
+
         Automatically pauses when system memory is low and resumes when it recovers.
 
         Structured logging is automatically set up: a timestamped directory
@@ -439,6 +538,9 @@ class NeuroEvolution:
         Args:
             fitness_fn: Function that evaluates a genome and returns fitness.
             run_name: Category name for logs (default: derived from *fitness_fn*).
+            on_stop: Optional callback called with the stop reason string when
+                training ends.  Possible values: ``"target_reached"``,
+                ``"max_evaluations"``, ``"max_iterations"``, ``"converged"``.
         Returns:
             Number of iterations performed.
         """
@@ -459,7 +561,8 @@ class NeuroEvolution:
         _csv_path = self._log_run_dir / "fitness_history.csv"
 
         lamarck = self._lamarck_steps > 0
-
+        self._n_evaluations_done = 0
+        stop_reason: str | None = None
         iterations = 0
         while True:
             genome = self._population.select_for_evaluation()
@@ -467,14 +570,15 @@ class NeuroEvolution:
             if lamarck:
                 self._lamarck_refine(genome, fitness_fn)  # refines weights in-place
 
-            fitness, elapsed_ms = self._run_evaluations(genome, fitness_fn)
-            fitness = self._apply_sanitize(fitness)
+            result = self._run_evaluations(genome, fitness_fn)
+            fitness = self._apply_sanitize(result.fitness)
 
             if self._efficiency_penalty is not None:
-                fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)
+                fitness = self._efficiency_penalty.apply(fitness, result.elapsed_ms)
 
-            self._population.submit(genome, fitness, elapsed_ms)
+            self._population.submit(genome, fitness, result.elapsed_ms)
             iterations += 1
+            self._n_evaluations_done += self._n_evaluations
 
             # --- Periodic CSV logging ---------------------------------------
             if iterations % _log_interval == 0:
@@ -524,17 +628,43 @@ class NeuroEvolution:
                         pass
 
             if self.min_fitness is not None and fitness >= self.min_fitness:
+                stop_reason = "target_reached"
                 _li("Training stopped: target fitness reached  fitness=%.6f  iterations=%d",
                     fitness, iterations)
                 break
+            if self._max_evaluations is not None and self._n_evaluations_done >= self._max_evaluations:
+                stop_reason = "max_evaluations"
+                _li("Training stopped: max evaluations reached  evals=%d  iterations=%d",
+                    self._n_evaluations_done, iterations)
+                break
             if self.max_iterations is not None and iterations >= self.max_iterations:
+                stop_reason = "max_iterations"
                 _li("Training stopped: max iterations reached  iterations=%d", iterations)
                 break
+            if (self._convergence_spread_eps is not None
+                    and iterations % max(1, self._population_size // 5) == 0):
+                pop = self._population
+                stag_threshold = max(1, pop.stagnation_threshold)
+                stag_frac = pop.stagnation_count / stag_threshold
+                if stag_frac >= self._convergence_min_stagnation:
+                    iqr = _compute_fitness_iqr(pop._evaluated)
+                    if iqr < self._convergence_spread_eps:
+                        stop_reason = "converged"
+                        _li("Training stopped: converged  iqr=%.6f  stagnation=%d  iterations=%d",
+                            iqr, pop.stagnation_count, iterations)
+                        break
 
             if iterations % self._resource_check_interval == 0:
                 self._enforce_memory_limit()
                 while not self._resource_guard.system_ok():
                     time.sleep(0.5)
+
+        # --- on_stop callback ------------------------------------------------
+        if on_stop is not None:
+            try:
+                on_stop(stop_reason or "manual")
+            except Exception:
+                pass
 
         # --- End-of-run artefacts -------------------------------------------
         if self._log_run_dir is not None:
@@ -546,15 +676,14 @@ class NeuroEvolution:
             mem = self.population_memory_info()
             _wj(self._log_run_dir / "summary.json", {
                 "run_name": name,
-                "stop_reason": ("target_reached" if self.min_fitness is not None and best.fitness >= self.min_fitness
-                                else "max_iterations" if self.max_iterations is not None
-                                else "manual"),
+                "stop_reason": stop_reason or "manual",
                 "iterations": iterations,
                 "best_fitness": best.fitness,
                 "best_nodes": len(best.nodes),
                 "best_connections": best.connection_count,
                 "final_species_count": mem.get("species_count", 0),
                 "final_stagnation": mem.get("stagnation_count", 0),
+                "n_evaluations_done":       self._n_evaluations_done,
                 "lamarck_n_applied":       mem.get("lamarck_n_applied", 0),
                 "lamarck_n_steps_total":   mem.get("lamarck_n_steps_total", 0),
                 "lamarck_n_blocked_top_k": mem.get("lamarck_n_blocked_top_k", 0),
@@ -562,8 +691,9 @@ class NeuroEvolution:
                 "n_clipped_fitness": mem.get("n_clipped_fitness", 0),
             })
             _li("Training finished  best_fitness=%.6f  nodes=%d  connections=%d  iterations=%d  "
-                "lamarck_applied=%d  lamarck_blocked_top_k=%d",
+                "stop_reason=%s  evals=%d  lamarck_applied=%d  lamarck_blocked_top_k=%d",
                 best.fitness, len(best.nodes), best.connection_count, iterations,
+                stop_reason or "manual", self._n_evaluations_done,
                 mem.get("lamarck_n_applied", 0), mem.get("lamarck_n_blocked_top_k", 0))
 
         return iterations
@@ -642,9 +772,10 @@ class NeuroEvolution:
             "n_invalid_fitness":   self._n_invalid_fitness,
             "n_clipped_fitness":   self._n_clipped_fitness,
             # Offspring counters
-            "n_crossover":           self._population._n_crossover,
-            "n_mutation_only":       self._population._n_mutation_only,
-            "n_diversity_injection": self._population._n_diversity_injection,
+            "n_crossover":              self._population._n_crossover,
+            "n_mutation_only":          self._population._n_mutation_only,
+            "n_diversity_injection":    self._population._n_diversity_injection,
+            "n_interspecies_crossover": self._population._n_interspecies_crossover,
             # Lamarck diagnostics
             "lamarck_mode":          "explicit" if self._lamarck_steps > 0 else
                                      ("adaptive" if self._lamarck_max_steps > 0 else "off"),
@@ -698,6 +829,38 @@ class NeuroEvolution:
         if self._population is not None:
             self._population._target_species = n
 
+    def set_fitness_shaping(self, enabled: bool) -> None:
+        """Enable or disable rank-based fitness shaping before selection.
+
+        When enabled, ``shared_fitness`` values are replaced by rank-normalised
+        scores in ``[1/N, 1]`` before tournament selection runs.  This makes
+        selection pressure scale-invariant — a genome that is 100× better than
+        another doesn't dominate 100× more, it just ranks higher.  Useful for
+        tasks with very sparse rewards or extreme fitness outliers.
+
+        Default: disabled.
+        """
+        if self._population is not None:
+            self._population._fitness_shaping = enabled
+
+    def set_interspecies_crossover(self, rate: float) -> None:
+        """Enable interspecies crossover at the given probability.
+
+        When a crossover event fires, this is the probability that the second
+        parent is chosen from a *different* species.  At 0.0 (default) all
+        crossover is intraspecies (classical NEAT).  A small value such as 0.05
+        occasionally combines structural innovations from separate niches.
+
+        Edge case: when only one species exists, falls back to intraspecies
+        selection regardless of rate.
+
+        Args:
+            rate: Probability in [0.0, 1.0].
+        """
+        rate = max(0.0, min(1.0, rate))
+        if self._population is not None:
+            self._population._interspecies_crossover_rate = rate
+
     def set_elitism(
         self,
         elite_count: int = 1,
@@ -737,6 +900,85 @@ class NeuroEvolution:
         n > 1 = fixed worker count.
         """
         self._n_workers = max(0, n)
+
+    # -------------------------------------------------------------------------
+    # Checkpoints
+    # -------------------------------------------------------------------------
+
+    def save_checkpoint(self, path: str | Path) -> None:
+        """Save population state to a checkpoint file.
+
+        Saves the full Population (all evaluated genomes, species, stagnation
+        counters) together with the InnovationTracker so training can be resumed
+        exactly where it left off.  Also stores the current NeuroEvolution
+        configuration dict for reference.
+
+        The file is written atomically (to a ``.tmp`` sibling first) so a crash
+        during the write never leaves a corrupt checkpoint.
+
+        Args:
+            path: Destination file path (e.g. ``"checkpoints/run1.pkl"``).
+        """
+        import pickle
+        self._ensure_configured()
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "config": self._config_dict(),
+            "population": self._population,
+            "tracker": self._tracker,
+            "lamarck_n_applied": self._lamarck_n_applied,
+            "lamarck_n_steps_total": self._lamarck_n_steps_total,
+            "lamarck_n_blocked_top_k": self._lamarck_n_blocked_top_k,
+            "n_invalid_fitness": self._n_invalid_fitness,
+            "n_clipped_fitness": self._n_clipped_fitness,
+        }
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+        tmp.replace(path)
+
+    def load_checkpoint(self, path: str | Path) -> None:
+        """Restore population state from a checkpoint file.
+
+        Replaces the current population and innovation tracker with the saved
+        state.  The NeuroEvolution configuration (n_inputs, n_outputs, etc.) is
+        restored from the checkpoint; any configure() call made before
+        load_checkpoint() is overwritten.
+
+        After loading you can call train() or next_genome() immediately.
+
+        Args:
+            path: Path to a checkpoint file written by save_checkpoint().
+
+        Raises:
+            FileNotFoundError: if *path* does not exist.
+            ValueError: if the checkpoint format is unrecognised.
+        """
+        import pickle
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {path}")
+        payload = pickle.loads(path.read_bytes())
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            raise ValueError(f"Unsupported checkpoint format in {path}")
+        cfg = payload["config"]
+        self._population  = payload["population"]
+        self._tracker     = payload["tracker"]
+        self._lamarck_n_applied       = payload.get("lamarck_n_applied", 0)
+        self._lamarck_n_steps_total   = payload.get("lamarck_n_steps_total", 0)
+        self._lamarck_n_blocked_top_k = payload.get("lamarck_n_blocked_top_k", 0)
+        self._n_invalid_fitness       = payload.get("n_invalid_fitness", 0)
+        self._n_clipped_fitness       = payload.get("n_clipped_fitness", 0)
+        # Restore cached config so _config_dict() + logs are accurate.
+        self._n_inputs           = cfg.get("n_inputs", self._n_inputs)
+        self._n_outputs          = cfg.get("n_outputs", self._n_outputs)
+        self._max_nodes          = cfg.get("max_nodes", self._max_nodes)
+        self._max_connections    = cfg.get("max_connections", self._max_connections)
+        self._n_initial_hidden   = cfg.get("n_initial_hidden", self._n_initial_hidden)
+        self._stateful           = cfg.get("stateful", self._stateful)
+        self._population_size    = cfg.get("population_size", self._population_size)
+        self._seed               = cfg.get("seed", self._seed)
 
     # -------------------------------------------------------------------------
     # Manual loop (for complex multi-step evaluation)
@@ -828,8 +1070,8 @@ class NeuroEvolution:
 
     def _run_evaluations(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]
-    ) -> tuple[float, float]:
-        """Evaluate genome (possibly multiple times) → (fitness, total_elapsed_ms).
+    ) -> EvaluationResult:
+        """Evaluate genome (possibly multiple times) → EvaluationResult.
 
         After the normal evaluation, adaptive Lamarck refinement fires when
         stagnation pressure is high and the genome ranks in the top fraction of
@@ -837,17 +1079,18 @@ class NeuroEvolution:
         (_lamarck_steps > 0) is handled in train() instead and skips this path.
         """
         start = time.perf_counter()
+        raw: list[float] = []
         if self._n_evaluations <= 1:
             fitness = fitness_fn(genome)
         else:
-            fitnesses: list[float] = []
             for _ in range(self._n_evaluations):
-                fitnesses.append(fitness_fn(genome))
+                raw.append(fitness_fn(genome))
             fitness = _aggregate_fitnesses(
-                fitnesses, self._eval_aggregation, self._eval_sigma_penalty
+                raw, self._eval_aggregation, self._eval_sigma_penalty
             )
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
+        n_lamarck_steps = 0
         # Adaptive Lamarck: fires after the baseline is known, only when
         # _lamarck_steps == 0 (explicit mode is off) and stagnation is high.
         if self._lamarck_steps == 0:
@@ -858,6 +1101,7 @@ class NeuroEvolution:
                     baseline_fitness=fitness,
                     n_steps=n_steps,
                 )
+                n_lamarck_steps = n_steps
                 self._lamarck_n_applied += 1
                 self._lamarck_n_steps_total += n_steps
                 # Per-species tracking for diagnostics.
@@ -866,7 +1110,13 @@ class NeuroEvolution:
                     sp.lamarck_n_applied += 1
                     sp.lamarck_n_steps_total += n_steps
 
-        return fitness, elapsed_ms
+        return EvaluationResult(
+            genome=genome,
+            fitness=fitness,
+            elapsed_ms=elapsed_ms,
+            n_lamarck_steps=n_lamarck_steps,
+            raw_fitnesses=raw,
+        )
 
     def _lamarck_refine(
         self,
