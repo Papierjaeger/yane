@@ -18,31 +18,6 @@ def _return_memory_to_os() -> None:
     except Exception:
         pass
 
-def sanitize_fitness(
-    value: float,
-    fallback: float = 0.0,
-    clip_low: float | None = None,
-    clip_high: float | None = None,
-) -> tuple[float, bool, bool]:
-    """Sanitize a raw fitness value.
-
-    Returns (sanitized_value, was_invalid, was_clipped).
-
-    was_invalid: True when value was nan or inf (replaced by fallback).
-    was_clipped: True when value was finite but outside [clip_low, clip_high].
-    """
-    if not math.isfinite(value):
-        return fallback, True, False
-    clipped = False
-    if clip_low is not None and value < clip_low:
-        value = clip_low
-        clipped = True
-    if clip_high is not None and value > clip_high:
-        value = clip_high
-        clipped = True
-    return value, False, clipped
-
-
 def _aggregate_fitnesses(fitnesses: list[float], aggregation: str, sigma_penalty: float) -> float:
     """Combine multiple fitness values into one.
 
@@ -66,6 +41,7 @@ from yane.core.genome import Genome
 from yane.core.node import Node, NodeType
 from yane.evolution.population import Population
 from yane.evolution.efficiency_penalty import EfficiencyPenalty
+from yane.evolution.fitness_sanitizer import FitnessSanitizer, sanitize_fitness  # noqa: F401
 from yane.util.resource_guard import ResourceGuard
 
 
@@ -141,12 +117,7 @@ class NeuroEvolution:
         self._elite_count: int = 1
         self._species_elite_count: int = 1
         # Fitness sanitizing (disabled by default)
-        self._sanitize: bool = False
-        self._sanitize_fallback: float = 0.0
-        self._sanitize_clip_low: float | None = None
-        self._sanitize_clip_high: float | None = None
-        self._n_invalid_fitness: int = 0   # nan / inf seen
-        self._n_clipped_fitness: int = 0   # values clipped by clip bounds
+        self._sanitizer = FitnessSanitizer()
         # Cached configure() parameters for logging / introspection.
         self._n_inputs: int = 0
         self._n_outputs: int = 0
@@ -440,10 +411,7 @@ class NeuroEvolution:
         Call without arguments to enable sanitizing with its defaults:
             yane.set_fitness_sanitizing()
         """
-        self._sanitize = True
-        self._sanitize_fallback = fallback
-        self._sanitize_clip_low = clip_low
-        self._sanitize_clip_high = clip_high
+        self._sanitizer.configure(fallback=fallback, clip_low=clip_low, clip_high=clip_high)
 
     def set_lamarck(self, n_steps: int = 5, sigma: float = 1.0) -> None:
         """Explicit Lamarckian refinement: hill-climb every genome before evaluation.
@@ -535,10 +503,10 @@ class NeuroEvolution:
             "resource_check_interval": self._resource_check_interval,
             "memory_limit_gb": self._resource_guard.max_process_gb,
             # Fitness sanitizing
-            "sanitize_enabled": self._sanitize,
-            "sanitize_fallback": self._sanitize_fallback,
-            "sanitize_clip_low": self._sanitize_clip_low,
-            "sanitize_clip_high": self._sanitize_clip_high,
+            "sanitize_enabled": self._sanitizer.enabled,
+            "sanitize_fallback": self._sanitizer.fallback,
+            "sanitize_clip_low": self._sanitizer.clip_low,
+            "sanitize_clip_high": self._sanitizer.clip_high,
         }
 
     # -------------------------------------------------------------------------
@@ -846,9 +814,9 @@ class NeuroEvolution:
             "elite_count":         self._population.elite_count,
             "species_elite_count": self._population.species_elite_count,
             # Fitness sanitizing diagnostics
-            "sanitize_enabled":    self._sanitize,
-            "n_invalid_fitness":   self._n_invalid_fitness,
-            "n_clipped_fitness":   self._n_clipped_fitness,
+            "sanitize_enabled":    self._sanitizer.enabled,
+            "n_invalid_fitness":   self._sanitizer.n_invalid,
+            "n_clipped_fitness":   self._sanitizer.n_clipped,
             # Offspring counters
             "n_crossover":              self._population._n_crossover,
             "n_mutation_only":          self._population._n_mutation_only,
@@ -1189,8 +1157,8 @@ class NeuroEvolution:
             "lamarck_n_steps_total": self._lamarck_n_steps_total,
             "lamarck_time_ms": self._lamarck_time_ms,
             "lamarck_n_blocked_top_k": self._lamarck_n_blocked_top_k,
-            "n_invalid_fitness": self._n_invalid_fitness,
-            "n_clipped_fitness": self._n_clipped_fitness,
+            "n_invalid_fitness": self._sanitizer.n_invalid,
+            "n_clipped_fitness": self._sanitizer.n_clipped,
             "n_early_stopped": self._n_early_stopped,
             "early_stopping_n": self._early_stopping_n,
         }
@@ -1244,8 +1212,8 @@ class NeuroEvolution:
         self._lamarck_n_steps_total   = payload.get("lamarck_n_steps_total", 0)
         self._lamarck_time_ms         = payload.get("lamarck_time_ms", 0.0)
         self._lamarck_n_blocked_top_k = payload.get("lamarck_n_blocked_top_k", 0)
-        self._n_invalid_fitness       = payload.get("n_invalid_fitness", 0)
-        self._n_clipped_fitness       = payload.get("n_clipped_fitness", 0)
+        self._sanitizer.n_invalid     = payload.get("n_invalid_fitness", 0)
+        self._sanitizer.n_clipped     = payload.get("n_clipped_fitness", 0)
         self._n_early_stopped         = payload.get("n_early_stopped", 0)
         self._early_stopping_n        = payload.get("early_stopping_n", None)
         # Restore cached config so _config_dict() + logs are accurate.
@@ -1324,27 +1292,34 @@ class NeuroEvolution:
     # Internal helpers
     # -------------------------------------------------------------------------
 
+    # ── Compatibility properties (delegate to _sanitizer) ────────────────────
+
+    @property
+    def _sanitize(self) -> bool:
+        return self._sanitizer.enabled
+
+    @_sanitize.setter
+    def _sanitize(self, value: bool) -> None:
+        self._sanitizer.enabled = value
+
+    @property
+    def _n_invalid_fitness(self) -> int:
+        return self._sanitizer.n_invalid
+
+    @_n_invalid_fitness.setter
+    def _n_invalid_fitness(self, value: int) -> None:
+        self._sanitizer.n_invalid = value
+
+    @property
+    def _n_clipped_fitness(self) -> int:
+        return self._sanitizer.n_clipped
+
+    @_n_clipped_fitness.setter
+    def _n_clipped_fitness(self, value: int) -> None:
+        self._sanitizer.n_clipped = value
+
     def _apply_sanitize(self, fitness: float) -> float:
-        """Apply configured sanitizing; count and log anomalies. No-op when disabled."""
-        if not self._sanitize:
-            return fitness
-        clean, invalid, clipped = sanitize_fitness(
-            fitness,
-            fallback=self._sanitize_fallback,
-            clip_low=self._sanitize_clip_low,
-            clip_high=self._sanitize_clip_high,
-        )
-        if invalid:
-            self._n_invalid_fitness += 1
-            from yane.util.logger import get_logger
-            get_logger().warning(
-                "sanitize_fitness: invalid value %r replaced with fallback %r "
-                "(total invalid: %d)",
-                fitness, self._sanitize_fallback, self._n_invalid_fitness,
-            )
-        elif clipped:
-            self._n_clipped_fitness += 1
-        return clean
+        return self._sanitizer.apply(fitness)
 
     def _run_evaluations(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]
