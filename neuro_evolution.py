@@ -125,6 +125,11 @@ class NeuroEvolution:
         self._qd_archive: MAPElitesArchive | None = None
         self._qd_descriptor_fn = None
         self._qd_descriptor_needs_reattach: bool = False
+        # Matrix-accelerated forward pass
+        self._matrix_forward_enabled: bool = False
+        self._matrix_cache = None   # MatrixForwardCache, lazy-imported
+        self._matrix_hits: int = 0
+        self._matrix_misses: int = 0
 
     @property
     def current_genome(self) -> Genome | None:
@@ -637,6 +642,25 @@ class NeuroEvolution:
         """Return the OperatorScheduler for advanced configuration."""
         return self._operator_scheduler
 
+    def set_matrix_forward(self, enabled: bool = True) -> None:
+        """Enable matrix-accelerated forward() for compatible genomes during training.
+
+        When enabled, YANE transparently replaces ``genome.forward()`` with a
+        NumPy matrix path for feed-forward (acyclic, non-stateful) genomes.
+        Genomes with cycles, memory nodes, or unsupported activations fall back
+        to the standard forward path automatically.
+
+        Diagnostics are reported via ``population_memory_info()`` under the
+        keys ``matrix_forward_hits`` and ``matrix_forward_misses``.
+
+        Args:
+            enabled: Pass ``False`` to disable (default: ``True``).
+        """
+        self._matrix_forward_enabled = enabled
+        if enabled and self._matrix_cache is None:
+            from yane.evolution.matrix_export import MatrixForwardCache
+            self._matrix_cache = MatrixForwardCache()
+
     def set_curriculum(
         self,
         stages: list,
@@ -1056,6 +1080,9 @@ class NeuroEvolution:
         )
         if self._curriculum is not None:
             info.update(self._curriculum.info())
+        if self._matrix_forward_enabled:
+            info["matrix_forward_hits"] = self._matrix_hits
+            info["matrix_forward_misses"] = self._matrix_misses
         return info
 
     def set_target_species(self, n: int) -> None:
@@ -1810,7 +1837,37 @@ class NeuroEvolution:
     def _run_evaluations(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]
     ) -> EvaluationResult:
+        if self._matrix_forward_enabled:
+            return self._run_with_matrix_forward(genome, fitness_fn)
         return self._runner.run(genome, fitness_fn, self._population, self._lamarck)
+
+    def _run_with_matrix_forward(
+        self, genome: Genome, fitness_fn: Callable[[Genome], float]
+    ) -> EvaluationResult:
+        from yane.evolution.matrix_export import is_matrix_compatible, forward_matrix
+        patched = False
+        if is_matrix_compatible(genome):
+            try:
+                exported = self._matrix_cache.get(genome)
+                _exp = exported
+
+                def _matrix_fwd(data):
+                    if type(data) is not list:
+                        data = [float(x) for x in data]
+                    return forward_matrix(_exp, data)
+
+                genome.__dict__["forward"] = _matrix_fwd
+                patched = True
+                self._matrix_hits += 1
+            except Exception:
+                self._matrix_misses += 1
+        else:
+            self._matrix_misses += 1
+        try:
+            return self._runner.run(genome, fitness_fn, self._population, self._lamarck)
+        finally:
+            if patched:
+                genome.__dict__.pop("forward", None)
 
     def _lamarck_refine(
         self,

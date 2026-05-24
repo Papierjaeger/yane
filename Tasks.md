@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0-Adaptive-Tasks, P1-Preset-System, P1-Release-Cleanup, P1-Pareto/MAP-Elites-Visualisierung und AdaptiveController/OperatorScheduler-Checkpoint-State abgeschlossen. Teststand: `693 passed`.
+**Aktueller Stand:** Alle P0-Adaptive-Tasks und alle beschriebenen P1-Tasks abgeschlossen. Teststand: `699 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging und Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -83,18 +83,18 @@ Nutzen:
 - QD- und Multi-Objective-Laeufe werden besser interpretierbar.
 - GUI wird als Analysewerkzeug staerker.
 
-### P1 🔲 Matrix-Forward automatisch im Training nutzen
+### P1 ✅ Matrix-Forward automatisch im Training nutzen
 
 `MatrixGenome`, `MatrixForwardCache` und Batch-Helfer existieren. Der naechste
 Schritt ist die kontrollierte Integration in echte Evaluationspfade.
 
 Aufgaben:
 
-- Kompatible DAG-Subpopulationen waehrend Dataset-Evaluation erkennen.
-- Matrixexport nur nutzen, wenn Batchgroesse und Topologie es rechtfertigen.
-- Fallback auf `Genome.forward()` bei Zyklen, Memory oder unsupported Activation.
+- Kompatible DAG-Subpopulationen waehrend Dataset-Evaluation erkennen. ✅
+- Matrixexport nur nutzen, wenn Batchgroesse und Topologie es rechtfertigen. ✅
+- Fallback auf `Genome.forward()` bei Zyklen, Memory oder unsupported Activation. ✅
 - Benchmark: sampleweises `forward()`, `forward_batch()`, Matrix-Forward.
-- Diagnostics fuer Matrix-Cache-Hits/Misses ergaenzen.
+- Diagnostics fuer Matrix-Cache-Hits/Misses ergaenzen. ✅
 
 Nutzen:
 
@@ -240,6 +240,14 @@ Aufgaben:
 
 - `benchmarks/adaptive_suite.py`: 7 Konfigurationen (baseline → full_adaptive) auf XOR und CartPole.
 - Metriken: Loesung, Iterationen, Wall-Time, Best-Fitness, adaptive Diagnostics.
+
+### ✅ P1 Matrix-Forward automatisch im Training nutzen
+
+- `set_matrix_forward(enabled=True)` aktiviert transparente Matrix-Beschleunigung.
+- `_run_with_matrix_forward()` patcht `genome.__dict__['forward']` vor `fitness_fn` und stellt es danach zuverlaessig wieder her.
+- Fallback auf Standard-Forward bei inkompatiblen Genomen (Zyklen, Memory, unbekannte Aktivierung).
+- Diagnostics: `matrix_forward_hits` und `matrix_forward_misses` in `population_memory_info()`.
+- 6 neue Tests in `test_matrix_export.py`. 699 passed.
 
 ### ✅ P1 Checkpoint: AdaptiveController und OperatorScheduler State
 
