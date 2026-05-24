@@ -1,0 +1,621 @@
+{
+  "created_at": "2026-05-24T13:31:47",
+  "results": [
+    {
+      "case": {
+        "example": "XOR",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "max_iterations": 4000,
+        "population": null,
+        "target_species": null,
+        "max_nodes": null,
+        "max_connections": null,
+        "n_initial_hidden": null,
+        "curriculum": null,
+        "complexity_nodes": 0.0,
+        "complexity_connections": 0.0,
+        "timeout_s": 10.0
+      },
+      "target_fitness": -0.1,
+      "runs": [
+        {
+          "seed": 0,
+          "iterations": 3656,
+          "elapsed_s": 6.043188005000047,
+          "stop": "target_reached",
+          "best_fitness": -0.08081728353717564,
+          "solved": true,
+          "accuracy": 4,
+          "accuracy_total": 4,
+          "nodes": 8,
+          "connections": 12,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 1,
+          "iterations": 4000,
+          "elapsed_s": 5.928511426000114,
+          "stop": "max_iterations",
+          "best_fitness": -1.0118259035534145,
+          "solved": false,
+          "accuracy": 3,
+          "accuracy_total": 4,
+          "nodes": 4,
+          "connections": 5,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 2,
+          "iterations": 4000,
+          "elapsed_s": 7.538337485999364,
+          "stop": "max_iterations",
+          "best_fitness": -1.0007255236510604,
+          "solved": false,
+          "accuracy": 3,
+          "accuracy_total": 4,
+          "nodes": 8,
+          "connections": 9,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        }
+      ],
+      "summary": {
+        "solved": 1,
+        "n": 3,
+        "success_rate": 0.3333333333333333,
+        "mean_fitness": -0.6977895702472169,
+        "median_fitness": -1.0007255236510604,
+        "mean_accuracy": 0.8333333333333334,
+        "mean_elapsed_s": 6.503345638999842
+      }
+    },
+    {
+      "case": {
+        "example": "Regression 2\u21922",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "max_iterations": 4000,
+        "population": null,
+        "target_species": null,
+        "max_nodes": null,
+        "max_connections": null,
+        "n_initial_hidden": null,
+        "curriculum": null,
+        "complexity_nodes": 0.0,
+        "complexity_connections": 0.0,
+        "timeout_s": 10.0
+      },
+      "target_fitness": -0.4,
+      "runs": [
+        {
+          "seed": 0,
+          "iterations": 4000,
+          "elapsed_s": 8.994057870999313,
+          "stop": "max_iterations",
+          "best_fitness": -2.0057091251848878,
+          "solved": false,
+          "accuracy": 2,
+          "accuracy_total": 4,
+          "nodes": 9,
+          "connections": 13,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 1,
+          "iterations": 4000,
+          "elapsed_s": 9.012954714999069,
+          "stop": "max_iterations",
+          "best_fitness": -1.8651105318077377,
+          "solved": false,
+          "accuracy": 0,
+          "accuracy_total": 4,
+          "nodes": 9,
+          "connections": 9,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 2,
+          "iterations": 4000,
+          "elapsed_s": 6.456618344000162,
+          "stop": "max_iterations",
+          "best_fitness": -2.0044254194103885,
+          "solved": false,
+          "accuracy": 2,
+          "accuracy_total": 4,
+          "nodes": 12,
+          "connections": 14,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        }
+      ],
+      "summary": {
+        "solved": 0,
+        "n": 3,
+        "success_rate": 0.0,
+        "mean_fitness": -1.9584150254676713,
+        "median_fitness": -2.0044254194103885,
+        "mean_accuracy": 0.3333333333333333,
+        "mean_elapsed_s": 8.154543643332849
+      }
+    },
+    {
+      "case": {
+        "example": "Regression 3\u21923",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "max_iterations": 6000,
+        "population": null,
+        "target_species": null,
+        "max_nodes": null,
+        "max_connections": null,
+        "n_initial_hidden": null,
+        "curriculum": null,
+        "complexity_nodes": 0.0,
+        "complexity_connections": 0.0,
+        "timeout_s": 12.0
+      },
+      "target_fitness": -5.0,
+      "runs": [
+        {
+          "seed": 0,
+          "iterations": 2839,
+          "elapsed_s": 12.005814435000502,
+          "stop": "external",
+          "best_fitness": -8.611897074302988,
+          "solved": false,
+          "accuracy": 0,
+          "accuracy_total": 8,
+          "nodes": 16,
+          "connections": 57,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 1,
+          "iterations": 3274,
+          "elapsed_s": 12.00918418999936,
+          "stop": "external",
+          "best_fitness": -8.057975745105352,
+          "solved": false,
+          "accuracy": 0,
+          "accuracy_total": 8,
+          "nodes": 14,
+          "connections": 54,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 2,
+          "iterations": 2831,
+          "elapsed_s": 12.009468125999774,
+          "stop": "external",
+          "best_fitness": -8.226786505328539,
+          "solved": false,
+          "accuracy": 1,
+          "accuracy_total": 8,
+          "nodes": 15,
+          "connections": 52,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        }
+      ],
+      "summary": {
+        "solved": 0,
+        "n": 3,
+        "success_rate": 0.0,
+        "mean_fitness": -8.29888644157896,
+        "median_fitness": -8.226786505328539,
+        "mean_accuracy": 0.041666666666666664,
+        "mean_elapsed_s": 12.008155583666545
+      }
+    },
+    {
+      "case": {
+        "example": "Multiplication",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "max_iterations": 6000,
+        "population": null,
+        "target_species": null,
+        "max_nodes": null,
+        "max_connections": null,
+        "n_initial_hidden": null,
+        "curriculum": null,
+        "complexity_nodes": 0.0,
+        "complexity_connections": 0.0,
+        "timeout_s": 12.0
+      },
+      "target_fitness": -5.0,
+      "runs": [
+        {
+          "seed": 0,
+          "iterations": 6000,
+          "elapsed_s": 7.019048669000767,
+          "stop": "max_iterations",
+          "best_fitness": -14.031857156435066,
+          "solved": false,
+          "accuracy": 14,
+          "accuracy_total": 100,
+          "nodes": 7,
+          "connections": 5,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 1,
+          "iterations": 5424,
+          "elapsed_s": 12.005094070000268,
+          "stop": "external",
+          "best_fitness": -8.875366254392292,
+          "solved": false,
+          "accuracy": 7,
+          "accuracy_total": 100,
+          "nodes": 6,
+          "connections": 8,
+          "species": 49,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 2,
+          "iterations": 6000,
+          "elapsed_s": 5.873053797999091,
+          "stop": "max_iterations",
+          "best_fitness": -11.847941012477323,
+          "solved": false,
+          "accuracy": 10,
+          "accuracy_total": 100,
+          "nodes": 7,
+          "connections": 10,
+          "species": 12,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        }
+      ],
+      "summary": {
+        "solved": 0,
+        "n": 3,
+        "success_rate": 0.0,
+        "mean_fitness": -11.585054807768227,
+        "median_fitness": -11.847941012477323,
+        "mean_accuracy": 0.10333333333333335,
+        "mean_elapsed_s": 8.299065512333376
+      }
+    },
+    {
+      "case": {
+        "example": "Sequence: Pi-Ziffern",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "max_iterations": 6000,
+        "population": null,
+        "target_species": null,
+        "max_nodes": null,
+        "max_connections": null,
+        "n_initial_hidden": null,
+        "curriculum": null,
+        "complexity_nodes": 0.0,
+        "complexity_connections": 0.0,
+        "timeout_s": 12.0
+      },
+      "target_fitness": 0.0,
+      "runs": [
+        {
+          "seed": 0,
+          "iterations": 6000,
+          "elapsed_s": 7.749669823000659,
+          "stop": "max_iterations",
+          "best_fitness": -0.547022290160815,
+          "solved": false,
+          "accuracy": 2,
+          "accuracy_total": 10,
+          "nodes": 9,
+          "connections": 4,
+          "species": 48,
+          "curriculum_stage": 2,
+          "curriculum_advances": 2
+        },
+        {
+          "seed": 1,
+          "iterations": 6000,
+          "elapsed_s": 9.430192387999341,
+          "stop": "max_iterations",
+          "best_fitness": -0.08276159079735756,
+          "solved": false,
+          "accuracy": 2,
+          "accuracy_total": 10,
+          "nodes": 6,
+          "connections": 4,
+          "species": 49,
+          "curriculum_stage": 3,
+          "curriculum_advances": 3
+        },
+        {
+          "seed": 2,
+          "iterations": 4052,
+          "elapsed_s": 12.004966419000993,
+          "stop": "external",
+          "best_fitness": -0.09245769443295948,
+          "solved": false,
+          "accuracy": 2,
+          "accuracy_total": 10,
+          "nodes": 4,
+          "connections": 2,
+          "species": 100,
+          "curriculum_stage": 1,
+          "curriculum_advances": 1
+        }
+      ],
+      "summary": {
+        "solved": 0,
+        "n": 3,
+        "success_rate": 0.0,
+        "mean_fitness": -0.24074719179704404,
+        "median_fitness": -0.09245769443295948,
+        "mean_accuracy": 0.2,
+        "mean_elapsed_s": 9.728276210000331
+      }
+    },
+    {
+      "case": {
+        "example": "CartPole",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "max_iterations": 3000,
+        "population": null,
+        "target_species": null,
+        "max_nodes": null,
+        "max_connections": null,
+        "n_initial_hidden": null,
+        "curriculum": null,
+        "complexity_nodes": 0.0,
+        "complexity_connections": 0.0,
+        "timeout_s": 12.0
+      },
+      "target_fitness": 1000,
+      "runs": [
+        {
+          "seed": 0,
+          "iterations": 3000,
+          "elapsed_s": 2.9892541989993333,
+          "stop": "max_iterations",
+          "best_fitness": 87.0,
+          "solved": false,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 10,
+          "connections": 5,
+          "species": 31,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 1,
+          "iterations": 3000,
+          "elapsed_s": 4.047427712999706,
+          "stop": "max_iterations",
+          "best_fitness": 71.0,
+          "solved": false,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 6,
+          "connections": 6,
+          "species": 50,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 2,
+          "iterations": 3000,
+          "elapsed_s": 3.2514311159993667,
+          "stop": "max_iterations",
+          "best_fitness": 256.0,
+          "solved": false,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 6,
+          "connections": 7,
+          "species": 27,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        }
+      ],
+      "summary": {
+        "solved": 0,
+        "n": 3,
+        "success_rate": 0.0,
+        "mean_fitness": 138.0,
+        "median_fitness": 87.0,
+        "mean_accuracy": null,
+        "mean_elapsed_s": 3.4293710093328023
+      }
+    },
+    {
+      "case": {
+        "example": "MountainCar (Discrete)",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "max_iterations": 2500,
+        "population": null,
+        "target_species": null,
+        "max_nodes": null,
+        "max_connections": null,
+        "n_initial_hidden": null,
+        "curriculum": null,
+        "complexity_nodes": 0.0,
+        "complexity_connections": 0.0,
+        "timeout_s": 12.0
+      },
+      "target_fitness": 10.0,
+      "runs": [
+        {
+          "seed": 0,
+          "iterations": 2101,
+          "elapsed_s": 7.065234167001108,
+          "stop": "target_reached",
+          "best_fitness": 10.502872467041016,
+          "solved": true,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 6,
+          "connections": 2,
+          "species": 49,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 1,
+          "iterations": 2500,
+          "elapsed_s": 7.67086570200081,
+          "stop": "max_iterations",
+          "best_fitness": 0.12164115160703659,
+          "solved": false,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 7,
+          "connections": 7,
+          "species": 25,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 2,
+          "iterations": 564,
+          "elapsed_s": 1.9289297530012846,
+          "stop": "target_reached",
+          "best_fitness": 10.502453804016113,
+          "solved": true,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 8,
+          "connections": 4,
+          "species": 15,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        }
+      ],
+      "summary": {
+        "solved": 2,
+        "n": 3,
+        "success_rate": 0.6666666666666666,
+        "mean_fitness": 7.042322474221389,
+        "median_fitness": 10.502453804016113,
+        "mean_accuracy": null,
+        "mean_elapsed_s": 5.555009874001068
+      }
+    },
+    {
+      "case": {
+        "example": "Frozen Lake",
+        "seeds": [
+          0,
+          1,
+          2
+        ],
+        "max_iterations": 3000,
+        "population": null,
+        "target_species": null,
+        "max_nodes": null,
+        "max_connections": null,
+        "n_initial_hidden": null,
+        "curriculum": null,
+        "complexity_nodes": 0.0,
+        "complexity_connections": 0.0,
+        "timeout_s": 12.0
+      },
+      "target_fitness": 0.8,
+      "runs": [
+        {
+          "seed": 0,
+          "iterations": 1002,
+          "elapsed_s": 12.004842266000196,
+          "stop": "external",
+          "best_fitness": 0.2999999999999997,
+          "solved": false,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 6,
+          "connections": 0,
+          "species": 5,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 1,
+          "iterations": 578,
+          "elapsed_s": 12.015342620999945,
+          "stop": "external",
+          "best_fitness": 0.2999999999999997,
+          "solved": false,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 6,
+          "connections": 0,
+          "species": 5,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        },
+        {
+          "seed": 2,
+          "iterations": 423,
+          "elapsed_s": 12.008815441999104,
+          "stop": "external",
+          "best_fitness": 0.499999999999999,
+          "solved": false,
+          "accuracy": null,
+          "accuracy_total": null,
+          "nodes": 8,
+          "connections": 3,
+          "species": 17,
+          "curriculum_stage": null,
+          "curriculum_advances": null
+        }
+      ],
+      "summary": {
+        "solved": 0,
+        "n": 3,
+        "success_rate": 0.0,
+        "mean_fitness": 0.36666666666666614,
+        "median_fitness": 0.2999999999999997,
+        "mean_accuracy": null,
+        "mean_elapsed_s": 12.009666776333082
+      }
+    }
+  ]
+}
