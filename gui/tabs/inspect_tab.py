@@ -43,6 +43,7 @@ class _TestCaseRow:
         self._output_scale  = output_scale
         self._denormalized  = denormalized
         self._delta: float | None = None
+        self._correct: bool | None = None
 
         row = QWidget()
         rlay = QHBoxLayout(row)
@@ -68,6 +69,7 @@ class _TestCaseRow:
     def update(self, genome) -> None:
         if genome is None:
             self._delta = None
+            self._correct = None
             self._out_lbl.setText("—")
             self._delta_lbl.setText("—")
             self._tick.setText("?")
@@ -77,6 +79,7 @@ class _TestCaseRow:
             outputs = genome.forward(self._inputs)
         except Exception:
             self._delta = None
+            self._correct = None
             self._out_lbl.setText("err")
             self._delta_lbl.setText("—")
             self._tick.setText("✗")
@@ -101,6 +104,7 @@ class _TestCaseRow:
             diffs = [d * s for d, s in zip(diffs, self._output_scale)]
         total = sum(abs(d) for d in diffs)
         self._delta = total
+        self._correct = correct
         self._delta_lbl.setText(f"{total:.2f}" if self._denormalized else f"{total:.3f}")
 
         tick, color = ("✓", "#a6e3a1") if correct else ("✗", "#f38ba8")
@@ -585,9 +589,7 @@ class InspectTab(QWidget):
             self._test_sum_lbl.setText("")
             return
         total   = sum(deltas)
-        correct = sum(1 for r in self._test_rows if r._delta is not None
-                      and (r._delta < _TOL_NORMALIZED * len(r._expected)
-                           if not r._denormalized else r._delta == 0.0))
+        correct = sum(1 for r in self._test_rows if r._correct)
         n       = len(self._test_rows)
         self._test_sum_lbl.setText(
             f"Σ Δ: {total:.4f}  |  {correct}/{n} correct"
