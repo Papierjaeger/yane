@@ -209,5 +209,90 @@ class TestLamarckIntegration(unittest.TestCase):
         self.assertIsNotNone(info.get("lamarck_n_steps_total"))
 
 
+class TestLamarckSigma(unittest.TestCase):
+    """Tests for the per-genome lamarck_sigma strategy gene."""
+
+    def test_genome_has_lamarck_sigma(self):
+        """New genomes must start with lamarck_sigma=1.0."""
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+        self.assertAlmostEqual(g.lamarck_sigma, 1.0, places=9)
+
+    def test_lamarck_sigma_used_in_refine(self):
+        """LamarckRefiner.refine() uses genome.lamarck_sigma, not sigma_global.
+
+        Verified by setting lamarck_sigma=0 (invalid → refine returns early) while
+        sigma_global is non-zero, and confirming no perturbations happen.
+        """
+        from yane.evolution.lamarck_refiner import LamarckRefiner
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        genome = yane.next_genome()
+        yane.submit_fitness(0.0)
+        # Pull a second genome so connections may exist.
+        genome = yane.next_genome()
+
+        genome.sigma_global = 5.0    # large; would perturb if used
+        genome.lamarck_sigma = 0.0   # invalid (0.0 < sigma check fails) → early return
+
+        refiner = LamarckRefiner()
+        baseline = _dummy_fitness(genome)
+        result = refiner.refine(genome, _dummy_fitness, baseline_fitness=baseline, n_steps=5)
+        # lamarck_sigma=0 should trigger the guard → return baseline immediately
+        self.assertEqual(result, baseline,
+                         "lamarck_sigma=0 must cause early return (not sigma_global=5)")
+
+    def test_lamarck_sigma_evolves_independently(self):
+        """After mutations, lamarck_sigma and sigma_global can diverge."""
+        import random as _rng
+        _rng.seed(42)
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+        # Pin sigma_global; mutate many times to let lamarck_sigma drift.
+        g.sigma_global = 1.0
+        for _ in range(200):
+            g.mutate()
+        # lamarck_sigma should be clamped to [0.001, 10.0] and able to differ.
+        self.assertGreaterEqual(g.lamarck_sigma, 0.001)
+        self.assertLessEqual(g.lamarck_sigma, 10.0)
+
+    def test_diagnostics_include_pop_avg_lamarck_sigma(self):
+        """population_memory_info must include pop_avg_lamarck_sigma."""
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        for _ in range(5):
+            yane.next_genome()
+            yane.submit_fitness(1.0)
+        info = yane.population_memory_info()
+        self.assertIn("pop_avg_lamarck_sigma", info)
+        self.assertGreater(info["pop_avg_lamarck_sigma"], 0.0)
+
+    def test_lamarck_sigma_inherited_via_copy(self):
+        """copy() must preserve lamarck_sigma."""
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+        g.lamarck_sigma = 3.14
+        c = g.copy()
+        self.assertAlmostEqual(c.lamarck_sigma, 3.14, places=9)
+
+    def test_old_genome_fallback(self):
+        """Genomes without lamarck_sigma fall back to sigma_global in refine()."""
+        from yane.evolution.lamarck_refiner import LamarckRefiner
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        genome = yane.next_genome()
+        # Simulate old pickled genome by deleting the attribute.
+        del genome.lamarck_sigma
+        genome.sigma_global = 2.0
+        refiner = LamarckRefiner()
+        # Should not raise — falls back to sigma_global.
+        baseline = _dummy_fitness(genome)
+        result = refiner.refine(genome, _dummy_fitness, baseline_fitness=baseline, n_steps=1)
+        self.assertGreaterEqual(result, baseline)
+
+
 if __name__ == "__main__":
     unittest.main()

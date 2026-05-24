@@ -143,6 +143,9 @@ def build_population_info(
     if evaluated:
         info["pop_avg_sigma_global"] = sum(
             g.sigma_global for g in evaluated) / len(evaluated)
+        info["pop_avg_lamarck_sigma"] = sum(
+            getattr(g, 'lamarck_sigma', g.sigma_global) for g in evaluated
+        ) / len(evaluated)
         info["pop_avg_add_node"] = sum(
             g.mutation_add_node.bool_rate for g in evaluated) / len(evaluated)
         info["pop_avg_rem_node"] = sum(

@@ -9,22 +9,23 @@ from yane.evolution.mutation import Mutation
 # Attributes shared between copy() and crossover() — scalars and Mutation objects.
 _SCALAR_GENES = (
     'bypass_connection_prob', 'crossover_prob', 'offspring_factor',
-    'sigma_global', 'allow_memory',
+    'sigma_global', 'lamarck_sigma', 'allow_memory',
 )
 _MUTATION_GENES = (
     'mutation_bypass', 'mutation_add_node', 'mutation_remove_node',
     'mutation_add_connection', 'mutation_remove_connection',
     'mutation_rewire', 'mutation_disable_connection', 'mutation_enable_connection',
     'mutation_crossover', 'mutation_offspring',
-    'mutation_sigma',
+    'mutation_sigma', 'mutation_lamarck_sigma',
 )
 
 # Strategy-gene mutation specs: (attr, mutation_attr, min_val, max_val | None)
 _STRATEGY_MUTATION_SPECS = (
-    ('bypass_connection_prob', 'mutation_bypass',    0.0,  1.0),
-    ('crossover_prob',         'mutation_crossover', 0.0,  1.0),
-    ('offspring_factor',       'mutation_offspring',  0.01, None),
-    ('sigma_global',           'mutation_sigma',      0.01, 20.0),
+    ('bypass_connection_prob', 'mutation_bypass',         0.0,   1.0),
+    ('crossover_prob',         'mutation_crossover',      0.0,   1.0),
+    ('offspring_factor',       'mutation_offspring',      0.01,  None),
+    ('sigma_global',           'mutation_sigma',          0.01,  20.0),
+    ('lamarck_sigma',          'mutation_lamarck_sigma',  0.001, 10.0),
 )
 
 
@@ -97,6 +98,12 @@ class Genome:
         # Global step-size scale for weight/bias mutations (CMA-ES style)
         self.sigma_global: float = 1.0
         self.mutation_sigma = Mutation()
+
+        # Dedicated step-size for Lamarckian hill-climbing — evolves independently
+        # of sigma_global so the population can find the right refinement scale
+        # without interfering with the structural mutation pressure.
+        self.lamarck_sigma: float = 1.0
+        self.mutation_lamarck_sigma = Mutation()
 
         # Set by Population.submit(); initialised here so the attribute always exists.
         self.shared_fitness: float = 0.0

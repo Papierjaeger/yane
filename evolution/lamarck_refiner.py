@@ -69,7 +69,11 @@ class LamarckRefiner:
         if not conns and not nodes:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
-        sigma = genome.sigma_global * self.sigma
+        # Use the genome's own Lamarck sigma (evolvable, independent of sigma_global).
+        # self.sigma is a global multiplier for runtime override via set_lamarck(sigma=).
+        # Fall back to sigma_global for genomes pickled before lamarck_sigma existed.
+        genome_sigma = getattr(genome, 'lamarck_sigma', genome.sigma_global)
+        sigma = genome_sigma * self.sigma
         if not (0.0 < sigma < 1e6):
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 

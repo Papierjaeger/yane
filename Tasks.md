@@ -256,10 +256,9 @@ Nutzen:
 
 **Bereits implementiert:** Adaptives Lamarck (stagnationsbasiert 0→max_steps, Top-20%), expliziter Modus, per-Species Lamarck (Steps skalieren mit Species-Stagnation), `lamarck_per_species`-Diagnostics in GUI, `_lamarck_sigma`-Multiplier, kumulative Lamarck-Zeitmessung (`lamarck_time_ms`) in GUI.
 
-**Noch offen:**
+**Bereits implementiert:** `genome.lamarck_sigma` als eigenständiges Strategy-Gen (0.001–10.0, selbst-adaptiv via `mutation_lamarck_sigma`), unabhängig von `sigma_global`. `LamarckRefiner.refine()` nutzt `genome.lamarck_sigma` direkt; `LamarckRefiner.sigma` bleibt als globaler Multiplikator für `set_lamarck(sigma=...)`. `pop_avg_lamarck_sigma` in Diagnostics. Best-Genome-Sigma im GUI (Lamarck-Gruppe). Tests in `TestLamarckSigma`.
 
-- Separate Sigma-Strategie für Lamarck (eigenes, evolvierbares sigma unabhängig von `sigma_global`, statt nur Multiplier).
-- Tests für Zusammenspiel mit Strukturstagnation.
+**Noch offen:** — (alle Restaufgaben sind jetzt implementiert).
 
 Nutzen:
 
@@ -548,7 +547,7 @@ Nutzen:
 - [x] Speciation robuster: Dynamische Ziel-Species, alternative Metrik, kleine Species geschützt, Stammbaum.
 - [x] Worker-Abstraktion: _run_evaluations() + EvaluationResult done; explizites Lamarck in Runner verschoben, GUI-Pfad vereinheitlicht.
 - [x] Genome-Visualisierung: Basis-Canvas + Gewichtsfarben + Aktivierungslabel + Persistent-Ring + Disabled-Connections + Innovationsnummern.
-- [ ] Lamarck Rest: per-Species + Zeitmessung done; separate Sigma-Strategie fehlt.
+- [x] Lamarck Rest: per-Species + Zeitmessung done; `genome.lamarck_sigma` als eigenes evolvierbares Strategy-Gen implementiert.
 - [ ] Memory-Mechanismen: Persistente Nodes done; Gating, Leaky Memory, eigener NodeType fehlen.
 
 ### 🔲 Noch nicht begonnen

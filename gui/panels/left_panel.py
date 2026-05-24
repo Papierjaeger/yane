@@ -285,6 +285,12 @@ class LeftPanel(QWidget):
             "Kumulative Zeit in Lamarck-Refinement (ms).\n"
             "Zeigt den Overhead des Hill-Climbings.")
         lamarck_grp.addRow("Time total (ms):", self.lbl_lamarck_time)
+        self.lbl_lamarck_sigma = _label("—", "mutRate")
+        self.lbl_lamarck_sigma.setToolTip(
+            "Lamarck-Sigma des besten Genoms — evolvierbarer Schrittweitenparameter\n"
+            "unabhängig von sigma_global. Steuert, wie groß die Gewichtsstörungen\n"
+            "beim Hill-Climbing ausfallen.")
+        lamarck_grp.addRow("Best σ_lamarck:", self.lbl_lamarck_sigma)
         layout.addWidget(lamarck_grp)
 
         # ── Evaluation timing ─────────────────────────────────────────────
@@ -607,6 +613,9 @@ class LeftPanel(QWidget):
         lt = mem.get("lamarck_time_ms")
         if lt is not None:
             self.lbl_lamarck_time.setText(f"{lt:.1f}")
+        ls = getattr(genome, 'lamarck_sigma', None)
+        if ls is not None:
+            self.lbl_lamarck_sigma.setText(f"{ls:.4f}")
 
         # Structure mutations
         self.lbl_rate_add_node.setText(f"{genome.mutation_add_node.bool_rate:.4f}")
