@@ -163,87 +163,78 @@ class TrainingWorker(QThread):
             self._run_sequential(last_emit)
 
     def _run_sequential(self, last_emit: float, auto: bool = False) -> None:
-        # When curriculum is active, use it directly as the evaluation function
-        # (it delegates to the current stage's fitness_fn).  Otherwise build
-        # the eval fn here on the worker thread so gym.make() never blocks the
-        # main thread (gym init can take 0.5–2 s for Acrobot, CartPole, etc.).
+        _OVERHEAD_MS      = 16.0
+        _MP_RECHECK_EVERY = 50
+
         if self._yane._curriculum is not None:
-            self._evaluate = self._yane._curriculum
+            fitness_fn = None
         else:
             try:
-                self._evaluate = self._make_eval_fn(self._render_cb)
+                fitness_fn = self._make_eval_fn(self._render_cb)
             except Exception as exc:
                 self.error_occurred.emit(str(exc))
                 return
 
-        _OVERHEAD_MS      = 16.0
-        _MP_RECHECK_EVERY = 50   # in auto mode: re-evaluate whether MP helps
+        switch_to_mp_n  = 0
+        switch_to_mp_ms = 0.0
+        last_cur_stage  = self._yane.curriculum_stage
 
-        while self._running:
+        def on_iter(iteration: int, fitness: float, elapsed_ms: float) -> bool:
+            nonlocal last_emit, switch_to_mp_n, switch_to_mp_ms, last_cur_stage
+            self._iteration = iteration
+
+            # Detect curriculum stage advancement and emit a status message.
+            cur_stage = self._yane.curriculum_stage
+            if cur_stage is not None and cur_stage != last_cur_stage:
+                last_cur_stage = cur_stage
+                cur   = self._yane._curriculum
+                stage = cur.current_stage
+                self.info_message.emit(
+                    f"Curriculum: Stage {cur.stage_index + 1}/{cur.stage_count}"
+                    f" — {stage.name or 'unnamed'}"
+                )
+
             while self._paused and self._running:
                 time.sleep(0.05)
+            if not self._running:
+                return False
 
-            try:
-                genome = self._yane.next_genome()
-                result = self._yane._run_evaluations(genome, self._evaluate)
-                fitness, elapsed_ms = result.fitness, result.elapsed_ms
-                self._yane.submit_fitness(fitness, elapsed_ms)
-                self._iteration += 1
-                if self._yane.min_fitness is not None and fitness >= self._yane.min_fitness:
-                    self._running = False
+            if auto and iteration % _MP_RECHECK_EVERY == 0:
+                batch_size = self._yane._population.max_size
+                needed = _optimal_workers(elapsed_ms, batch_size, _OVERHEAD_MS,
+                                         mp.cpu_count())
+                if needed >= 2:
+                    self.workers_resolved.emit(needed)
+                    self.info_message.emit(
+                        f"Auto → {needed} Worker "
+                        f"(eval {elapsed_ms:.2f}ms/Genome nach {iteration} It.)"
+                    )
+                    switch_to_mp_n  = needed
+                    switch_to_mp_ms = elapsed_ms
+                    return False
 
-                # Curriculum advancement: record finalized fitness and check
-                # whether the current stage target has been reached.
-                cur = self._yane._curriculum
-                if cur is not None and self._running:
-                    cur.record_fitness(fitness)
-                    if cur.maybe_advance():
-                        self._yane._population.reset_stagnation()
-                        stage = cur.current_stage
-                        self.info_message.emit(
-                            f"Curriculum: Stage {cur.stage_index + 1}/{cur.stage_count}"
-                            f" — {stage.name or 'unnamed'}"
-                        )
-                    elif cur.is_complete():
-                        self._running = False
+            time.sleep(0)  # yield GIL to Qt event loop
 
-                # Auto mode: periodically check if MP has become worthwhile.
-                # The first genome is often empty (no connections) and thus much
-                # faster than later genomes — this re-check catches the transition.
-                if auto and self._iteration % _MP_RECHECK_EVERY == 0:
-                    batch_size = self._yane._population.max_size
-                    needed = _optimal_workers(elapsed_ms, batch_size, _OVERHEAD_MS,
-                                             mp.cpu_count())
-                    if needed >= 2:
-                        _close_env(self._evaluate)
-                        self.workers_resolved.emit(needed)
-                        self.info_message.emit(
-                            f"Auto → {needed} Worker "
-                            f"(eval {elapsed_ms:.2f}ms/Genome nach {self._iteration} It.)"
-                        )
-                        self._run_multiprocess(mp.cpu_count(), last_emit,
-                                               auto=True,
-                                               bootstrap_eval_ms=elapsed_ms)
-                        return
+            now = time.perf_counter()
+            if now - last_emit >= _EMIT_INTERVAL_S:
+                last_emit = now
+                self._emit_update(iteration, fitness)
 
-                self._maybe_maintain(genome, fitness)
+            return True
 
-                # Yield the GIL so the main thread's Qt event loop can process
-                # pending events (paint, input, signals). Without this, the worker
-                # can monopolise the GIL for many ms during tight training loops.
-                time.sleep(0)
+        try:
+            self._yane.train(fitness_fn, on_iteration=on_iter)
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
+            return
 
-                now = time.perf_counter()
-                if now - last_emit >= _EMIT_INTERVAL_S:
-                    last_emit = now
-                    self._emit_update(genome, fitness)
-
-            except Exception as exc:
-                self.error_occurred.emit(str(exc))
-                break
+        if switch_to_mp_n > 0:
+            self._run_multiprocess(mp.cpu_count(), last_emit,
+                                   auto=True, bootstrap_eval_ms=switch_to_mp_ms)
+            return
 
         self._emit_final()
-        _close_env(self._evaluate)
+        _close_env(fitness_fn)
 
     def _run_parallel(self, n_workers: int, last_emit: float) -> None:
         # Each thread owns its own eval_fn (and thus its own gym env).
@@ -290,7 +281,7 @@ class TrainingWorker(QThread):
                     now = time.perf_counter()
                     if now - last_emit >= _EMIT_INTERVAL_S:
                         last_emit = now
-                        self._emit_update(best_genome, best_fitness)
+                        self._emit_update(self._iteration, best_fitness)
 
                 except Exception as exc:
                     self.error_occurred.emit(str(exc))
@@ -483,7 +474,7 @@ class TrainingWorker(QThread):
                     now = time.perf_counter()
                     if now - last_emit >= _EMIT_INTERVAL_S:
                         last_emit = now
-                        self._emit_update(best_genome, best_fitness)
+                        self._emit_update(self._iteration, best_fitness)
 
                     time.sleep(0)   # yield GIL to Qt event loop
 
@@ -496,23 +487,13 @@ class TrainingWorker(QThread):
 
         self._emit_final()
 
-    def _maybe_maintain(self, genome: Genome, fitness: float) -> None:
-        if self._iteration % _MEMORY_CHECK_EVERY == 0:
-            self._yane._enforce_memory_limit()
-            guard = self._yane._resource_guard
-            while self._running and not guard.system_ok():
-                time.sleep(0.5)
-        if self._iteration % _GC_EVERY == 0 and self._running:
-            gc.collect()
-            _return_memory_to_os()
-
-    def _emit_update(self, genome: Genome, fitness: float) -> None:
+    def _emit_update(self, iteration: int, fitness: float) -> None:
         try:
             best = self._yane.get_best().copy()
         except RuntimeError:
-            best = genome.copy()
+            return
         mem = self._yane.population_memory_info()
-        self.iteration_done.emit(self._iteration, fitness, best, mem)
+        self.iteration_done.emit(iteration, fitness, best, mem)
 
     def _emit_final(self) -> None:
         try:

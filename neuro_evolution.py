@@ -504,6 +504,7 @@ class NeuroEvolution:
         fitness_fn: Callable[[Genome], float] | None = None,
         run_name: str | None = None,
         on_stop: Callable[[str], None] | None = None,
+        on_iteration: Callable[[int, float, float], bool] | None = None,
     ) -> int:
         """Run the evolutionary loop.
 
@@ -515,6 +516,7 @@ class NeuroEvolution:
         - Convergence — stops when IQR < ``fitness_spread_eps`` at full stagnation.
         - ``"curriculum_complete"`` — all curriculum stages finished (curriculum
           mode only).
+        - ``"external"`` — ``on_iteration`` returned ``False``.
 
         Automatically pauses when system memory is low and resumes when it
         recovers.
@@ -531,7 +533,11 @@ class NeuroEvolution:
             on_stop: Optional callback called with the stop reason string when
                 training ends.  Possible values: ``"target_reached"``,
                 ``"max_evaluations"``, ``"max_iterations"``, ``"converged"``,
-                ``"curriculum_complete"``.
+                ``"curriculum_complete"``, ``"external"``.
+            on_iteration: Optional callback invoked after each genome is
+                evaluated.  Signature:
+                ``callback(iteration: int, fitness: float, elapsed_ms: float) -> bool``.
+                Return ``False`` to stop training (stop reason ``"external"``).
         Returns:
             Number of iterations performed.
         """
@@ -622,6 +628,12 @@ class NeuroEvolution:
                 elif self._curriculum.is_complete():
                     stop_reason = "curriculum_complete"
                     _li("Curriculum: all stages complete  iterations=%d", iterations)
+                    break
+
+            # --- on_iteration callback ---------------------------------------
+            if on_iteration is not None:
+                if on_iteration(iterations, fitness, result.elapsed_ms) is False:
+                    stop_reason = "external"
                     break
 
             stop_reason = self._check_stop_reason(fitness, iterations, _li)
