@@ -579,6 +579,163 @@ def _make_mountaincar_eval(max_train_steps: int = 1000):
 # Registry
 # ---------------------------------------------------------------------------
 
+def _gui_defaults(**overrides) -> dict:
+    defaults = {
+        "n_workers": 0,
+        "multi_eval": 1,
+        "aggregation": "mean",
+        "sigma_penalty": 0.0,
+        "fitness_shaping": False,
+        "multi_objective": False,
+        "multi_objective_complexity_weight": 0.01,
+        "quality_diversity": False,
+        "quality_diversity_descriptor": "Topology",
+        "fitness_components": False,
+        "fitness_component_mode": "Fix",
+        "matrix_forward": False,
+        "cppn_substrate": False,
+        "cppn_hidden": 2,
+        "remote_eval": False,
+        "remote_urls": "",
+        "remote_timeout_s": 30.0,
+        "remote_retries": 2,
+        "remote_batch_size": 0,
+        "novelty": True,
+        "speciation": True,
+        "crossover": True,
+        "diversity_injection": True,
+        "convergence_spread": 0.0,
+        "convergence_stagnation": 1.0,
+        "early_stop_factor": 0.0,
+        "efficiency_max_ms": 0.0,
+        "efficiency_penalty": 0.0,
+        "elite_global": 1,
+        "elite_species": 1,
+        "normalize": True,
+        "lamarck_schedule": "Adaptiv",
+        "lamarck_optimizer": "Hill-Climbing",
+        "lamarck_steps": 5,
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+def _adaptive_defaults(**overrides) -> dict:
+    defaults = {
+        "adaptive_controller": False,
+        "operator_scheduler": False,
+        "interspecies_mode": "Fix",
+        "interspecies_min_rate": 0.0,
+        "interspecies_max_rate": 0.2,
+        "lamarck_schedule": "Adaptiv",
+        "lamarck_optimizer": "Hill-Climbing",
+        "lamarck_budget": 0,
+        "meta_adaptive": False,
+        "module_library": False,
+        "module_insert_rate": 0.02,
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+_FAST_DATASET_DEFAULTS = _gui_defaults(
+    n_workers=1,
+    fitness_shaping=True,
+    matrix_forward=True,
+    novelty=True,
+    convergence_spread=0.0001,
+)
+_HARD_DATASET_DEFAULTS = _gui_defaults(
+    n_workers=1,
+    fitness_shaping=True,
+    matrix_forward=True,
+    quality_diversity=True,
+    quality_diversity_descriptor="Topology",
+    fitness_components=True,
+    fitness_component_mode="Adaptiv",
+    convergence_spread=0.0001,
+)
+_HARD_DATASET_ADAPTIVE = _adaptive_defaults(
+    adaptive_controller=True,
+    operator_scheduler=True,
+    interspecies_mode="Adaptiv",
+    interspecies_min_rate=0.01,
+    interspecies_max_rate=0.15,
+    meta_adaptive=True,
+    module_library=True,
+    module_insert_rate=0.02,
+)
+_SEQUENCE_DEFAULTS = _gui_defaults(
+    n_workers=1,
+    fitness_shaping=True,
+    matrix_forward=False,
+    quality_diversity=True,
+    quality_diversity_descriptor="Behavior",
+    fitness_components=True,
+    fitness_component_mode="Adaptiv",
+    convergence_spread=0.0001,
+)
+_SEQUENCE_ADAPTIVE = _adaptive_defaults(
+    adaptive_controller=True,
+    operator_scheduler=True,
+    interspecies_mode="Adaptiv",
+    interspecies_min_rate=0.01,
+    interspecies_max_rate=0.2,
+    meta_adaptive=True,
+    module_library=False,
+    lamarck_budget=100,
+)
+_CLASSIC_CONTROL_DEFAULTS = _gui_defaults(
+    n_workers=0,
+    multi_eval=1,
+    matrix_forward=True,
+    fitness_shaping=True,
+    quality_diversity=True,
+    quality_diversity_descriptor="Behavior",
+    fitness_components=False,
+    normalize=True,
+    early_stop_factor=0.0,
+)
+_CLASSIC_CONTROL_ADAPTIVE = _adaptive_defaults(
+    adaptive_controller=True,
+    operator_scheduler=True,
+    interspecies_mode="Adaptiv",
+    interspecies_min_rate=0.01,
+    interspecies_max_rate=0.15,
+)
+_NOISY_CONTROL_DEFAULTS = _gui_defaults(
+    n_workers=0,
+    multi_eval=3,
+    aggregation="mean",
+    sigma_penalty=0.1,
+    matrix_forward=True,
+    fitness_shaping=True,
+    quality_diversity=True,
+    quality_diversity_descriptor="Behavior",
+)
+_LARGE_CONTROL_DEFAULTS = _gui_defaults(
+    n_workers=0,
+    multi_eval=1,
+    matrix_forward=False,
+    fitness_shaping=True,
+    quality_diversity=True,
+    quality_diversity_descriptor="Behavior",
+    fitness_components=False,
+    early_stop_factor=0.5,
+    elite_global=2,
+    elite_species=1,
+)
+_LARGE_CONTROL_ADAPTIVE = _adaptive_defaults(
+    adaptive_controller=True,
+    operator_scheduler=True,
+    interspecies_mode="Adaptiv",
+    interspecies_min_rate=0.01,
+    interspecies_max_rate=0.2,
+    module_library=True,
+    module_insert_rate=0.01,
+)
+
+
 class ExampleConfig:
     def __init__(
         self,
@@ -605,6 +762,8 @@ class ExampleConfig:
         default_curriculum: bool = False,
         default_fitness_shaping: bool = False,
         default_lamarck_steps: int = 0,
+        default_config: dict | None = None,
+        default_adaptive_policies: dict | None = None,
     ) -> None:
         self.name = name
         self.description = description
@@ -635,6 +794,8 @@ class ExampleConfig:
         self.default_curriculum = default_curriculum
         self.default_fitness_shaping = default_fitness_shaping
         self.default_lamarck_steps = default_lamarck_steps
+        self.default_config = _gui_defaults(**(default_config or {}))
+        self.default_adaptive_policies = _adaptive_defaults(**(default_adaptive_policies or {}))
 
 
 def _pi_make_curriculum(
@@ -684,6 +845,13 @@ def load_examples() -> list[ExampleConfig]:
             default_target_species=2,
             default_fitness_shaping=True,
             default_lamarck_steps=2,
+            default_config={
+                **_FAST_DATASET_DEFAULTS,
+                "lamarck_schedule": "Explizit",
+                "lamarck_steps": 2,
+                "quality_diversity": False,
+                "fitness_components": False,
+            },
         ),
         ExampleConfig(
             name="Multiplication",
@@ -706,6 +874,13 @@ def load_examples() -> list[ExampleConfig]:
             default_population=150,
             default_target_species=4,
             default_lamarck_steps=2,
+            default_config={
+                **_HARD_DATASET_DEFAULTS,
+                "lamarck_schedule": "Explizit",
+                "lamarck_steps": 2,
+                "quality_diversity_descriptor": "Behavior",
+            },
+            default_adaptive_policies=_HARD_DATASET_ADAPTIVE,
         ),
         ExampleConfig(
             name="Regression 2→2",
@@ -721,6 +896,12 @@ def load_examples() -> list[ExampleConfig]:
             default_target_species=2,
             default_fitness_shaping=True,
             default_lamarck_steps=8,
+            default_config={
+                **_HARD_DATASET_DEFAULTS,
+                "lamarck_schedule": "Explizit",
+                "lamarck_steps": 8,
+            },
+            default_adaptive_policies=_HARD_DATASET_ADAPTIVE,
         ),
         ExampleConfig(
             name="Regression 3→3",
@@ -737,6 +918,14 @@ def load_examples() -> list[ExampleConfig]:
             default_target_species=4,
             default_fitness_shaping=True,
             default_lamarck_steps=5,
+            default_config={
+                **_HARD_DATASET_DEFAULTS,
+                "lamarck_schedule": "Explizit",
+                "lamarck_steps": 5,
+                "cppn_substrate": True,
+                "cppn_hidden": 4,
+            },
+            default_adaptive_policies=_HARD_DATASET_ADAPTIVE,
         ),
         ExampleConfig(
             name="Sequence: Pi-Ziffern",
@@ -756,6 +945,13 @@ def load_examples() -> list[ExampleConfig]:
             default_population=100,
             default_target_species=4,
             default_curriculum=True,
+            default_config={
+                **_SEQUENCE_DEFAULTS,
+                "lamarck_schedule": "Adaptiv",
+                "lamarck_steps": 5,
+                "normalize": True,
+            },
+            default_adaptive_policies=_SEQUENCE_ADAPTIVE,
         ),
     ]
 
@@ -771,6 +967,11 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=500,
                 category="Classic Control",
                 supports_render=True,
+                stateful=False,
+                default_population=120,
+                default_target_species=4,
+                default_config=_CLASSIC_CONTROL_DEFAULTS,
+                default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="Acrobot",
@@ -781,6 +982,11 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=0,
                 category="Classic Control",
                 supports_render=True,
+                stateful=False,
+                default_population=160,
+                default_target_species=5,
+                default_config=_CLASSIC_CONTROL_DEFAULTS,
+                default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="MountainCar (Continuous)",
@@ -791,6 +997,11 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=10.0,
                 category="Classic Control",
                 supports_render=True,
+                stateful=False,
+                default_population=140,
+                default_target_species=4,
+                default_config=_CLASSIC_CONTROL_DEFAULTS,
+                default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="MountainCar (Discrete)",
@@ -801,6 +1012,11 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=10.0,
                 category="Classic Control",
                 supports_render=True,
+                stateful=False,
+                default_population=140,
+                default_target_species=4,
+                default_config=_CLASSIC_CONTROL_DEFAULTS,
+                default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="Pendulum",
@@ -812,6 +1028,16 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=-400,    # realistic target above the empty-genome baseline (-507)
                 category="Classic Control",
                 supports_render=True,
+                stateful=False,
+                default_population=160,
+                default_target_species=5,
+                default_config={
+                    **_NOISY_CONTROL_DEFAULTS,
+                    "matrix_forward": True,
+                    "multi_eval": 2,
+                    "sigma_penalty": 0.05,
+                },
+                default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="LunarLander",
@@ -822,6 +1048,16 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=200,
                 category="Box2D",
                 supports_render=True,
+                stateful=False,
+                default_population=220,
+                default_target_species=8,
+                default_config={
+                    **_LARGE_CONTROL_DEFAULTS,
+                    "matrix_forward": True,
+                    "multi_eval": 2,
+                    "sigma_penalty": 0.05,
+                },
+                default_adaptive_policies=_LARGE_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="BipedalWalker",
@@ -833,6 +1069,11 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=0,    # baseline ≈ -100; 0 = meaningful walking attempt
                 category="Box2D",
                 supports_render=True,
+                stateful=False,
+                default_population=300,
+                default_target_species=10,
+                default_config=_LARGE_CONTROL_DEFAULTS,
+                default_adaptive_policies=_LARGE_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="CarRacing",
@@ -843,6 +1084,24 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=100,    # baseline 0-50; 100 = consistent on-track driving
                 category="Pixel",
                 supports_render=True,
+                stateful=False,
+                default_population=300,
+                default_target_species=12,
+                default_config={
+                    **_LARGE_CONTROL_DEFAULTS,
+                    "matrix_forward": False,
+                    "quality_diversity_descriptor": "Topology",
+                    "fitness_components": True,
+                    "fitness_component_mode": "Adaptiv",
+                    "cppn_substrate": True,
+                    "cppn_hidden": 8,
+                    "elite_global": 3,
+                },
+                default_adaptive_policies={
+                    **_LARGE_CONTROL_ADAPTIVE,
+                    "interspecies_max_rate": 0.25,
+                    "meta_adaptive": True,
+                },
             ),
             ExampleConfig(
                 name="Blackjack",
@@ -857,6 +1116,15 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=-0.05,
                 category="Toy Text",
                 supports_render=True,
+                stateful=False,
+                default_population=180,
+                default_target_species=4,
+                default_config={
+                    **_NOISY_CONTROL_DEFAULTS,
+                    "multi_eval": 1,
+                    "sigma_penalty": 0.0,
+                },
+                default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="Cliff Walking",
@@ -872,6 +1140,11 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=0.0,
                 category="Toy Text",
                 supports_render=True,
+                stateful=False,
+                default_population=160,
+                default_target_species=5,
+                default_config=_CLASSIC_CONTROL_DEFAULTS,
+                default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="Frozen Lake",
@@ -888,6 +1161,14 @@ def load_examples() -> list[ExampleConfig]:
                 category="Toy Text",
                 supports_render=True,
                 default_target_species=3,
+                stateful=False,
+                default_population=120,
+                default_config={
+                    **_NOISY_CONTROL_DEFAULTS,
+                    "multi_eval": 1,
+                    "sigma_penalty": 0.0,
+                },
+                default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
                 name="Taxi",
@@ -903,6 +1184,11 @@ def load_examples() -> list[ExampleConfig]:
                 target_fitness=-120.0,    # requires pickup + significant progress toward destination
                 category="Toy Text",
                 supports_render=True,
+                stateful=False,
+                default_population=220,
+                default_target_species=6,
+                default_config=_LARGE_CONTROL_DEFAULTS,
+                default_adaptive_policies=_LARGE_CONTROL_ADAPTIVE,
             ),
         ]
     except ImportError:

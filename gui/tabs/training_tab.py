@@ -1000,6 +1000,9 @@ class TrainingTab(QWidget):
         else:
             self.chk_curriculum.setChecked(False)
             self._render_group.setVisible(False)
+        self.combo_adaptive_preset.setCurrentText("Kein Preset")
+        self._apply_adaptive_policies(ex.default_adaptive_policies)
+        self._apply_config_dict(ex.default_config)
         self._best_genome = None
         self.btn_run_best.setEnabled(False)
         self.example_changed.emit(ex)
@@ -1007,11 +1010,8 @@ class TrainingTab(QWidget):
     def _on_lamarck_mode_changed(self, index: int) -> None:
         self.spin_lamarck.setEnabled(self.combo_lamarck_schedule.currentText() == "Explizit")
 
-    def _on_preset_changed(self, index: int) -> None:
-        preset = self._preset_by_index.get(index)
-        if preset is None:
-            return
-        cfg = preset.config
+    def _apply_config_dict(self, cfg: dict) -> None:
+        """Apply a GUI config dict to widgets; used by presets and example defaults."""
         if "population_size" in cfg:
             self.spin_pop.setValue(int(cfg["population_size"]))
         if "target_species" in cfg:
@@ -1026,6 +1026,10 @@ class TrainingTab(QWidget):
             self.dspin_sigma_penalty.setValue(float(cfg["sigma_penalty"]))
         if "fitness_shaping" in cfg:
             self.chk_fitness_shaping.setChecked(bool(cfg["fitness_shaping"]))
+        if "multi_objective" in cfg:
+            self.chk_multi_objective.setChecked(bool(cfg["multi_objective"]))
+        if "multi_objective_complexity_weight" in cfg:
+            self.dspin_mo_complexity.setValue(float(cfg["multi_objective_complexity_weight"]))
         if "quality_diversity" in cfg:
             self.chk_quality_diversity.setChecked(bool(cfg["quality_diversity"]))
         if "quality_diversity_descriptor" in cfg:
@@ -1050,12 +1054,48 @@ class TrainingTab(QWidget):
             self.spin_remote_retries.setValue(int(cfg["remote_retries"]))
         if "remote_batch_size" in cfg:
             self.spin_remote_batch.setValue(int(cfg["remote_batch_size"]))
-        if "multi_objective" in cfg:
-            self.chk_multi_objective.setChecked(bool(cfg["multi_objective"]))
-        if "multi_objective_complexity_weight" in cfg:
-            self.dspin_mo_complexity.setValue(float(cfg["multi_objective_complexity_weight"]))
+        if "novelty" in cfg:
+            self.chk_novelty.setChecked(bool(cfg["novelty"]))
+        if "speciation" in cfg:
+            self.chk_speciation.setChecked(bool(cfg["speciation"]))
+        if "crossover" in cfg:
+            self.chk_crossover.setChecked(bool(cfg["crossover"]))
         if "diversity_injection" in cfg:
             self.chk_diversity_injection.setChecked(bool(cfg["diversity_injection"]))
+        if "convergence_spread" in cfg:
+            self.dspin_convergence_spread.setValue(float(cfg["convergence_spread"]))
+        if "convergence_stagnation" in cfg:
+            self.dspin_convergence_stagnation.setValue(float(cfg["convergence_stagnation"]))
+        if "early_stop_factor" in cfg:
+            self.dspin_early_stop.setValue(float(cfg["early_stop_factor"]))
+        if "efficiency_max_ms" in cfg:
+            self.spin_efficiency_max_ms.setValue(float(cfg["efficiency_max_ms"]))
+        if "efficiency_penalty" in cfg:
+            self.dspin_efficiency_penalty.setValue(float(cfg["efficiency_penalty"]))
+        if "elite_global" in cfg:
+            self.spin_elite_global.setValue(int(cfg["elite_global"]))
+        if "elite_species" in cfg:
+            self.spin_elite_species.setValue(int(cfg["elite_species"]))
+        if "normalize" in cfg and self.chk_normalize.isVisible():
+            self.chk_normalize.setChecked(bool(cfg["normalize"]))
+        if "memory" in cfg:
+            self.chk_memory.setChecked(bool(cfg["memory"]))
+        if "curriculum" in cfg and self.chk_curriculum.isVisible():
+            self.chk_curriculum.setChecked(bool(cfg["curriculum"]))
+        if "lamarck_schedule" in cfg:
+            self.combo_lamarck_schedule.setCurrentText(str(cfg["lamarck_schedule"]))
+        if "lamarck_optimizer" in cfg:
+            self.combo_lamarck_optimizer.setCurrentText(str(cfg["lamarck_optimizer"]))
+        if "lamarck_steps" in cfg:
+            self.spin_lamarck.setValue(int(cfg["lamarck_steps"]))
+        self._on_lamarck_mode_changed(self.combo_lamarck_schedule.currentIndex())
+        self._on_multi_eval_changed(self.spin_multi_eval.value())
+
+    def _on_preset_changed(self, index: int) -> None:
+        preset = self._preset_by_index.get(index)
+        if preset is None:
+            return
+        self._apply_config_dict(preset.config)
         if preset.adaptive_policies:
             self._apply_adaptive_policies(preset.adaptive_policies)
 
@@ -1082,7 +1122,23 @@ class TrainingTab(QWidget):
             "remote_timeout_s": self.dspin_remote_timeout.value(),
             "remote_retries": self.spin_remote_retries.value(),
             "remote_batch_size": self.spin_remote_batch.value(),
+            "novelty": self.chk_novelty.isChecked(),
+            "speciation": self.chk_speciation.isChecked(),
+            "crossover": self.chk_crossover.isChecked(),
             "diversity_injection": self.chk_diversity_injection.isChecked(),
+            "convergence_spread": self.dspin_convergence_spread.value(),
+            "convergence_stagnation": self.dspin_convergence_stagnation.value(),
+            "early_stop_factor": self.dspin_early_stop.value(),
+            "efficiency_max_ms": self.spin_efficiency_max_ms.value(),
+            "efficiency_penalty": self.dspin_efficiency_penalty.value(),
+            "elite_global": self.spin_elite_global.value(),
+            "elite_species": self.spin_elite_species.value(),
+            "normalize": self.chk_normalize.isChecked(),
+            "memory": self.chk_memory.isChecked(),
+            "curriculum": self.chk_curriculum.isChecked(),
+            "lamarck_schedule": self.combo_lamarck_schedule.currentText(),
+            "lamarck_optimizer": self.combo_lamarck_optimizer.currentText(),
+            "lamarck_steps": self.spin_lamarck.value(),
         }
 
     def _current_adaptive_policies(self) -> dict:

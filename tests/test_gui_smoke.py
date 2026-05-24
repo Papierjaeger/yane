@@ -67,6 +67,78 @@ class TestGUISmoke(unittest.TestCase):
         self.assertEqual(cfg.effective_batch_size, 8)
         tab.close()
 
+    def test_all_examples_have_complete_gui_defaults(self):
+        from yane.gui.examples import load_examples
+
+        required_config = {
+            "n_workers",
+            "multi_eval",
+            "aggregation",
+            "sigma_penalty",
+            "fitness_shaping",
+            "multi_objective",
+            "quality_diversity",
+            "fitness_components",
+            "matrix_forward",
+            "cppn_substrate",
+            "remote_eval",
+            "novelty",
+            "speciation",
+            "crossover",
+            "diversity_injection",
+            "lamarck_schedule",
+            "lamarck_optimizer",
+            "lamarck_steps",
+        }
+        required_adaptive = {
+            "adaptive_controller",
+            "operator_scheduler",
+            "interspecies_mode",
+            "interspecies_min_rate",
+            "interspecies_max_rate",
+            "lamarck_schedule",
+            "lamarck_optimizer",
+            "lamarck_budget",
+            "meta_adaptive",
+            "module_library",
+            "module_insert_rate",
+        }
+
+        for ex in load_examples():
+            self.assertTrue(required_config <= set(ex.default_config), ex.name)
+            self.assertTrue(required_adaptive <= set(ex.default_adaptive_policies), ex.name)
+
+    def test_example_defaults_are_applied_to_new_feature_controls(self):
+        from yane.gui.tabs.training_tab import TrainingTab
+
+        tab = TrainingTab()
+        self.assertEqual(tab._current_example().name, "XOR")
+        self.assertEqual(tab.spin_workers.value(), 1)
+        self.assertTrue(tab.chk_matrix_forward.isChecked())
+        self.assertEqual(tab.combo_lamarck_schedule.currentText(), "Explizit")
+        self.assertEqual(tab.spin_lamarck.value(), 2)
+
+        reg33_idx = next(
+            idx for idx, ex in tab._combo_index_map.items()
+            if ex.name == "Regression 3→3"
+        )
+        tab.example_combo.setCurrentIndex(reg33_idx)
+        self.assertTrue(tab.chk_quality_diversity.isChecked())
+        self.assertTrue(tab.chk_fitness_components.isChecked())
+        self.assertTrue(tab.chk_cppn_substrate.isChecked())
+        self.assertTrue(tab.chk_adaptive_ctrl.isChecked())
+        self.assertTrue(tab.chk_operator_scheduler.isChecked())
+        self.assertTrue(tab.chk_module_library.isChecked())
+        self.assertEqual(tab.combo_interspecies_mode.currentText(), "Adaptiv")
+
+        xor_idx = next(idx for idx, ex in tab._combo_index_map.items() if ex.name == "XOR")
+        tab.example_combo.setCurrentIndex(xor_idx)
+        self.assertFalse(tab.chk_quality_diversity.isChecked())
+        self.assertFalse(tab.chk_fitness_components.isChecked())
+        self.assertFalse(tab.chk_adaptive_ctrl.isChecked())
+        self.assertFalse(tab.chk_module_library.isChecked())
+        tab.close()
+
     def test_training_worker_remote_bootstraps_first_genome(self):
         from yane import NeuroEvolution
         from yane.gui.remote_config import RemoteEvaluationConfig
