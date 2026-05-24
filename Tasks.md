@@ -5,14 +5,16 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0- und P1-Tasks abgeschlossen. Teststand: `699 passed`.
+**Aktueller Stand:** Alle P0- und P1-Tasks abgeschlossen. Teststand: `724 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
 - AdaptiveController, OperatorScheduler, Lamarck-Budget, Interspecies-Trigger (Novelty/Isolation/Schutz): implementiert.
 - Adaptive Benchmark-Suite, GUI-Stability-Guard, Preset-Schema v2 mit `adaptive_policies`: implementiert.
 - Matrix-Forward-Integration, Checkpoint-State fuer Adaptive-Objekte: implementiert.
-- Naechster Schwerpunkt: Checkpoint-Format weiter haerten, P2-Forschungsfeatures.
+- Checkpoint gehaertet: Fixture-Dateien, JSON-Metadaten in GUI+API, Pickle-Dokumentation: implementiert.
+- Remote/Distributed Evaluation: HTTP-Protokoll, Client/Worker, Retry/Cancel, Benchmark: implementiert.
+- Naechster Schwerpunkt: P2-Forschungsfeatures.
 
 ## Legende
 
@@ -26,46 +28,6 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 ---
 
 ## Offene Tasks
-
-### P1 ⚡ Checkpoint-Format langfristig haerten
-
-Checkpoint v2 mit Migration, Metadata-Sidecar und Adaptive-State ist
-implementiert. Fuer langfristige Robustheit fehlen noch einige Punkte.
-
-Aufgaben:
-
-- Kleine Fixture-Checkpoints fuer v1/v2 in Tests versionieren.
-- JSON-Metadaten in GUI/API sichtbar machen.
-- Optional: getrennte Speicherung von Config, Tracker, Population, QD-Archiv.
-- Import-Warnungen fuer fehlende Descriptor-Callbacks in GUI anzeigen.
-- Dokumentieren, welche Teile Pickle bleiben und warum.
-
-Bereits erledigt:
-
-- Checkpoint-State fuer `AdaptiveController` und `OperatorScheduler`. ✅
-
-Nutzen:
-
-- Alte Laeufe bleiben langfristig nutzbar.
-- Checkpoints werden besser debugbar.
-
-### P1 🔲 Remote/Distributed Evaluation konkretisieren
-
-`AsyncEvaluationQueue` ist ein lokaler Baustein. Remote-Auswertung ist noch
-nicht produktiv nutzbar.
-
-Aufgaben:
-
-- Remote-Worker-Protokoll entwerfen: Job, Genome-Payload, Result, Error, Timeout.
-- HTTP- oder WebSocket-Prototyp bauen.
-- Retry/Timeout/Cancel-Policy implementieren.
-- Security-Grenzen dokumentieren: keine fremden Pickles ungeprueft laden.
-- Benchmark gegen lokales Multiprocessing.
-
-Nutzen:
-
-- Lange Simulationen koennen auf mehrere Prozesse oder Maschinen verteilt werden.
-- Saubere Grundlage fuer Cluster- oder Server-Experimente.
 
 ### P2 🔲 Evolvierbare Descriptor-Gewichte
 
@@ -200,3 +162,20 @@ Aufgaben:
 - Automatischer Fallback bei inkompatiblen Genomen (Zyklen, Memory-Nodes, unbekannte Aktivierung).
 - Diagnostics: `matrix_forward_hits` und `matrix_forward_misses` in `population_memory_info()`.
 - 6 neue Tests in `test_matrix_export.py`.
+
+### ✅ P1 Checkpoint-Format langfristig haerten
+
+- `tests/fixtures/checkpoint_v1.pkl` und `checkpoint_v2.pkl` als versionierte Regressionsfixtures.
+- `TestCheckpointFixtures` in `test_checkpoint_migration.py`: laedt echte Fixture-Dateien, prueeft Migration und Sidecar.
+- GUI: `_show_checkpoint_metadata()` zeigt nach dem Laden Version, Pop-Size, Inputs/Outputs; warnt bei `requires_reattach`.
+- API: `GET /checkpoint/metadata?path=...` liest `.json`-Sidecar ohne Pickle zu laden; Fallback auf Live-Ableitung.
+- `evolution/checkpoint.py`: Inline-Dokumentation erklaert warum Pickle (nicht JSON) verwendet wird + Security-Grenze.
+- 3 neue GUI-Smoke-Tests, 3 neue API-Tests.
+
+### ✅ P1 Remote/Distributed Evaluation
+
+- `evolution/remote_evaluation.py`: Protokoll (`EvalJob`, `EvalResult`), `RemoteEvaluationClient` (HTTP, Round-Robin, Retry, Cancel) und `RemoteWorkerServer` (FastAPI, Auth-Token, Timeout).
+- Security-Modell: Token-Pflicht dokumentiert; Pickle nur von authentifizierten Sendern entgegennehmen.
+- `RemoteEvaluationClient` und `RemoteWorkerServer` in `__all__` exportiert.
+- `benchmarks/remote_eval_bench.py`: vergleicht Sequential, Thread-Pool, Process-Pool und Remote-HTTP.
+- 16 neue Tests in `test_remote_evaluation.py`.

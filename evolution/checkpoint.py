@@ -3,6 +3,29 @@
 Provides atomic write + validated load of the checkpoint format.
 NeuroEvolution builds / restores the payload dict; this module owns the
 serialization format (version, required keys, type checks, atomic write).
+
+## Why Pickle?
+
+The checkpoint uses Python Pickle for the main ``.pkl`` file and JSON only for
+the human-readable metadata sidecar (``.pkl.json``).  Pickle is chosen for the
+payload because:
+
+- ``Genome`` and ``Population`` contain complex object graphs (nodes, connections,
+  species, mutation parameters) with circular references.  Hand-rolling a
+  lossless JSON representation would require re-implementing all of that and
+  keeping it in sync with every future structural change.
+- Python pickle handles ``__getstate__``/``__setstate__`` for objects whose
+  compiled closures (``_compiled_forward``) cannot be pickled, stripping them
+  automatically.  A JSON serializer would need the same escape hatch.
+- The alternative (numpy-binary + JSON for weights) would work for simple
+  feed-forward networks but breaks down for recurrent, memory-node, or
+  QD-enabled genomes where the object graph carries state that isn't weights.
+
+Security boundary: only load ``.pkl`` files from sources you trust.  Never
+unpickle bytes received over a network connection without prior signature
+verification — an attacker-controlled pickle can execute arbitrary code.
+The JSON sidecar is safe to read from untrusted paths because it is parsed as
+data, not executed.
 """
 from __future__ import annotations
 from pathlib import Path

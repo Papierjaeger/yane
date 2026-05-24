@@ -1,3 +1,4 @@
+import json
 import pickle
 import tempfile
 import unittest
@@ -5,6 +6,8 @@ from pathlib import Path
 
 from yane import NeuroEvolution
 from yane.evolution import checkpoint
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _trained_yane(**kwargs):
@@ -64,6 +67,34 @@ class TestCheckpointMigration(unittest.TestCase):
             loaded = checkpoint.read(path)
 
             self.assertEqual(loaded["version"], checkpoint.VERSION)
+
+
+class TestCheckpointFixtures(unittest.TestCase):
+    """Regression tests using committed fixture files to catch migration regressions."""
+
+    def test_fixture_v1_migrates_to_current(self):
+        path = FIXTURES / "checkpoint_v1.pkl"
+        loaded = checkpoint.read(path)
+        self.assertEqual(loaded["version"], checkpoint.VERSION)
+        self.assertIn("normalizer", loaded)
+        self.assertIn("n_early_stopped", loaded)
+        from yane.evolution.population import Population
+        self.assertIsInstance(loaded["population"], Population)
+
+    def test_fixture_v2_loads_without_migration(self):
+        path = FIXTURES / "checkpoint_v2.pkl"
+        loaded = checkpoint.read(path)
+        self.assertEqual(loaded["version"], checkpoint.VERSION)
+        from yane.evolution.population import Population
+        self.assertIsInstance(loaded["population"], Population)
+
+    def test_fixture_v2_has_metadata_sidecar(self):
+        meta_path = FIXTURES / "checkpoint_v2.pkl.json"
+        self.assertTrue(meta_path.exists(), "v2 fixture should have a .json sidecar")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertIn("version", meta)
+        self.assertIn("created_at", meta)
+        self.assertIn("requires_reattach", meta)
 
 
 class TestCheckpointAdaptiveState(unittest.TestCase):

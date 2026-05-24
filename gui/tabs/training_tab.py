@@ -1449,9 +1449,48 @@ class TrainingTab(QWidget):
             self._yane.load_checkpoint(path)
             self.btn_save_ckpt.setEnabled(True)
             self.status_lbl.setText(f"Loaded ← {Path(path).name}")
+            self._show_checkpoint_metadata(path)
         except Exception as e:
             self._yane = None
             QMessageBox.critical(self, "Load Checkpoint Error", str(e))
+
+    def _show_checkpoint_metadata(self, path: str) -> None:
+        """Read the .json sidecar and show metadata; warn if reattach is required."""
+        import json
+        meta_path = Path(path).with_suffix(".pkl.json")
+        if not meta_path.exists():
+            return
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        requires = meta.get("requires_reattach", [])
+        if requires:
+            QMessageBox.warning(
+                self, "Checkpoint: Callbacks fehlen",
+                "Folgende Callbacks muessen nach dem Laden manuell neu verbunden werden:\n\n"
+                + "\n".join(f"  • {r}" for r in requires)
+                + "\n\nOhne diese Callbacks ist die betroffene Funktionalitaet deaktiviert.",
+            )
+
+        cfg = meta.get("config", {})
+        pop_size = meta.get("population_size")
+        version = meta.get("version", "?")
+        created = meta.get("created_at", "?")
+        lines = [
+            f"Version:   {version}",
+            f"Erstellt:  {created}",
+            f"Pop-Size:  {pop_size if pop_size is not None else '?'}",
+        ]
+        if cfg:
+            n_in = cfg.get("n_inputs", "?")
+            n_out = cfg.get("n_outputs", "?")
+            lines.append(f"Inputs:    {n_in}")
+            lines.append(f"Outputs:   {n_out}")
+        QMessageBox.information(
+            self, "Checkpoint-Metadaten", "\n".join(lines)
+        )
 
     def _reset_training_buttons(self) -> None:
         self.btn_start.setEnabled(True)

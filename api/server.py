@@ -185,6 +185,34 @@ def load_checkpoint(path: str) -> dict:
         raise HTTPException(500, str(e))
 
 
+@app.get("/checkpoint/metadata", tags=["checkpoint"],
+         summary="Read the JSON metadata sidecar for a checkpoint file")
+def checkpoint_metadata(path: str) -> dict:
+    """Return the JSON metadata written alongside a checkpoint (``.pkl.json``).
+
+    Does not load the pickle — safe to call without a running NeuroEvolution instance.
+    Returns 404 if neither the ``.pkl`` nor its ``.json`` sidecar exist.
+    """
+    import json
+    from pathlib import Path as _Path
+    from yane.evolution.checkpoint import _metadata_for, read as _read
+    pkl_path = _Path(path)
+    meta_path = pkl_path.with_suffix(".pkl.json")
+    if meta_path.exists():
+        try:
+            return json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise HTTPException(500, f"Could not parse metadata sidecar: {e}")
+    if not pkl_path.exists():
+        raise HTTPException(404, f"Checkpoint not found: {path}")
+    # Fallback: load the pickle and derive metadata on the fly (no sidecar present)
+    try:
+        payload = _read(pkl_path)
+        return _metadata_for(payload)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 # ── Diagnostics endpoint ────────────────────────────────────────────────────
 
 

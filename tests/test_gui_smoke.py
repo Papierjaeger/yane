@@ -339,5 +339,69 @@ class TestVisualizationWidgets(unittest.TestCase):
         panel.close()
 
 
+class TestCheckpointMetadataGUI(unittest.TestCase):
+    """Tests for _show_checkpoint_metadata: info dialog and reattach warning."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = _app()
+
+    def _make_tab(self):
+        from yane.gui.tabs.training_tab import TrainingTab
+        tab = TrainingTab()
+        tab.resize(1200, 900)
+        tab.show()
+        self.app.processEvents()
+        return tab
+
+    def test_no_crash_when_sidecar_missing(self):
+        tab = self._make_tab()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "no_sidecar.pkl"
+            path.write_bytes(b"")
+            tab._show_checkpoint_metadata(str(path))
+        tab.close()
+
+    def test_info_dialog_shown_for_valid_sidecar(self):
+        import json
+        from unittest.mock import patch
+        tab = self._make_tab()
+        with tempfile.TemporaryDirectory() as tmp:
+            pkl = Path(tmp) / "run.pkl"
+            meta = Path(tmp) / "run.pkl.json"
+            meta.write_text(json.dumps({
+                "version": 2, "created_at": "2026-01-01T00:00:00",
+                "config": {"n_inputs": 3, "n_outputs": 1},
+                "population_size": 50, "requires_reattach": [],
+            }), encoding="utf-8")
+            with patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+                tab._show_checkpoint_metadata(str(pkl))
+                mock_info.assert_called_once()
+                call_text = mock_info.call_args[0][2]
+                self.assertIn("Version", call_text)
+                self.assertIn("Pop-Size", call_text)
+        tab.close()
+
+    def test_warning_shown_when_reattach_required(self):
+        import json
+        from unittest.mock import patch
+        tab = self._make_tab()
+        with tempfile.TemporaryDirectory() as tmp:
+            pkl = Path(tmp) / "run.pkl"
+            meta = Path(tmp) / "run.pkl.json"
+            meta.write_text(json.dumps({
+                "version": 2, "created_at": "2026-01-01T00:00:00",
+                "config": {}, "population_size": 10,
+                "requires_reattach": ["quality_diversity_descriptor"],
+            }), encoding="utf-8")
+            with patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn, \
+                 patch("PySide6.QtWidgets.QMessageBox.information"):
+                tab._show_checkpoint_metadata(str(pkl))
+                mock_warn.assert_called_once()
+                warn_text = mock_warn.call_args[0][2]
+                self.assertIn("quality_diversity_descriptor", warn_text)
+        tab.close()
+
+
 if __name__ == "__main__":
     unittest.main()

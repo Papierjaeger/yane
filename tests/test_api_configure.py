@@ -108,5 +108,57 @@ class TestConfigureEndpoint(unittest.TestCase):
         self.assertEqual(self.state._seed, 99)
 
 
+@pytest.mark.ci
+@unittest.skipUnless(_HAS_TESTCLIENT, "fastapi[test] not installed")
+class TestCheckpointMetadataEndpoint(unittest.TestCase):
+
+    def setUp(self):
+        import tempfile
+        from yane.api.server import app, state
+        app.dependency_overrides = {}
+        state.__init__()
+        self.client = TestClient(app)
+        self._tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def _make_checkpoint(self, **meta_overrides):
+        import json
+        from pathlib import Path
+        base = Path(self._tmpdir.name) / "run.pkl"
+        meta = {
+            "version": 2, "created_at": "2026-01-01T00:00:00",
+            "config": {"n_inputs": 2, "n_outputs": 1},
+            "population_size": 50, "requires_reattach": [],
+        }
+        meta.update(meta_overrides)
+        base.with_suffix(".pkl.json").write_text(
+            json.dumps(meta), encoding="utf-8"
+        )
+        base.write_bytes(b"")
+        return str(base)
+
+    def test_metadata_returns_200_for_sidecar(self):
+        path = self._make_checkpoint()
+        r = self.client.get("/checkpoint/metadata", params={"path": path})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("version", body)
+        self.assertIn("requires_reattach", body)
+
+    def test_metadata_returns_404_for_missing_file(self):
+        r = self.client.get("/checkpoint/metadata",
+                            params={"path": "/nonexistent/run.pkl"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_metadata_includes_config_fields(self):
+        path = self._make_checkpoint()
+        r = self.client.get("/checkpoint/metadata", params={"path": path})
+        body = r.json()
+        self.assertEqual(body["config"]["n_inputs"], 2)
+        self.assertEqual(body["population_size"], 50)
+
+
 if __name__ == "__main__":
     unittest.main()
