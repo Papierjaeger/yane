@@ -37,6 +37,7 @@ def _pick(a, b):
 class Genome:
     def __init__(self) -> None:
         self.fitness: float = 0.0
+        self.raw_fitness: float = 0.0  # task score before fitness-component bonus
         self.objectives: tuple[float, ...] | None = None
         self.eval_time_ms: float | None = None
         self.efficiency_score: float = 1.0
@@ -908,6 +909,7 @@ class Genome:
                 new_node.gate_node = node_map.get(old_node.gate_node)
 
         genome.fitness = self.fitness
+        genome.raw_fitness = self.raw_fitness
         genome.objectives = self.objectives
         genome.shared_fitness = self.shared_fitness
         genome.eval_time_ms = self.eval_time_ms

@@ -1090,7 +1090,7 @@ class NeuroEvolution:
             # that triggered the advance belongs to the old task and must not be
             # used to satisfy min_fitness or other global stop criteria.
             if not _stage_advanced:
-                stop_reason = self._check_stop_reason(fitness, iterations, _li)
+                stop_reason = self._check_stop_reason(genome.raw_fitness, iterations, _li)
                 # When on an intermediate curriculum stage, min_fitness reflects
                 # the final task's target — it must not fire on easier-stage
                 # scores that happen to exceed it.  Each intermediate stage is

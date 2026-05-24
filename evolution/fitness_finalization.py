@@ -48,6 +48,8 @@ def finalize_fitness_value(
     elif genome is not None:
         genome.objectives = None
 
+    raw_fitness = fitness  # task score before component bonus
+
     if genome is not None and config.fitness_component_weights is not None:
         component_score, _ = config.fitness_component_weights.scalarize(genome)
         fitness += component_score
@@ -64,4 +66,6 @@ def finalize_fitness_value(
             config.complexity_penalty_nodes * hidden
             + config.complexity_penalty_connections * genome.connection_count
         )
+    if genome is not None:
+        genome.raw_fitness = raw_fitness
     return fitness

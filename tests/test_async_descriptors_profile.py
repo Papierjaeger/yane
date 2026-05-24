@@ -50,9 +50,13 @@ class TestAsyncDescriptorsProfile(unittest.TestCase):
         best = yane.population.get_best()
         self.assertEqual(best.fitness_component_values, (2,))
         self.assertEqual(best.fitness, 2.0)
+        # raw_fitness must hold the pure task score, not inflated by component bonus
+        self.assertEqual(best.raw_fitness, 1.0)
         info = yane.population_memory_info()
         self.assertIn("fitness_component_weights", info)
         self.assertEqual(info["fitness_component_weights"]["weights"]["nodes"], 0.5)
+        # diagnostics max_fitness shows task score (not component-inflated genome.fitness)
+        self.assertEqual(info["max_fitness"], 1.0)
 
     def test_adaptive_component_weights_record_history_and_avoid_collapse(self):
         yane = NeuroEvolution()

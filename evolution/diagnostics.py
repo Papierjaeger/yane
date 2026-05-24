@@ -80,17 +80,17 @@ def build_population_info(
         "dbg_adj_count":           population._dbg_adj_count,
         "novelty_weight":          population.novelty_weight,
         "efficiency_weight":       population.efficiency_weight,
-        "min_fitness": min((g.fitness for g in population._evaluated), default=0.0),
-        "max_fitness": max((g.fitness for g in population._evaluated), default=0.0),
-        "avg_fitness": (sum(g.fitness for g in population._evaluated)
+        "min_fitness": min((g.raw_fitness for g in population._evaluated), default=0.0),
+        "max_fitness": max((g.raw_fitness for g in population._evaluated), default=0.0),
+        "avg_fitness": (sum(g.raw_fitness for g in population._evaluated)
                         / max(1, len(population._evaluated))),
         "top5_avg_fitness": (
             sum(f for f in sorted(
-                (g.fitness for g in population._evaluated), reverse=True
+                (g.raw_fitness for g in population._evaluated), reverse=True
             )[:5]) / min(5, len(population._evaluated))
             if population._evaluated else 0.0
         ),
-        "median_fitness": (statistics.median(g.fitness for g in population._evaluated)
+        "median_fitness": (statistics.median(g.raw_fitness for g in population._evaluated)
                            if population._evaluated else 0.0),
         "fitness_iqr": _fitness_iqr(population._evaluated),
         "n_evaluations":    n_evaluations,
