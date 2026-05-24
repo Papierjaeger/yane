@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0-Adaptive-Tasks, P1-Preset-System und P1-Release-Cleanup abgeschlossen. Teststand: `682 passed`.
+**Aktueller Stand:** Alle P0-Adaptive-Tasks, P1-Preset-System, P1-Release-Cleanup und P1-Pareto/MAP-Elites-Visualisierung abgeschlossen. Teststand: `687 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging und Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -65,17 +65,17 @@ Nutzen:
 - YANE wirkt nach aussen weniger wie ein Forschungsnotizbuch.
 - Neue Nutzer finden schneller den richtigen Einstieg.
 
-### P1 🔲 Pareto- und MAP-Elites-Visualisierung polishen
+### P1 ✅ Pareto- und MAP-Elites-Visualisierung polishen
 
 Basisplots existieren. Fuer echte Analyse fehlen noch Interaktion und
 Export aus der GUI.
 
 Aufgaben:
 
-- Hover/Tooltip fuer Pareto-Punkte und MAP-Elites-Zellen.
-- Export-Buttons fuer QD-Archiv (JSON/CSV) in der GUI.
-- Farbschema fuer Fitness/Complexity klarer trennen.
-- Pareto-Plotachsen beschriften und skalieren.
+- Hover/Tooltip fuer Pareto-Punkte und MAP-Elites-Zellen. ✅
+- Export-Buttons fuer QD-Archiv (JSON/CSV) in der GUI. ✅
+- Farbschema fuer Fitness/Complexity klarer trennen. ✅
+- Pareto-Plotachsen beschriften und skalieren. ✅
 - Optional: Klick auf Zelle/Punkt zeigt Genome im Inspect-Tab.
 
 Nutzen:
@@ -240,6 +240,13 @@ Aufgaben:
 
 - `benchmarks/adaptive_suite.py`: 7 Konfigurationen (baseline → full_adaptive) auf XOR und CartPole.
 - Metriken: Loesung, Iterationen, Wall-Time, Best-Fitness, adaptive Diagnostics.
+
+### ✅ P1 Pareto- und MAP-Elites-Visualisierung polishen
+
+- `ParetoScatter`: Achsenbeschriftung (Min/Max-Ticks), Punkte farbig nach Fitness (blau→gruen), Hover-Tooltip mit Objectives/Fitness/Nodes/Connections.
+- `MapElitesHeatmap`: Hover-Tooltip mit Zell-Koordinaten und Fitness, Fitness-Range in Titelzeile.
+- `LeftPanel`: Export-Button fuer QD-Archiv (JSON und CSV), `_last_qd_cells` fuer spaetere Exporte gespeichert.
+- 5 neue GUI-Smoke-Tests. 687 passed.
 
 ### ✅ P1 Release-Cleanup und API-Konsistenz
 

@@ -273,5 +273,71 @@ class TestGUIAdaptiveSection(unittest.TestCase):
         tab.close()
 
 
+class TestVisualizationWidgets(unittest.TestCase):
+    """Smoke tests for Pareto scatter and MAP-Elites heatmap."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = _app()
+
+    def test_pareto_scatter_renders_without_data(self):
+        from yane.gui.canvas import ParetoScatter
+        w = ParetoScatter()
+        w.resize(300, 150)
+        w.show()
+        self.app.processEvents()
+        w.close()
+
+    def test_pareto_scatter_renders_with_data(self):
+        from yane.gui.canvas import ParetoScatter
+        points = [
+            {"objectives": [0.5, 10.0], "fitness": 0.4, "nodes": 5, "connections": 8},
+            {"objectives": [0.8, 6.0], "fitness": 0.7, "nodes": 7, "connections": 12},
+            {"objectives": [1.0, 4.0], "fitness": 0.9, "nodes": 9, "connections": 15},
+        ]
+        w = ParetoScatter()
+        w.resize(300, 150)
+        w.show()
+        w.set_points(points)
+        self.app.processEvents()
+        self.assertEqual(len(w._px), 3)
+        w.close()
+
+    def test_map_elites_heatmap_renders_with_data(self):
+        from yane.gui.canvas import MapElitesHeatmap
+        cells = [
+            {"cell": [0, 0], "fitness": 0.1},
+            {"cell": [1, 0], "fitness": 0.5},
+            {"cell": [1, 1], "fitness": 0.9},
+        ]
+        w = MapElitesHeatmap()
+        w.resize(200, 120)
+        w.show()
+        w.set_cells(cells)
+        self.app.processEvents()
+        self.assertEqual(len(w._cell_rects), 3)
+        w.close()
+
+    def test_left_panel_has_export_qd_button(self):
+        from yane.gui.panels.left_panel import LeftPanel
+        panel = LeftPanel()
+        self.assertTrue(hasattr(panel, "btn_export_qd"))
+        panel.close()
+
+    def test_left_panel_stores_last_qd_cells(self):
+        from yane import NeuroEvolution
+        from yane.gui.panels.left_panel import LeftPanel
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        g = yane.next_genome()
+        yane.submit_fitness(1.0)
+        mem = yane.population_memory_info()
+        panel = LeftPanel()
+        panel.update_genome(g, mem, do_heavy=True)
+        # Without QD enabled, _last_qd_cells stays None
+        self.assertIsNone(panel._last_qd_cells)
+        panel.close()
+
+
 if __name__ == "__main__":
     unittest.main()

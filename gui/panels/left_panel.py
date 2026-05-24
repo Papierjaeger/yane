@@ -1,9 +1,12 @@
 """Left panel: collapsible stats/controls sidebar shown alongside the tab area."""
 from __future__ import annotations
 
+import json
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QPushButton, QFrame, QLabel, QSizePolicy, QFormLayout,
+    QFileDialog, QMessageBox,
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
@@ -255,6 +258,7 @@ class LeftPanel(QWidget):
         layout.addWidget(safe_grp)
 
         # ── Quality Diversity ─────────────────────────────────────────────
+        self._last_qd_cells: list[dict] | None = None
         qd_grp = _CollapsibleGroup("Quality Diversity", collapsed=True)
         self.lbl_qd_enabled = _label("—", "statValue")
         self.lbl_qd_cells = _label("—", "mutRate")
@@ -273,6 +277,10 @@ class LeftPanel(QWidget):
         qd_grp.addRow("Injections:", self.lbl_qd_injections)
         self.qd_heatmap = MapElitesHeatmap()
         qd_grp.addWidget(self.qd_heatmap)
+        self.btn_export_qd = QPushButton("Export QD Archive (JSON)")
+        self.btn_export_qd.setToolTip("Aktuelles MAP-Elites-Archiv als JSON-Datei speichern.")
+        self.btn_export_qd.clicked.connect(self._export_qd_archive)
+        qd_grp.addWidget(self.btn_export_qd)
         layout.addWidget(qd_grp)
 
         pareto_grp = _CollapsibleGroup("Pareto Front", collapsed=True)
@@ -607,8 +615,11 @@ class LeftPanel(QWidget):
             self.lbl_qd_coverage.setText(f"{cov:.4f}")
             self.lbl_qd_updates.setText(str(mem.get("n_quality_diversity_updates", 0)))
             self.lbl_qd_injections.setText(str(mem.get("n_quality_diversity_injections", 0)))
+            cells_data = mem.get("quality_diversity_cells_data")
+            if cells_data is not None:
+                self._last_qd_cells = cells_data
             if do_heavy:
-                self.qd_heatmap.set_cells(mem.get("quality_diversity_cells_data"))
+                self.qd_heatmap.set_cells(cells_data)
         else:
             self.lbl_qd_enabled.setText("—")
             self.lbl_qd_cells.setText("—")
@@ -771,6 +782,33 @@ class LeftPanel(QWidget):
             wt = mem.get("pop_avg_weight_rate")
             if sigma is not None and wt is not None:
                 self.sigma_chart.add_point(sigma, wt)
+
+    def _export_qd_archive(self) -> None:
+        if not self._last_qd_cells:
+            QMessageBox.information(self, "QD Export", "Kein QD-Archiv verfügbar.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "QD-Archiv exportieren", "qd_archive.json",
+            "JSON (*.json);;CSV (*.csv)"
+        )
+        if not path:
+            return
+        try:
+            if path.endswith(".csv"):
+                import csv
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    first = self._last_qd_cells[0]
+                    n_dims = len(first.get("cell", []))
+                    header = [f"cell_{i}" for i in range(n_dims)] + ["fitness"]
+                    writer.writerow(header)
+                    for c in self._last_qd_cells:
+                        writer.writerow(list(c.get("cell", [])) + [c.get("fitness", "")])
+            else:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(self._last_qd_cells, f, indent=2)
+        except Exception as e:
+            QMessageBox.critical(self, "Export fehlgeschlagen", str(e))
 
 
 # ---------------------------------------------------------------------------
