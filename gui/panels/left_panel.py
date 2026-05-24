@@ -16,6 +16,7 @@ from yane.gui.canvas import (
     ParetoScatter, MapElitesHeatmap,
 )
 from yane.gui._helpers import _label, _divider, CollapsibleGroup
+from yane.gui.research_features import format_research_diagnostics
 
 _CollapsibleGroup = CollapsibleGroup  # local alias kept for backward compat
 
@@ -287,6 +288,21 @@ class LeftPanel(QWidget):
         self.pareto_scatter = ParetoScatter()
         pareto_grp.addWidget(self.pareto_scatter)
         layout.addWidget(pareto_grp)
+
+        research_grp = _CollapsibleGroup("Research Features", collapsed=True)
+        self.lbl_matrix_forward = _label("—", "mutRate")
+        self.lbl_fitness_components = _label("—", "mutRate")
+        self.lbl_meta_policy = _label("—", "mutRate")
+        self.lbl_module_library = _label("—", "mutRate")
+        self.lbl_matrix_forward.setToolTip("Matrix-Forward Hits/Misses für kompatible Genome.")
+        self.lbl_fitness_components.setToolTip("Aktuelle adaptive/fixe Fitness-Komponenten-Gewichte.")
+        self.lbl_meta_policy.setToolTip("Meta-adaptive Policy-Gene und letzter Update-Grund.")
+        self.lbl_module_library.setToolTip("Modulbibliothek: gespeicherte Module und Wiederverwendung.")
+        research_grp.addRow("Matrix forward:", self.lbl_matrix_forward)
+        research_grp.addRow("Fitness comps:", self.lbl_fitness_components)
+        research_grp.addRow("Meta policy:", self.lbl_meta_policy)
+        research_grp.addRow("Module library:", self.lbl_module_library)
+        layout.addWidget(research_grp)
 
         # ── Curriculum ────────────────────────────────────────────────────
         cur_grp = _CollapsibleGroup("Curriculum", collapsed=False)
@@ -631,6 +647,12 @@ class LeftPanel(QWidget):
 
         if do_heavy:
             self.pareto_scatter.set_points(mem.get("pareto_points"))
+
+        research = format_research_diagnostics(mem)
+        self.lbl_matrix_forward.setText(research["matrix_forward"])
+        self.lbl_fitness_components.setText(research["fitness_components"])
+        self.lbl_meta_policy.setText(research["meta_policy"])
+        self.lbl_module_library.setText(research["module_library"])
 
         # Fitness histogram
         fh = mem.get("fitness_histogram")

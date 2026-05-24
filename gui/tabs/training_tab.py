@@ -16,6 +16,11 @@ from yane.gui.canvas import FitnessChart, SpeciesChart
 from yane.gui.worker import TrainingWorker, EpisodeRunner
 from yane.gui.examples import load_examples
 from yane.gui._helpers import _label, _divider, CollapsibleGroup
+from yane.gui.research_features import (
+    ResearchFeatureConfig,
+    apply_research_features,
+    configure_cppn_substrate_population,
+)
 from yane.util.presets import list_presets, load_preset, save_preset
 
 class GymRenderWidget(QLabel):
@@ -410,6 +415,37 @@ class TrainingTab(QWidget):
             "Topology: (hidden_nodes, connections)\n"
             "Behavior: Outputs auf festen Probeinputs")
 
+        self.chk_matrix_forward = QCheckBox("aktiv")
+        self.chk_matrix_forward.setChecked(False)
+        self.chk_matrix_forward.setToolTip(
+            "Matrix-Forward aktivieren.\n"
+            "Kompatible azyklische Feedforward-Genome nutzen automatisch den\n"
+            "NumPy-Matrixpfad; inkompatible Genome fallen auf den normalen Forward zurück.")
+
+        self.chk_fitness_components = QCheckBox("aktiv")
+        self.chk_fitness_components.setChecked(False)
+        self.chk_fitness_components.setToolTip(
+            "Optionale Descriptor-/Fitness-Komponenten zur Task-Fitness addieren.\n"
+            "Die GUI nutzt kleine Topologie- und Verhaltensterme; im adaptiven Modus\n"
+            "werden ihre Gewichte bei Stagnation automatisch verschoben.")
+
+        self.combo_fitness_component_mode = QComboBox()
+        self.combo_fitness_component_mode.addItems(["Fix", "Adaptiv"])
+        self.combo_fitness_component_mode.setToolTip(
+            "Fix hält Komponenten-Gewichte konstant.\n"
+            "Adaptiv zeichnet Gewichtshistorie auf und passt Gewichte bei Stagnation an.")
+
+        self.chk_cppn_substrate = QCheckBox("aktiv")
+        self.chk_cppn_substrate.setChecked(False)
+        self.chk_cppn_substrate.setToolTip(
+            "Initialisiert die Population mit einem CPPN-generierten HyperNEAT-Substrat.\n"
+            "Danach trainiert das erzeugte Netz als normales YANE-Genome weiter.")
+
+        self.spin_cppn_hidden = QSpinBox()
+        self.spin_cppn_hidden.setRange(0, 64)
+        self.spin_cppn_hidden.setValue(2)
+        self.spin_cppn_hidden.setToolTip("Anzahl Hidden-Nodes in der CPPN-Substratschicht.")
+
         import multiprocessing as _mp
         _ncpu = _mp.cpu_count()
         self.spin_workers = QSpinBox()
@@ -527,6 +563,22 @@ class TrainingTab(QWidget):
         qd_lay.addWidget(self.chk_quality_diversity)
         qd_lay.addWidget(self.combo_qd_descriptor)
         advance_grp.addRow("Quality diversity:", qd_row)
+        fc_row = QWidget()
+        fc_lay = QHBoxLayout(fc_row)
+        fc_lay.setContentsMargins(0, 0, 0, 0)
+        fc_lay.setSpacing(4)
+        fc_lay.addWidget(self.chk_fitness_components)
+        fc_lay.addWidget(self.combo_fitness_component_mode)
+        advance_grp.addRow("Fitness components:", fc_row)
+        cppn_row = QWidget()
+        cppn_lay = QHBoxLayout(cppn_row)
+        cppn_lay.setContentsMargins(0, 0, 0, 0)
+        cppn_lay.setSpacing(4)
+        cppn_lay.addWidget(self.chk_cppn_substrate)
+        cppn_lay.addWidget(QLabel("hidden"))
+        cppn_lay.addWidget(self.spin_cppn_hidden)
+        advance_grp.addRow("CPPN substrate init:", cppn_row)
+        advance_grp.addRow("Matrix forward:", self.chk_matrix_forward)
         ablation_row = QWidget()
         ablation_lay = QHBoxLayout(ablation_row)
         ablation_lay.setContentsMargins(0, 0, 0, 0)
@@ -627,6 +679,32 @@ class TrainingTab(QWidget):
             "von Erfolgsraten pro Operator und Species automatisch dosiert.\n"
             "Pruning-Druck steigt bei Komplexitäts-Wachstum + Stagnation.")
         adaptive_grp.addRow("Operator Scheduler:", self.chk_operator_scheduler)
+
+        self.chk_meta_adaptive = QCheckBox("aktiv")
+        self.chk_meta_adaptive.setChecked(False)
+        self.chk_meta_adaptive.setToolTip(
+            "Evolviert Policy-Gene für Operator-Exploration, Lamarck-Budget\n"
+            "und Interspecies-Rate global und pro Species.")
+        adaptive_grp.addRow("Meta-adaptive policies:", self.chk_meta_adaptive)
+
+        self.chk_module_library = QCheckBox("aktiv")
+        self.chk_module_library.setChecked(False)
+        self.chk_module_library.setToolTip(
+            "Speichert gute Hidden-Module in einer Bibliothek und fügt sie\n"
+            "mit einer kleinen Mutationsrate in Offspring ein.")
+        self.dspin_module_insert_rate = QDoubleSpinBox()
+        self.dspin_module_insert_rate.setRange(0.0, 1.0)
+        self.dspin_module_insert_rate.setSingleStep(0.01)
+        self.dspin_module_insert_rate.setDecimals(3)
+        self.dspin_module_insert_rate.setValue(0.02)
+        module_row = QWidget()
+        module_lay = QHBoxLayout(module_row)
+        module_lay.setContentsMargins(0, 0, 0, 0)
+        module_lay.setSpacing(4)
+        module_lay.addWidget(self.chk_module_library)
+        module_lay.addWidget(QLabel("insert"))
+        module_lay.addWidget(self.dspin_module_insert_rate)
+        adaptive_grp.addRow("Module library:", module_row)
 
         # Lamarck budget
         self.spin_lamarck_budget = QSpinBox()
@@ -927,6 +1005,16 @@ class TrainingTab(QWidget):
             self.chk_quality_diversity.setChecked(bool(cfg["quality_diversity"]))
         if "quality_diversity_descriptor" in cfg:
             self.combo_qd_descriptor.setCurrentText(str(cfg["quality_diversity_descriptor"]))
+        if "fitness_components" in cfg:
+            self.chk_fitness_components.setChecked(bool(cfg["fitness_components"]))
+        if "fitness_component_mode" in cfg:
+            self.combo_fitness_component_mode.setCurrentText(str(cfg["fitness_component_mode"]))
+        if "matrix_forward" in cfg:
+            self.chk_matrix_forward.setChecked(bool(cfg["matrix_forward"]))
+        if "cppn_substrate" in cfg:
+            self.chk_cppn_substrate.setChecked(bool(cfg["cppn_substrate"]))
+        if "cppn_hidden" in cfg:
+            self.spin_cppn_hidden.setValue(int(cfg["cppn_hidden"]))
         if "multi_objective" in cfg:
             self.chk_multi_objective.setChecked(bool(cfg["multi_objective"]))
         if "multi_objective_complexity_weight" in cfg:
@@ -949,6 +1037,11 @@ class TrainingTab(QWidget):
             "multi_objective_complexity_weight": self.dspin_mo_complexity.value(),
             "quality_diversity": self.chk_quality_diversity.isChecked(),
             "quality_diversity_descriptor": self.combo_qd_descriptor.currentText(),
+            "fitness_components": self.chk_fitness_components.isChecked(),
+            "fitness_component_mode": self.combo_fitness_component_mode.currentText(),
+            "matrix_forward": self.chk_matrix_forward.isChecked(),
+            "cppn_substrate": self.chk_cppn_substrate.isChecked(),
+            "cppn_hidden": self.spin_cppn_hidden.value(),
             "diversity_injection": self.chk_diversity_injection.isChecked(),
         }
 
@@ -962,6 +1055,9 @@ class TrainingTab(QWidget):
             "lamarck_schedule": self.combo_lamarck_schedule.currentText(),
             "lamarck_optimizer": self.combo_lamarck_optimizer.currentText(),
             "lamarck_budget": self.spin_lamarck_budget.value(),
+            "meta_adaptive": self.chk_meta_adaptive.isChecked(),
+            "module_library": self.chk_module_library.isChecked(),
+            "module_insert_rate": self.dspin_module_insert_rate.value(),
         }
 
     def _apply_adaptive_policies(self, ap: dict) -> None:
@@ -982,6 +1078,12 @@ class TrainingTab(QWidget):
             self.combo_lamarck_optimizer.setCurrentText(str(ap["lamarck_optimizer"]))
         if "lamarck_budget" in ap:
             self.spin_lamarck_budget.setValue(int(ap["lamarck_budget"]))
+        if "meta_adaptive" in ap:
+            self.chk_meta_adaptive.setChecked(bool(ap["meta_adaptive"]))
+        if "module_library" in ap:
+            self.chk_module_library.setChecked(bool(ap["module_library"]))
+        if "module_insert_rate" in ap:
+            self.dspin_module_insert_rate.setValue(float(ap["module_insert_rate"]))
 
     def _save_current_preset(self) -> None:
         name, ok = QInputDialog.getText(self, "Save preset", "Preset name:")
@@ -1041,183 +1143,219 @@ class TrainingTab(QWidget):
         if not checked:
             self._render_widget.clear_frame()
 
+    def _current_research_feature_config(self) -> ResearchFeatureConfig:
+        return ResearchFeatureConfig(
+            n_inputs=self.spin_inputs.value(),
+            n_outputs=self.spin_outputs.value(),
+            max_nodes=self.spin_nodes.value() or None,
+            max_connections=self.spin_conns.value() or None,
+            population_size=self.spin_pop.value(),
+            target_species=self.spin_species.value(),
+            allow_memory=self.chk_memory.isChecked(),
+            output_sanitize=self._yane._output_sanitize,
+            output_fallback=self._yane._output_fallback,
+            cppn_substrate=self.chk_cppn_substrate.isChecked(),
+            cppn_hidden=self.spin_cppn_hidden.value(),
+            matrix_forward=self.chk_matrix_forward.isChecked(),
+            fitness_components=self.chk_fitness_components.isChecked(),
+            fitness_component_mode=self.combo_fitness_component_mode.currentText(),
+            meta_adaptive=self.chk_meta_adaptive.isChecked(),
+            module_library=self.chk_module_library.isChecked(),
+            module_insert_rate=self.dspin_module_insert_rate.value(),
+        )
+
+    def _configure_yane_core(self, ex) -> ResearchFeatureConfig:
+        from yane import NeuroEvolution
+
+        self._yane = NeuroEvolution()
+        self._yane.configure(
+            n_inputs=self.spin_inputs.value(),
+            n_outputs=self.spin_outputs.value(),
+            max_nodes=self.spin_nodes.value() or None,
+            max_connections=self.spin_conns.value() or None,
+            n_initial_hidden=ex.n_initial_hidden,
+            stateful=self.chk_memory.isChecked(),
+        )
+        self._yane.set_population_size(self.spin_pop.value())
+        self._yane.set_n_workers(self.spin_workers.value())
+        self._yane.set_target_species(self.spin_species.value())
+        research_cfg = self._current_research_feature_config()
+        if research_cfg.cppn_substrate:
+            configure_cppn_substrate_population(self._yane, research_cfg)
+        return research_cfg
+
+    def _apply_evolution_options(self, research_cfg: ResearchFeatureConfig) -> None:
+        if self.chk_fitness_shaping.isChecked():
+            self._yane.set_fitness_shaping(True)
+        self._yane.set_novelty_search(self.chk_novelty.isChecked())
+        self._yane.set_speciation(self.chk_speciation.isChecked())
+        self._yane.set_crossover(self.chk_crossover.isChecked())
+        self._yane.set_diversity_injection(self.chk_diversity_injection.isChecked())
+        if self.combo_interspecies_mode.currentText() == "Adaptiv":
+            self._yane.set_adaptive_interspecies_crossover(
+                min_rate=self.dspin_interspecies.value(),
+                max_rate=self.dspin_interspecies_max.value(),
+            )
+        else:
+            self._yane.set_interspecies_crossover(self.dspin_interspecies.value())
+
+        conv_eps = self.dspin_convergence_spread.value()
+        if conv_eps > 0.0:
+            self._yane.set_convergence_stop(conv_eps, self.dspin_convergence_stagnation.value())
+        early_stop_factor = self.dspin_early_stop.value()
+        if early_stop_factor > 0.0:
+            self._yane.set_early_stopping(early_stop_factor)
+        eff_max = self.spin_efficiency_max_ms.value()
+        eff_pen = self.dspin_efficiency_penalty.value()
+        if eff_max > 0.0 and eff_pen > 0.0:
+            self._yane.set_efficiency_penalty(eff_max, eff_pen)
+        self._yane.set_elitism(self.spin_elite_global.value(), self.spin_elite_species.value())
+        self._apply_lamarck_options()
+        self._yane.set_adaptive_control(self.chk_adaptive_ctrl.isChecked())
+        self._yane.set_operator_scheduler(self.chk_operator_scheduler.isChecked())
+        apply_research_features(self._yane, research_cfg)
+        n_eval = self.spin_multi_eval.value()
+        if n_eval > 1:
+            self._yane.set_multi_eval(
+                n=n_eval,
+                aggregation=self.combo_aggregation.currentText(),
+                sigma_penalty=self.dspin_sigma_penalty.value(),
+            )
+        self._yane.set_resource_limits(max_process_gb=self.dspin_mem.value())
+        target = self.dspin_target.value()
+        if target > -1e9:
+            self._yane.set_min_fitness(target)
+
+    def _apply_lamarck_options(self) -> None:
+        optimizer_map = {
+            "Hill-Climbing": "hill_climbing",
+            "NES": "nes",
+            "SA": "sa",
+            "CMA-ES": "cma_es",
+        }
+        optimizer = optimizer_map[self.combo_lamarck_optimizer.currentText()]
+        schedule = self.combo_lamarck_schedule.currentText()
+        if schedule == "Explizit":
+            self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode=optimizer)
+        elif schedule == "Adaptiv":
+            self._yane.set_lamarck_adaptive(mode=optimizer)
+        elif schedule == "Aus":
+            self._yane.set_lamarck_adaptive(max_steps=0)
+        budget = self.spin_lamarck_budget.value()
+        self._yane.set_lamarck_budget(budget if budget > 0 else None)
+
+    def _render_callback_for_example(self, ex):
+        if ex.supports_render and self.btn_render.isChecked():
+            return self.render_frame.emit
+        return None
+
+    def _make_eval_factory(self, ex):
+        if ex.supports_normalization and not self.chk_normalize.isChecked():
+            import functools
+            make_eval_fn = functools.partial(ex.make_eval, normalize=False)
+        else:
+            make_eval_fn = ex.make_eval
+
+        if not self.chk_multi_objective.isChecked():
+            return make_eval_fn
+
+        weight = self.dspin_mo_complexity.value()
+        self._yane.set_multi_objective(
+            enabled=True,
+            weights=(1.0, -weight),
+            maximize=(True, False),
+        )
+        base_make_eval_fn = make_eval_fn
+
+        def _make_mo_eval(render_cb=None, _base=base_make_eval_fn):
+            base_eval = _base(render_cb)
+
+            def _eval(genome):
+                raw = base_eval(genome)
+                return (raw, float(genome.connection_count))
+
+            return _eval
+
+        return _make_mo_eval
+
+    def _configure_quality_diversity(self) -> None:
+        if not self.chk_quality_diversity.isChecked():
+            return
+        if self.combo_qd_descriptor.currentText() == "Behavior":
+            from yane.evolution.quality_diversity import descriptor_from_outputs
+            import random
+            rng = random.Random(42)
+            probes = [
+                [rng.uniform(-1.0, 1.0) for _ in range(self.spin_inputs.value())]
+                for _ in range(2)
+            ]
+            bins = tuple(8 for _ in range(max(1, self.spin_outputs.value() * len(probes))))
+            ranges = tuple((-1.0, 1.0) for _ in bins)
+            self._yane.set_quality_diversity(
+                descriptor_from_outputs(probes),
+                bins=bins,
+                ranges=ranges,
+                max_cells=500,
+            )
+            return
+
+        self._yane.set_quality_diversity(
+            descriptor_fn=lambda g: (
+                float(max(0, len(g.nodes) - len(g.input_nodes) - len(g.output_nodes))),
+                float(g.connection_count),
+            ),
+            bins=(12, 16),
+            ranges=((0.0, float(max(1, self.spin_nodes.value() or 100))),
+                    (0.0, float(max(1, self.spin_conns.value() or 200)))),
+            max_cells=500,
+        )
+
+    def _configure_curriculum(self, ex) -> None:
+        if ex.make_curriculum is None or not self.chk_curriculum.isChecked():
+            return
+        normalize = self.chk_normalize.isChecked() if ex.supports_normalization else True
+        target_fitness = (
+            self.dspin_target.value()
+            if self.dspin_target.value() > -1e9
+            else ex.target_fitness
+        )
+        self._yane.set_curriculum(
+            ex.make_curriculum(normalize=normalize, target_fitness=target_fitness)
+        )
+
+    def _setup_gui_run_logging(self, ex) -> None:
+        from yane.util.logger import setup_logging as _setup_log, write_json as _wj, log_info as _li
+
+        log_dir = _setup_log(f"gui/{ex.name}")
+        self._yane._log_run_dir = log_dir
+        self._yane._log_run_name = ex.name
+        _wj(log_dir / "config.json", self._yane._config_dict())
+        if self.preset_combo.currentIndex() in self._preset_by_index:
+            preset = self._preset_by_index[self.preset_combo.currentIndex()]
+            _wj(log_dir / "preset.json", preset.to_json())
+        _li(
+            "GUI training started  example=%s  pop_size=%d  target=%s",
+            ex.name,
+            self.spin_pop.value(),
+            self.dspin_target.value() if self.dspin_target.value() > -1e9 else "none",
+        )
+        self._log_csv_path = log_dir / "fitness_history.csv"
+        self._log_csv_header = "iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections"
+        self._log_csv_interval = max(1, self.spin_pop.value() // 10)
+
     def start_training(self) -> None:
         ex = self._current_example()
         if ex is None:
             return
 
         try:
-            from yane import NeuroEvolution
-            from yane.util.logger import setup_logging as _setup_log, write_json as _wj, log_info as _li
-            self._yane = NeuroEvolution()
-            self._yane.configure(
-                n_inputs=self.spin_inputs.value(),
-                n_outputs=self.spin_outputs.value(),
-                max_nodes=self.spin_nodes.value() or None,
-                max_connections=self.spin_conns.value() or None,
-                n_initial_hidden=ex.n_initial_hidden,
-                stateful=self.chk_memory.isChecked(),
-            )
-            self._yane.set_population_size(self.spin_pop.value())
-            # 0 = Auto (worker determines optimal count at runtime)
-            self._yane.set_n_workers(self.spin_workers.value())
-            self._yane.set_target_species(self.spin_species.value())
-
-            # --- Advanced settings ---
-            if self.chk_fitness_shaping.isChecked():
-                self._yane.set_fitness_shaping(True)
-            self._yane.set_novelty_search(self.chk_novelty.isChecked())
-            self._yane.set_speciation(self.chk_speciation.isChecked())
-            self._yane.set_crossover(self.chk_crossover.isChecked())
-            self._yane.set_diversity_injection(self.chk_diversity_injection.isChecked())
-            if self.combo_interspecies_mode.currentText() == "Adaptiv":
-                self._yane.set_adaptive_interspecies_crossover(
-                    min_rate=self.dspin_interspecies.value(),
-                    max_rate=self.dspin_interspecies_max.value(),
-                )
-            else:
-                self._yane.set_interspecies_crossover(self.dspin_interspecies.value())
-            conv_eps = self.dspin_convergence_spread.value()
-            if conv_eps > 0.0:
-                self._yane.set_convergence_stop(
-                    conv_eps, self.dspin_convergence_stagnation.value())
-            esf = self.dspin_early_stop.value()
-            if esf > 0.0:
-                self._yane.set_early_stopping(esf)
-            eff_max = self.spin_efficiency_max_ms.value()
-            eff_pen = self.dspin_efficiency_penalty.value()
-            if eff_max > 0.0 and eff_pen > 0.0:
-                self._yane.set_efficiency_penalty(eff_max, eff_pen)
-            self._yane.set_elitism(
-                self.spin_elite_global.value(),
-                self.spin_elite_species.value(),
-            )
-
-            optimizer_map = {
-                "Hill-Climbing": "hill_climbing",
-                "NES": "nes",
-                "SA": "sa",
-                "CMA-ES": "cma_es",
-            }
-            lamarck_optimizer = optimizer_map[self.combo_lamarck_optimizer.currentText()]
-            lamarck_schedule = self.combo_lamarck_schedule.currentText()
-            if lamarck_schedule == "Explizit":
-                self._yane.set_lamarck(
-                    n_steps=self.spin_lamarck.value(),
-                    mode=lamarck_optimizer,
-                )
-            elif lamarck_schedule == "Adaptiv":
-                self._yane.set_lamarck_adaptive(mode=lamarck_optimizer)
-            elif lamarck_schedule == "Aus":
-                self._yane.set_lamarck_adaptive(max_steps=0)
-
-            # Lamarck budget
-            lamarck_budget = self.spin_lamarck_budget.value()
-            self._yane.set_lamarck_budget(lamarck_budget if lamarck_budget > 0 else None)
-
-            # Adaptive Control Layer
-            self._yane.set_adaptive_control(self.chk_adaptive_ctrl.isChecked())
-
-            # Operator Scheduler
-            self._yane.set_operator_scheduler(self.chk_operator_scheduler.isChecked())
-
-            n_eval = self.spin_multi_eval.value()
-            if n_eval > 1:
-                self._yane.set_multi_eval(
-                    n=n_eval,
-                    aggregation=self.combo_aggregation.currentText(),
-                    sigma_penalty=self.dspin_sigma_penalty.value(),
-                )
-            self._yane.set_resource_limits(max_process_gb=self.dspin_mem.value())
-            target = self.dspin_target.value()
-            if target > -1e9:
-                self._yane.set_min_fitness(target)
-            render_cb = None
-            if ex.supports_render and self.btn_render.isChecked():
-                render_cb = self.render_frame.emit
-
-            if ex.supports_normalization and not self.chk_normalize.isChecked():
-                import functools
-                make_eval_fn = functools.partial(ex.make_eval, normalize=False)
-            else:
-                make_eval_fn = ex.make_eval
-
-            if self.chk_multi_objective.isChecked():
-                weight = self.dspin_mo_complexity.value()
-                self._yane.set_multi_objective(
-                    enabled=True,
-                    weights=(1.0, -weight),
-                    maximize=(True, False),
-                )
-                base_make_eval_fn = make_eval_fn
-
-                def _make_mo_eval(render_cb=None, _base=base_make_eval_fn):
-                    base_eval = _base(render_cb)
-
-                    def _eval(genome):
-                        raw = base_eval(genome)
-                        return (raw, float(genome.connection_count))
-
-                    return _eval
-
-                make_eval_fn = _make_mo_eval
-
-            if self.chk_quality_diversity.isChecked():
-                if self.combo_qd_descriptor.currentText() == "Behavior":
-                    from yane.evolution.quality_diversity import descriptor_from_outputs
-                    import random
-                    rng = random.Random(42)
-                    probes = [
-                        [rng.uniform(-1.0, 1.0) for _ in range(self.spin_inputs.value())]
-                        for _ in range(2)
-                    ]
-                    bins = tuple(8 for _ in range(max(1, self.spin_outputs.value() * len(probes))))
-                    ranges = tuple((-1.0, 1.0) for _ in bins)
-                    self._yane.set_quality_diversity(
-                        descriptor_from_outputs(probes),
-                        bins=bins,
-                        ranges=ranges,
-                        max_cells=500,
-                    )
-                else:
-                    self._yane.set_quality_diversity(
-                        descriptor_fn=lambda g: (
-                            float(max(0, len(g.nodes) - len(g.input_nodes) - len(g.output_nodes))),
-                            float(g.connection_count),
-                        ),
-                        bins=(12, 16),
-                        ranges=((0.0, float(max(1, self.spin_nodes.value() or 100))),
-                                (0.0, float(max(1, self.spin_conns.value() or 200)))),
-                        max_cells=500,
-                    )
-
-            # Curriculum: build stages and register on yane before worker starts.
-            if ex.make_curriculum is not None and self.chk_curriculum.isChecked():
-                normalize = self.chk_normalize.isChecked() if ex.supports_normalization else True
-                target_fitness = (
-                    self.dspin_target.value()
-                    if self.dspin_target.value() > -1e9
-                    else ex.target_fitness
-                )
-                stages = ex.make_curriculum(
-                    normalize=normalize,
-                    target_fitness=target_fitness,
-                )
-                self._yane.set_curriculum(stages)
-
-            # --- Structured logging for GUI runs ---------------------------
-            _log_dir = _setup_log(f"gui/{ex.name}")
-            self._yane._log_run_dir = _log_dir
-            self._yane._log_run_name = ex.name
-            _wj(_log_dir / "config.json", self._yane._config_dict())
-            if self.preset_combo.currentIndex() in self._preset_by_index:
-                _wj(_log_dir / "preset.json", self._preset_by_index[self.preset_combo.currentIndex()].to_json())
-            _li("GUI training started  example=%s  pop_size=%d  target=%s",
-                ex.name, self.spin_pop.value(),
-                self.dspin_target.value() if self.dspin_target.value() > -1e9 else "none")
-            self._log_csv_path = _log_dir / "fitness_history.csv"
-            self._log_csv_header = "iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections"
-            self._log_csv_interval = max(1, self.spin_pop.value() // 10)
+            research_cfg = self._configure_yane_core(ex)
+            self._apply_evolution_options(research_cfg)
+            render_cb = self._render_callback_for_example(ex)
+            make_eval_fn = self._make_eval_factory(ex)
+            self._configure_quality_diversity()
+            self._configure_curriculum(ex)
+            self._setup_gui_run_logging(ex)
         except Exception as e:
             QMessageBox.critical(self, "Setup Error", str(e))
             return

@@ -42,6 +42,9 @@ class TestGUISmoke(unittest.TestCase):
         self.assertTrue(hasattr(tab, "chk_multi_objective"))
         self.assertTrue(hasattr(tab, "chk_quality_diversity"))
         self.assertTrue(hasattr(tab, "preset_combo"))
+        self.assertTrue(hasattr(tab, "chk_matrix_forward"))
+        self.assertTrue(hasattr(tab, "chk_fitness_components"))
+        self.assertTrue(hasattr(tab, "chk_cppn_substrate"))
         tab.close()
 
     def test_left_panel_accepts_new_diagnostics(self):
@@ -57,6 +60,127 @@ class TestGUISmoke(unittest.TestCase):
         panel.update_genome(g, yane.population_memory_info(), do_heavy=True)
         self.assertEqual(panel.lbl_multi_objective.text().startswith("on"), True)
         panel.close()
+
+    def test_left_panel_accepts_research_feature_diagnostics(self):
+        from yane.gui.panels.left_panel import LeftPanel
+        from yane.core.genome import Genome
+
+        panel = LeftPanel()
+        g = Genome()
+        mem = {
+            "total_genomes": 1,
+            "matrix_forward_hits": 3,
+            "matrix_forward_misses": 1,
+            "fitness_component_weights": {
+                "mode": "adaptive",
+                "last_reason": "adaptive:stagnation",
+                "weights": {"a": 0.1, "b": 0.2},
+            },
+            "meta_adaptive_policies": {
+                "last_reason": "evolve:improved",
+                "global_genes": {
+                    "operator_exploration": 1.2,
+                    "lamarck_budget": 42,
+                    "interspecies_rate": 0.07,
+                },
+            },
+            "module_library": {
+                "module_count": 2,
+                "total_uses": 3,
+                "reuse_rate": 1.5,
+            },
+        }
+        panel.update_genome(g, mem, do_heavy=False)
+        self.assertIn("3/1", panel.lbl_matrix_forward.text())
+        self.assertIn("adaptive", panel.lbl_fitness_components.text())
+        self.assertIn("budget=42", panel.lbl_meta_policy.text())
+        self.assertIn("2 modules", panel.lbl_module_library.text())
+        panel.close()
+
+    def test_research_diagnostic_formatter(self):
+        from yane.gui.research_features import format_research_diagnostics
+
+        labels = format_research_diagnostics({
+            "matrix_forward_hits": 2,
+            "matrix_forward_misses": 1,
+            "meta_adaptive_policies": {
+                "last_reason": "evolve:plateau",
+                "global_genes": {
+                    "operator_exploration": 1.5,
+                    "lamarck_budget": 12,
+                    "interspecies_rate": 0.03,
+                },
+            },
+        })
+
+        self.assertEqual(labels["matrix_forward"], "2/1")
+        self.assertIn("budget=12", labels["meta_policy"])
+        self.assertEqual(labels["module_library"], "—")
+
+    def test_research_feature_helpers_apply_yane_controls(self):
+        from yane import NeuroEvolution
+        from yane.gui.research_features import ResearchFeatureConfig, apply_research_features
+
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        cfg = ResearchFeatureConfig(
+            n_inputs=2,
+            n_outputs=1,
+            max_nodes=10,
+            max_connections=20,
+            population_size=5,
+            target_species=3,
+            allow_memory=False,
+            output_sanitize=False,
+            output_fallback=0.0,
+            matrix_forward=True,
+            fitness_components=True,
+            fitness_component_mode="Adaptiv",
+            meta_adaptive=True,
+            module_library=True,
+            module_insert_rate=0.25,
+        )
+
+        apply_research_features(yane, cfg)
+
+        self.assertTrue(yane._matrix_forward_enabled)
+        self.assertTrue(yane._operator_scheduler_enabled)
+        self.assertIsNotNone(yane.get_fitness_component_weights())
+        self.assertIsNotNone(yane.get_meta_adaptive_policies())
+        self.assertIsNotNone(yane.get_module_library())
+        self.assertAlmostEqual(yane.population._module_insert_rate, 0.25)
+
+    def test_cppn_substrate_helper_replaces_seed_population(self):
+        from yane import NeuroEvolution
+        from yane.gui.research_features import (
+            ResearchFeatureConfig,
+            configure_cppn_substrate_population,
+        )
+
+        yane = NeuroEvolution(seed=1)
+        yane.configure(2, 1, n_initial_hidden=0)
+        cfg = ResearchFeatureConfig(
+            n_inputs=2,
+            n_outputs=1,
+            max_nodes=10,
+            max_connections=20,
+            population_size=7,
+            target_species=4,
+            allow_memory=False,
+            output_sanitize=False,
+            output_fallback=0.0,
+            cppn_substrate=True,
+            cppn_hidden=3,
+        )
+
+        configure_cppn_substrate_population(yane, cfg)
+
+        seed = yane.population._unevaluated[0]
+        self.assertEqual(yane.population.max_size, 7)
+        self.assertEqual(yane.population._target_species, 4)
+        self.assertEqual(len(seed.input_nodes), 2)
+        self.assertEqual(len(seed.output_nodes), 1)
+        self.assertEqual(len(seed.nodes), 6)
 
     def test_screenshot_layout_smoke(self):
         from yane.gui.window import MainWindow
@@ -104,6 +228,9 @@ class TestGUIAdaptiveSection(unittest.TestCase):
             "combo_adaptive_preset",
             "lbl_plateau_ratio",
             "lbl_diversity_score",
+            "chk_meta_adaptive",
+            "chk_module_library",
+            "dspin_module_insert_rate",
         ):
             self.assertTrue(hasattr(tab, attr), f"TrainingTab missing attribute: {attr}")
         tab.close()

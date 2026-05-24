@@ -310,15 +310,9 @@ def duplicate_module(
 
     genome.nodes.extend(new_nodes.values())
     for src, target, old_conn in planned_connections:
-        innov = (
-            tracker.get_connection(src.innovation, target.innovation)
-            if tracker is not None else old_conn.innovation
-        )
-        new_conn = Connection(target, innovation=innov)
-        new_conn.weight = old_conn.weight
-        new_conn.enabled = old_conn.enabled
-        new_conn.spike_rate = old_conn.spike_rate
-        new_conn.mutation = old_conn.mutation.copy()
+        new_conn = _copy_connection_template(old_conn, target)
+        if tracker is not None:
+            new_conn.innovation = tracker.get_connection(src.innovation, target.innovation)
         src.connections.append(new_conn)
 
     genome._invalidate_topology()
