@@ -562,6 +562,21 @@ class NeuroEvolution:
         self._ensure_configured()
         return self._population.get_top(k)
 
+    def forward_batch(self, batch) -> list[list[float]]:
+        """Vectorized forward pass on the best genome for a batch of inputs.
+
+        Delegates to ``Genome.forward_batch()``: ~10–100× faster than
+        sequential forward() for acyclic networks.  Falls back to sequential
+        for cyclic or stateful (memory) networks.
+
+        Args:
+            batch: N input vectors (list-of-lists or 2-D ndarray).
+        Returns:
+            list of N output vectors.
+        """
+        self._ensure_configured()
+        return self._population.get_best().forward_batch(batch)
+
     def forward_ensemble(
         self,
         inputs: list[float],

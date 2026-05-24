@@ -498,6 +498,97 @@ class Genome:
         self._forward_dispatch = self._bfs_forward
         return self._bfs_forward(data)
 
+    def forward_batch(self, batch) -> list[list[float]]:
+        """Vectorized forward pass for a batch of input vectors.
+
+        ~10–100× faster than sequential forward() for feed-forward (acyclic,
+        non-stateful) networks because it replaces per-sample Python loops with
+        NumPy matrix operations.
+
+        Falls back to sequential forward() for:
+          - Cyclic (recurrent) networks
+          - Networks with persistent (memory) hidden nodes
+          - Empty batches
+
+        Args:
+            batch: sequence of N input vectors (list-of-lists or 2-D ndarray).
+        Returns:
+            list of N output vectors, each of length n_outputs.
+        """
+        import numpy as _np
+        from yane.util.activation import get_batch_activation_fns
+        from yane.core.node import NodeType as _NT
+
+        N = len(batch)
+        if N == 0:
+            return []
+
+        # --- Fallback conditions -------------------------------------------
+        if self._has_cycles:
+            return [self.forward(row) for row in batch]
+
+        has_memory = any(
+            n._persist_value for n in self.nodes if n.type is _NT.HIDDEN
+        )
+        if has_memory:
+            return [self.forward(row) for row in batch]
+
+        # --- Ensure topology is resolved ------------------------------------
+        if self._exec_order is None:
+            exec_order = self._build_exec_order()
+            if exec_order is None:
+                self._has_cycles = True
+                return [self.forward(row) for row in batch]
+            self._exec_order = exec_order
+
+        exec_order = self._exec_order
+        batch_fns = get_batch_activation_fns()
+
+        # --- Build node-index map (per-call; cheap for typical net sizes) --
+        all_nodes = self.nodes
+        n_nodes = len(all_nodes)
+        node_to_idx = {id(n): i for i, n in enumerate(all_nodes)}
+
+        # --- Allocate value matrix -----------------------------------------
+        vals = _np.zeros((N, n_nodes), dtype=_np.float64)
+        data = _np.asarray(batch, dtype=_np.float64)  # (N, n_inputs)
+        n_inp = data.shape[1] if data.ndim > 1 else 0
+
+        # --- Input nodes: activate + push to targets -----------------------
+        for node in self.input_nodes:
+            ni = node_to_idx[id(node)]
+            col = (data[:, node.input_index] * node.input_scale
+                   if node.input_index < n_inp
+                   else _np.zeros(N, dtype=_np.float64))
+            col = col + node.bias
+            activated = batch_fns[node._activation](col)  # (N,)
+            for conn in node.connections:
+                if conn.enabled:
+                    vals[:, node_to_idx[id(conn.target)]] += conn._weight * activated
+            # Input node values reset to zero after pushing
+            # (output_scale on inputs is unused; node.value stays 0)
+
+        # --- Hidden / output nodes in topological order --------------------
+        for node in exec_order:
+            ni = node_to_idx[id(node)]
+            pre = vals[:, ni] + node.bias
+            activated = batch_fns[node._activation](pre)  # (N,)
+            for conn in node.connections:
+                if conn.enabled:
+                    vals[:, node_to_idx[id(conn.target)]] += conn._weight * activated
+            if node._retain_value:
+                vals[:, ni] = activated
+            else:
+                vals[:, ni] = 0.0
+
+        # --- Collect outputs -----------------------------------------------
+        result = []
+        for i in range(N):
+            row = [float(vals[i, node_to_idx[id(n)]]) * n.output_scale
+                   for n in self.output_nodes]
+            result.append(row)
+        return result
+
     # -------------------------------------------------------------------------
     # Mutation
     # -------------------------------------------------------------------------

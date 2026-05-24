@@ -107,3 +107,69 @@ class ActivationFunction:
     @classmethod
     def activate(cls, activation: ActivationType, value: float) -> float:
         return ACTIVATION_FNS[activation](value)
+
+
+# ---------------------------------------------------------------------------
+# NumPy-vectorised activation functions for forward_batch().
+# Each function accepts a 1-D np.ndarray and returns a new 1-D np.ndarray.
+# Loaded lazily (numpy imported at first call) so scalar paths stay light.
+# ---------------------------------------------------------------------------
+
+def _get_batch_activation_fns():
+    """Return the BATCH_ACTIVATION_FNS dict, building it on first call."""
+    import numpy as _np
+
+    _C = 500.0     # clip for exp-based functions
+    _GC = 26.0     # gaussian clip: exp(-26²) underflows
+    _SQ = 1e4      # square clip
+    _CU = 1e3      # cube clip
+
+    def _b_linear(x):     return x
+    def _b_sigmoid(x):    return 1.0 / (1.0 + _np.exp(-_np.clip(x, -_C, _C)))
+    def _b_tanh(x):       return _np.tanh(x)
+    def _b_relu(x):       return _np.maximum(0.0, x)
+    def _b_binary(x):     return _np.where(x >= 0.5, 1.0, 0.0)
+    def _b_leaky(x):      return _np.where(x > 0.0, x, 0.01 * x)
+    def _b_elu(x):
+        safe = _np.clip(x, -_C, 0.0)
+        return _np.where(x >= 0.0, x, _np.expm1(safe))
+    def _b_swish(x):
+        cx = _np.clip(x, -_C, _C)
+        return cx / (1.0 + _np.exp(-cx))
+    def _b_softplus(x):
+        return _np.where(x > 20.0, x, _np.log1p(_np.exp(_np.clip(x, -_C, 20.0))))
+    def _b_sine(x):       return _np.sin(x)
+    def _b_square(x):     xc = _np.clip(x, -_SQ, _SQ); return xc * xc
+    def _b_abs(x):        return _np.abs(x)
+    def _b_gaussian(x):   xc = _np.clip(x, -_GC, _GC); return _np.exp(-(xc * xc))
+    def _b_cube(x):       xc = _np.clip(x, -_CU, _CU); return xc * xc * xc
+    def _b_cosine(x):     return _np.cos(x)
+
+    return {
+        ActivationType.LINEAR:     _b_linear,
+        ActivationType.SIGMOID:    _b_sigmoid,
+        ActivationType.TANH:       _b_tanh,
+        ActivationType.RELU:       _b_relu,
+        ActivationType.BINARY:     _b_binary,
+        ActivationType.LEAKY_RELU: _b_leaky,
+        ActivationType.ELU:        _b_elu,
+        ActivationType.SWISH:      _b_swish,
+        ActivationType.SOFTPLUS:   _b_softplus,
+        ActivationType.SINE:       _b_sine,
+        ActivationType.SQUARE:     _b_square,
+        ActivationType.ABS:        _b_abs,
+        ActivationType.GAUSSIAN:   _b_gaussian,
+        ActivationType.CUBE:       _b_cube,
+        ActivationType.COSINE:     _b_cosine,
+    }
+
+
+_BATCH_FNS: dict | None = None
+
+
+def get_batch_activation_fns() -> dict:
+    """Return the BATCH_ACTIVATION_FNS dict (built once, cached)."""
+    global _BATCH_FNS
+    if _BATCH_FNS is None:
+        _BATCH_FNS = _get_batch_activation_fns()
+    return _BATCH_FNS

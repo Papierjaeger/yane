@@ -342,15 +342,13 @@ Nutzen:
 - Optimierungen bleiben messbar.
 - Große Aufgaben werden planbarer.
 
-### P1: Vektorisierte Batch-Auswertung
+### P1: Vektorisierte Batch-Auswertung ✅
 
 Dataset-Aufgaben bewerten viele Samples pro Genom. Aktuell läuft das meist sampleweise.
 
-Aufgaben:
+**Bereits implementiert:** `Genome.forward_batch(batch)` verarbeitet eine Liste/NumPy-Array von Inputs vektorisiert via NumPy `(N, n_nodes)`-Matrix im Push-Modell, topologisch geordnet. Fallback auf sequentielles `forward()` bei Zyklen oder persistenten Hidden Nodes. `NeuroEvolution.forward_batch()` delegiert ans beste Genom. Alle 15 Aktivierungstypen als NumPy-Vektorfunktionen in `util/activation.py` (`get_batch_activation_fns()`), lazy-geladen und gecacht.
 
-- Optionales `forward_batch()` für azyklische Netze prüfen.
-- NumPy-basierte Ausführung für feed-forward Topologien.
-- Fallback auf normalen Forward bei Zyklen/Memory.
+**Noch offen:** — (alle geplanten Aufgaben sind implementiert).
 
 Nutzen:
 
@@ -489,7 +487,7 @@ Nutzen:
 
 | Phase | Fokus | Enthaltene Tasks (offen) |
 |---|---|---|
-| **Phase 3** · Skalierung | Species-Budget-Reproduktion, Batch-Forward, Serialisierung, Worker-Pipeline | P1: Batch-Auswertung, Serialisierung |
+| **Phase 3** · Skalierung | Species-Budget-Reproduktion, Batch-Forward, Serialisierung, Worker-Pipeline | P1: Serialisierung |
 | **Phase 4** · Schwierige Aufgaben | Curriculum, Multi-Objective, MAP-Elites, Memory/Gating, Hybrid-Optimierung | P1: Curriculum, Memory (Rest); P2: Multi-Obj, QD, NES, Backprop |
 
 > Phase 1 und 2 sind vollständig abgeschlossen. Species-Budget-Reproduktion wurde bewusst von Phase 2 auf Phase 3 verschoben (erfordert Umbau von steady-state zu generationsbasiertem Spawn-Modell).
@@ -540,6 +538,7 @@ Nutzen:
 - [x] Adaptive Strukturmutation: Erfolgsrate-Tracking, Nutzen-Gewichtung, Per-Species-Tendenzen.
 - [x] Weight/Bias-Clipping: set_weight_clipping(w_max, b_max) nach jeder Mutation.
 - [x] Forward-Microbenchmarks: benchmarks/forward_bench.py (acyclic vs cyclic, n∈{10,50,200,1000}).
+- [x] Vektorisierte Batch-Auswertung: forward_batch() (NumPy push-Modell, topologisch, Fallback bei Zyklen/Memory, alle 15 Aktivierungen, 8 Tests).
 
 ### ⚡ Teilweise implementiert (Rest siehe Task-Detail oben)
 
@@ -566,7 +565,6 @@ Nutzen:
 - [ ] Lokale Optimierer (Simulated Annealing, CMA-ES)
 - [ ] Backprop-Hybrid
 - [ ] NES als Lamarck-Alternative
-- [ ] Vektorisierte Batch-Auswertung
 - [ ] Genom-Serialisierung optimieren
 - [ ] GPU-Unterstützung
 - [ ] Ablation Tests
