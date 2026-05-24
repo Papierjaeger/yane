@@ -74,6 +74,16 @@ class BenchmarkResult:
         return statistics.mean(r.elapsed_s for r in s) if s else None
 
 
+@dataclass
+class GateCheck:
+    name: str
+    passed: bool
+    metric: str
+    actual: float | None
+    expected: float
+    comparator: str
+
+
 # ---------------------------------------------------------------------------
 # Benchmark definitions
 # ---------------------------------------------------------------------------
@@ -95,6 +105,18 @@ def _make_multiplication(seed: int):
     yane.configure(n_inputs=2, n_outputs=1, max_nodes=30, max_connections=80)
     yane.set_min_fitness(TARGET_FITNESS)
     yane.set_max_iterations(10000)
+    return yane, _make_eval(), TARGET_FITNESS
+
+
+def _make_regression_2_2(seed: int):
+    from yane import NeuroEvolution
+    from yane.examples.simple_2_2_continuous import make_eval as _make_eval, TARGET_FITNESS
+    yane = NeuroEvolution(seed=seed)
+    yane.configure(n_inputs=2, n_outputs=2, max_nodes=30, max_connections=80, n_initial_hidden=4)
+    yane.set_population_size(150)
+    yane.set_target_species(10)
+    yane.set_min_fitness(TARGET_FITNESS)
+    yane.set_max_iterations(20_000)
     return yane, _make_eval(), TARGET_FITNESS
 
 
@@ -171,6 +193,14 @@ _SUITE: list[BenchmarkSpec] = [
         ci=True,
     ),
     BenchmarkSpec(
+        name="Regression 2->2",
+        make_yane=_make_regression_2_2,
+        make_eval=lambda seed: None,
+        n_seeds=3,
+        timeout_s=120.0,
+        ci=True,
+    ),
+    BenchmarkSpec(
         name="CartPole-v1",
         make_yane=_make_cartpole,
         make_eval=lambda seed: None,
@@ -187,6 +217,14 @@ _SUITE: list[BenchmarkSpec] = [
         ci=False,
     ),
 ]
+
+
+DEFAULT_GATES = {
+    "XOR": {"min_success_rate": 0.2, "min_best_fitness": -0.2, "max_mean_elapsed_s": 30.0},
+    "basic_multiplication": {"min_success_rate": 0.2, "min_best_fitness": -15.0, "max_mean_elapsed_s": 60.0},
+    "Regression 2->2": {"min_success_rate": 0.0, "min_best_fitness": -2.0, "max_mean_elapsed_s": 120.0},
+    "CartPole-v1": {"min_success_rate": 0.0, "min_best_fitness": 50.0, "max_mean_elapsed_s": 120.0},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +326,71 @@ def save_results(results: list[BenchmarkResult], out_dir: Path | None = None) ->
     return path
 
 
+def load_gates(path: Path | None) -> dict:
+    if path is None:
+        return DEFAULT_GATES
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data.get("gates", data)
+
+
+def evaluate_gates(results: list[BenchmarkResult], gates: dict) -> list[GateCheck]:
+    checks: list[GateCheck] = []
+    by_name = {br.name: br for br in results}
+    for name, cfg in gates.items():
+        br = by_name.get(name)
+        if br is None:
+            checks.append(GateCheck(name, False, "present", None, 1.0, "exists"))
+            continue
+        if "min_success_rate" in cfg:
+            actual = br.success_rate
+            expected = float(cfg["min_success_rate"])
+            checks.append(GateCheck(name, actual >= expected, "success_rate", actual, expected, ">="))
+        best_fitnesses = [r.best_fitness for r in br.runs]
+        if "min_best_fitness" in cfg:
+            actual = max(best_fitnesses) if best_fitnesses else None
+            expected = float(cfg["min_best_fitness"])
+            checks.append(GateCheck(
+                name, actual is not None and actual >= expected,
+                "best_fitness", actual, expected, ">=",
+            ))
+        if "max_mean_elapsed_s" in cfg:
+            vals = [r.elapsed_s for r in br.runs]
+            actual = statistics.mean(vals) if vals else None
+            expected = float(cfg["max_mean_elapsed_s"])
+            checks.append(GateCheck(
+                name, actual is not None and actual <= expected,
+                "mean_elapsed_s", actual, expected, "<=",
+            ))
+    return checks
+
+
+def format_gate_report(checks: list[GateCheck]) -> str:
+    lines = [
+        "# Benchmark Gate Report",
+        "",
+        "| Benchmark | Metric | Actual | Gate | Result |",
+        "|---|---:|---:|---:|---|",
+    ]
+    for c in checks:
+        actual = "n/a" if c.actual is None else f"{c.actual:.4f}"
+        result = "PASS" if c.passed else "FAIL"
+        lines.append(
+            f"| {c.name} | {c.metric} | {actual} | {c.comparator} {c.expected:.4f} | {result} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def save_gate_report(checks: list[GateCheck], out_dir: Path | None = None) -> Path:
+    if out_dir is None:
+        out_dir = Path(__file__).parent / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    path = out_dir / f"{ts}_gate_report.md"
+    path.write_text(format_gate_report(checks), encoding="utf-8")
+    return path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="YANE benchmark suite")
     parser.add_argument(
@@ -302,6 +405,10 @@ def main() -> None:
         "--out-dir", type=Path, default=None,
         help="Directory for result JSON files (default: benchmarks/results/)"
     )
+    parser.add_argument(
+        "--gate", type=Path, default=None, nargs="?", const=Path(""),
+        help="Evaluate benchmark gates. Omit value to use built-in gates, or pass a JSON gate file."
+    )
     args = parser.parse_args()
 
     results = run_suite(fast=args.fast, verbose=True)
@@ -310,6 +417,17 @@ def main() -> None:
     if not args.no_save:
         path = save_results(results, out_dir=args.out_dir)
         print(f"Results saved to {path}")
+
+    if args.gate is not None:
+        gate_path = None if str(args.gate) == "" else args.gate
+        checks = evaluate_gates(results, load_gates(gate_path))
+        report = format_gate_report(checks)
+        print(report)
+        if not args.no_save:
+            path = save_gate_report(checks, out_dir=args.out_dir)
+            print(f"Gate report saved to {path}")
+        if not all(c.passed for c in checks):
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

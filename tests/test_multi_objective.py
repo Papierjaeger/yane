@@ -1,6 +1,7 @@
 import unittest
 
 from yane import NeuroEvolution
+from yane.evolution.evaluation import aggregate_fitnesses
 from yane.evolution.multi_objective import dominates, non_dominated_sort, pareto_scores
 
 
@@ -48,6 +49,29 @@ class TestNeuroEvolutionMultiObjective(unittest.TestCase):
         yane.next_genome()
         with self.assertRaises(ValueError):
             yane.submit_fitness((1.0, 2.0))
+
+    def test_multi_eval_aggregates_objective_vectors(self):
+        yane = NeuroEvolution()
+        yane.set_multi_objective(weights=(1.0, -1.0), maximize=(True, False))
+        yane.configure(1, 1)
+        yane.set_multi_eval(n=3, aggregation="mean", sigma_penalty=0.0)
+        g = yane.next_genome()
+
+        values = iter([(10.0, 1.0), (12.0, 3.0), (14.0, 5.0)])
+        result = yane._run_evaluations(g, lambda _g: next(values))
+
+        self.assertEqual(result.fitness, (12.0, 3.0))
+        yane.submit_fitness(result.fitness, result.elapsed_ms)
+        self.assertEqual(g.objectives, (12.0, 3.0))
+        self.assertEqual(g.fitness, 9.0)
+
+    def test_aggregate_fitnesses_vector_median(self):
+        result = aggregate_fitnesses(
+            [(1.0, 10.0), (3.0, 8.0), (5.0, 6.0)],
+            "median",
+            0.0,
+        )
+        self.assertEqual(result, (3.0, 8.0))
 
 
 if __name__ == "__main__":

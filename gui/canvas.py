@@ -861,3 +861,92 @@ class FitnessHistogram(QWidget):
             painter.drawText(pad_l + 2, pad_t + 8, f"Fitness ({total})")
         finally:
             painter.end()
+
+
+class ParetoScatter(QWidget):
+    """Small scatter plot for the first two objectives."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._points: list[dict] = []
+        self.setMinimumHeight(90)
+
+    def set_points(self, points: list[dict] | None) -> None:
+        self._points = list(points or [])
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            if not self._points:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No Pareto data")
+                return
+            w, h = self.width(), self.height()
+            pad = 12
+            xs = [p["objectives"][0] for p in self._points]
+            ys = [p["objectives"][1] for p in self._points]
+            x0, x1 = min(xs), max(xs)
+            y0, y1 = min(ys), max(ys)
+            if x0 == x1:
+                x0 -= 0.5; x1 += 0.5
+            if y0 == y1:
+                y0 -= 0.5; y1 += 0.5
+            painter.setPen(QPen(_C_GRID, 1))
+            painter.drawRect(pad, pad, w - 2 * pad, h - 2 * pad)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor("#89b4fa")))
+            for p in self._points:
+                x = pad + (p["objectives"][0] - x0) / (x1 - x0) * (w - 2 * pad)
+                y = h - pad - (p["objectives"][1] - y0) / (y1 - y0) * (h - 2 * pad)
+                painter.drawEllipse(QRectF(x - 2.0, y - 2.0, 4.0, 4.0))
+            painter.setPen(_C_TEXT)
+            painter.drawText(pad + 2, 10, f"Pareto ({len(self._points)})")
+        finally:
+            painter.end()
+
+
+class MapElitesHeatmap(QWidget):
+    """Tiny two-dimensional MAP-Elites cell heatmap."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._cells: list[dict] = []
+        self.setMinimumHeight(90)
+
+    def set_cells(self, cells: list[dict] | None) -> None:
+        self._cells = [c for c in (cells or []) if len(c.get("cell", [])) >= 2]
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            if not self._cells:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No QD cells")
+                return
+            w, h = self.width(), self.height()
+            pad = 10
+            max_x = max(c["cell"][0] for c in self._cells)
+            max_y = max(c["cell"][1] for c in self._cells)
+            min_fit = min(c["fitness"] for c in self._cells)
+            max_fit = max(c["fitness"] for c in self._cells)
+            span = max(max_fit - min_fit, 1e-9)
+            cw = (w - 2 * pad) / (max_x + 1)
+            ch = (h - 2 * pad) / (max_y + 1)
+            for c in self._cells:
+                rel = (c["fitness"] - min_fit) / span
+                color = QColor.fromHsvF(0.33 * rel, 0.55, 0.9, 0.85)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(color))
+                x = pad + c["cell"][0] * cw
+                y = h - pad - (c["cell"][1] + 1) * ch
+                painter.drawRect(QRectF(x + 1, y + 1, max(1, cw - 2), max(1, ch - 2)))
+            painter.setPen(_C_TEXT)
+            painter.drawText(pad + 2, 10, f"MAP-Elites ({len(self._cells)})")
+        finally:
+            painter.end()

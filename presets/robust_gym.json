@@ -1,0 +1,13 @@
+{
+  "name": "robust gym",
+  "description": "Noisy Gymnasium environments with multi-eval and conservative selection.",
+  "config": {
+    "population_size": 150,
+    "target_species": 5,
+    "n_workers": 0,
+    "multi_eval": 3,
+    "aggregation": "median",
+    "sigma_penalty": 0.25,
+    "lamarck_mode": "adaptive"
+  }
+}

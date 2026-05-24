@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 from yane import NeuroEvolution
 from yane.evolution.quality_diversity import MAPElitesArchive
@@ -22,6 +24,20 @@ class TestMAPElitesArchive(unittest.TestCase):
         archive = MAPElitesArchive(bins=(4,), ranges=((0.0, 1.0),))
         self.assertEqual(archive.cell_for((-10.0,)), (0,))
         self.assertEqual(archive.cell_for((10.0,)), (3,))
+
+    def test_archive_exports_json_and_csv(self):
+        yane = NeuroEvolution()
+        yane.configure(1, 1)
+        g = yane.next_genome()
+        archive = MAPElitesArchive(bins=(2,), ranges=((0.0, 1.0),))
+        archive.add((0.5,), g, 1.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            json_path = Path(tmp) / "archive.json"
+            csv_path = Path(tmp) / "archive.csv"
+            archive.export_json(json_path)
+            archive.export_csv(csv_path)
+            self.assertTrue(json_path.exists())
+            self.assertTrue(csv_path.exists())
 
 
 class TestQualityDiversityIntegration(unittest.TestCase):

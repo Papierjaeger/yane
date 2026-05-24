@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from yane.neuro_evolution import NeuroEvolution
 from yane.api.routes import network, population as pop_routes
 from yane.util.logger import setup_logging as _setup_log, log_info, log_warning, log_error
+from yane.util.presets import list_presets, load_preset
 
 
 @asynccontextmanager
@@ -124,6 +125,20 @@ def configure(req: ConfigureRequest) -> dict:
 @app.get("/health", tags=["setup"])
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/presets", tags=["setup"], summary="List available experiment presets")
+def presets() -> list[dict]:
+    return [p.to_json() | {"path": str(p.path)} for p in list_presets()]
+
+
+@app.get("/presets/{name}", tags=["setup"], summary="Load an experiment preset")
+def preset(name: str) -> dict:
+    try:
+        p = load_preset(name)
+        return p.to_json() | {"path": str(p.path)}
+    except FileNotFoundError:
+        raise HTTPException(404, f"Preset not found: {name}")
 
 
 # ── Checkpoint endpoints ────────────────────────────────────────────────────

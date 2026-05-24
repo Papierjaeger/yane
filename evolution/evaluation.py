@@ -4,6 +4,7 @@ import dataclasses
 import inspect
 import statistics
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
@@ -28,11 +29,27 @@ class EvaluationResult:
     raw_fitnesses: list[float] = dataclasses.field(default_factory=list)
 
 
+def _is_vector_fitness(value) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+
+
+def _aggregate_scalar(values: list[float], aggregation: str, sigma_penalty: float) -> float:
+    if aggregation == "median":
+        result = statistics.median(values)
+    elif aggregation == "min":
+        result = min(values)
+    else:
+        result = statistics.mean(values)
+    if sigma_penalty > 0.0 and len(values) > 1:
+        result -= sigma_penalty * statistics.pstdev(values)
+    return result
+
+
 def aggregate_fitnesses(
-    fitnesses: list[float],
+    fitnesses: list,
     aggregation: str,
     sigma_penalty: float,
-) -> float:
+) -> float | tuple[float, ...]:
     """Combine multiple fitness values into one.
 
     aggregation: "mean" | "median" | "min"
@@ -40,15 +57,16 @@ def aggregate_fitnesses(
     """
     if len(fitnesses) == 1:
         return fitnesses[0]
-    if aggregation == "median":
-        result = statistics.median(fitnesses)
-    elif aggregation == "min":
-        result = min(fitnesses)
-    else:
-        result = statistics.mean(fitnesses)
-    if sigma_penalty > 0.0:
-        result -= sigma_penalty * statistics.pstdev(fitnesses)
-    return result
+    if _is_vector_fitness(fitnesses[0]):
+        width = len(fitnesses[0])
+        rows = [tuple(float(v) for v in row) for row in fitnesses]
+        if any(len(row) != width for row in rows):
+            raise ValueError("All objective vectors must have the same length")
+        return tuple(
+            _aggregate_scalar([row[i] for row in rows], aggregation, sigma_penalty)
+            for i in range(width)
+        )
+    return _aggregate_scalar([float(v) for v in fitnesses], aggregation, sigma_penalty)
 
 
 class EvaluationRunner:

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import random
+import csv
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
@@ -88,6 +91,45 @@ class MAPElitesArchive:
         ordered = sorted(self.cells.items(), key=lambda item: item[1].fitness)
         for key, _cell in ordered[:len(self.cells) - self.max_cells]:
             self.cells.pop(key, None)
+
+    def to_records(self) -> list[dict]:
+        return [
+            {
+                "cell": list(cell),
+                "descriptor": list(elite.descriptor),
+                "fitness": elite.fitness,
+                "nodes": len(elite.genome.nodes),
+                "connections": elite.genome.connection_count,
+            }
+            for cell, elite in sorted(self.cells.items())
+        ]
+
+    def export_json(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "bins": list(self.bins),
+            "ranges": [list(r) for r in self.ranges],
+            "coverage": self.coverage,
+            "cells": self.to_records(),
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def export_csv(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["cell", "descriptor", "fitness", "nodes", "connections"],
+            )
+            writer.writeheader()
+            for rec in self.to_records():
+                writer.writerow({
+                    **rec,
+                    "cell": json.dumps(rec["cell"]),
+                    "descriptor": json.dumps(rec["descriptor"]),
+                })
 
 
 def descriptor_from_outputs(

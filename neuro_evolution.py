@@ -109,6 +109,7 @@ class NeuroEvolution:
         self._qd_enabled: bool = False
         self._qd_archive: MAPElitesArchive | None = None
         self._qd_descriptor_fn = None
+        self._qd_descriptor_needs_reattach: bool = False
 
     @property
     def current_genome(self) -> Genome | None:
@@ -217,6 +218,15 @@ class NeuroEvolution:
         self._qd_enabled = getattr(self._population, "_qd_enabled", self._qd_enabled)
         self._qd_archive = getattr(self._population, "_qd_archive", self._qd_archive)
         self._qd_descriptor_fn = getattr(self._population, "_qd_descriptor_fn", self._qd_descriptor_fn)
+        self._qd_descriptor_needs_reattach = bool(self._qd_enabled and self._qd_descriptor_fn is None)
+        if self._qd_descriptor_needs_reattach:
+            import warnings
+            warnings.warn(
+                "Quality Diversity archive was restored, but its descriptor callback "
+                "must be reattached with set_quality_diversity().",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         self._population._qd_enabled = self._qd_enabled
         self._population._qd_archive = self._qd_archive
         self._population._qd_descriptor_fn = self._qd_descriptor_fn
@@ -646,6 +656,7 @@ class NeuroEvolution:
             "quality_diversity_enabled": self._qd_enabled,
             "quality_diversity_bins": self._qd_archive.bins if self._qd_archive else None,
             "quality_diversity_ranges": self._qd_archive.ranges if self._qd_archive else None,
+            "quality_diversity_descriptor_needs_reattach": self._qd_descriptor_needs_reattach,
         }
 
     # -------------------------------------------------------------------------
@@ -1241,6 +1252,7 @@ class NeuroEvolution:
         self._qd_enabled = enabled
         self._qd_descriptor_fn = descriptor_fn
         self._qd_archive = MAPElitesArchive(bins=bins, ranges=ranges, max_cells=max_cells)
+        self._qd_descriptor_needs_reattach = False
         if self._population is not None:
             self._population._qd_enabled = enabled
             self._population._qd_archive = self._qd_archive

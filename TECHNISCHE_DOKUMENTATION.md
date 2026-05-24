@@ -1080,6 +1080,8 @@ Einstieg:
 persistente Hidden Nodes als `MatrixGenome` mit Adjazenzmatrix, Biasvektor,
 Aktivierungen und Input/Output-Indizes. `forward_matrix()` läuft mit NumPy-API,
 `forward_matrix_gpu()` nutzt CuPy, wenn installiert.
+`MatrixForwardCache`, `is_matrix_compatible()` und `forward_compatible_batch()`
+erlauben matrixbasierte Batch-Auswertung kompatibler Subpopulationen.
 
 `evolution/backprop.py` enthält einen optionalen PyTorch-Hook
 `backprop_finetune_linear_outputs(...)`. PyTorch ist keine harte Abhängigkeit;
@@ -1092,6 +1094,28 @@ ohne Installation wird ein klarer `ImportError` geworfen.
 volle-Kovarianz-CMA-ES-Variante für die Gewichte und Biases einer festen
 Topologie. Der Modus ist absichtlich lokal gehalten: Topologie bleibt
 evolutionär, Parameter werden lamarckianisch verfeinert.
+
+### 18.6 Presets, Gates und Profiling
+
+`util/presets.py` lädt und speichert Experimentprofile aus `presets/*.json`.
+Die GUI kann Presets anwenden und aktuelle Einstellungen als neues Preset
+speichern; die API bietet `GET /presets` und `GET /presets/{name}`.
+
+`benchmarks/run_suite.py --gate` prüft Benchmark-Grenzwerte für Success-Rate,
+Best-Fitness und Laufzeit und erzeugt einen Markdown-Report.
+
+`benchmarks/profile_serialization.py` misst Pickle-Größe, Pickle-/Unpickle-Zeit
+und Matrixexport-Kosten für Genome verschiedener Topologiegrößen.
+
+### 18.7 Async Evaluation und Descriptor Registry
+
+`evolution/async_evaluation.py` stellt `AsyncEvaluationQueue` und
+`evaluate_batch_async()` bereit. Die Queue liefert `(genome, fitness)`-Paare,
+die kontrolliert an die Population submitted werden können.
+
+`evolution/descriptors.py` enthält eine `DescriptorRegistry`, Default-Descriptors
+für Topologie/Timing/Verhalten sowie `FitnessComponent` und
+`scalarize_components()` für benannte Fitness-Komponenten.
 
 ## 19. Genom-Lifecycle
 

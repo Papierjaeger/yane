@@ -1,0 +1,11 @@
+{
+  "name": "quality diversity",
+  "description": "Enable MAP-Elites with topology descriptors.",
+  "config": {
+    "population_size": 200,
+    "target_species": 12,
+    "quality_diversity": true,
+    "quality_diversity_descriptor": "Topology",
+    "diversity_injection": true
+  }
+}

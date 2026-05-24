@@ -20,6 +20,43 @@ class MatrixGenome:
     exec_indices: tuple[int, ...]
 
 
+class MatrixForwardCache:
+    """Cache matrix exports for compatible genomes and invalidate by topology."""
+
+    def __init__(self) -> None:
+        self._cache: dict[int, tuple[tuple, MatrixGenome]] = {}
+
+    @staticmethod
+    def signature(genome: "Genome") -> tuple:
+        return (
+            len(genome.nodes),
+            genome.connection_count,
+            tuple(
+                (src.innovation, conn.target.innovation, conn.innovation, conn.enabled, conn.weight)
+                for src in genome.nodes
+                for conn in src.connections
+            ),
+        )
+
+    def get(self, genome: "Genome") -> MatrixGenome:
+        key = id(genome)
+        sig = self.signature(genome)
+        cached = self._cache.get(key)
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        exported = export_matrix_genome(genome)
+        self._cache[key] = (sig, exported)
+        return exported
+
+
+def is_matrix_compatible(genome: "Genome") -> bool:
+    try:
+        export_matrix_genome(genome)
+        return True
+    except ValueError:
+        return False
+
+
 def export_matrix_genome(genome: "Genome") -> MatrixGenome:
     """Export an acyclic genome to adjacency-matrix form.
 
@@ -107,3 +144,19 @@ def forward_matrix_gpu(exported: MatrixGenome, inputs) -> list[float]:
     result = forward_matrix(exported, inputs, xp=cp)
     cp.cuda.Stream.null.synchronize()
     return result
+
+
+def forward_compatible_batch(
+    genomes: list["Genome"],
+    batch_inputs,
+    cache: MatrixForwardCache | None = None,
+    use_gpu: bool = False,
+) -> list[list[list[float]]]:
+    """Evaluate compatible genomes over a batch of inputs via matrix exports."""
+    cache = cache or MatrixForwardCache()
+    outputs: list[list[list[float]]] = []
+    for genome in genomes:
+        exported = cache.get(genome)
+        run = forward_matrix_gpu if use_gpu else forward_matrix
+        outputs.append([run(exported, inputs) for inputs in batch_inputs])
+    return outputs

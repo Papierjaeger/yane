@@ -8,7 +8,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 
-from yane.gui.canvas import NetworkCanvas, FitnessHistogram, MutationRateChart, WeightHistogram
+from yane.gui.canvas import (
+    NetworkCanvas, FitnessHistogram, MutationRateChart, WeightHistogram,
+    ParetoScatter, MapElitesHeatmap,
+)
 from yane.gui._helpers import _label, _divider, CollapsibleGroup
 
 _CollapsibleGroup = CollapsibleGroup  # local alias kept for backward compat
@@ -268,7 +271,14 @@ class LeftPanel(QWidget):
         qd_grp.addRow("Coverage:", self.lbl_qd_coverage)
         qd_grp.addRow("Updates:", self.lbl_qd_updates)
         qd_grp.addRow("Injections:", self.lbl_qd_injections)
+        self.qd_heatmap = MapElitesHeatmap()
+        qd_grp.addWidget(self.qd_heatmap)
         layout.addWidget(qd_grp)
+
+        pareto_grp = _CollapsibleGroup("Pareto Front", collapsed=True)
+        self.pareto_scatter = ParetoScatter()
+        pareto_grp.addWidget(self.pareto_scatter)
+        layout.addWidget(pareto_grp)
 
         # ── Curriculum ────────────────────────────────────────────────────
         cur_grp = _CollapsibleGroup("Curriculum", collapsed=False)
@@ -592,12 +602,19 @@ class LeftPanel(QWidget):
             self.lbl_qd_coverage.setText(f"{cov:.4f}")
             self.lbl_qd_updates.setText(str(mem.get("n_quality_diversity_updates", 0)))
             self.lbl_qd_injections.setText(str(mem.get("n_quality_diversity_injections", 0)))
+            if do_heavy:
+                self.qd_heatmap.set_cells(mem.get("quality_diversity_cells_data"))
         else:
             self.lbl_qd_enabled.setText("—")
             self.lbl_qd_cells.setText("—")
             self.lbl_qd_coverage.setText("—")
             self.lbl_qd_updates.setText("—")
             self.lbl_qd_injections.setText("—")
+            if do_heavy:
+                self.qd_heatmap.set_cells(None)
+
+        if do_heavy:
+            self.pareto_scatter.set_points(mem.get("pareto_points"))
 
         # Fitness histogram
         fh = mem.get("fitness_histogram")

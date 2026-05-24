@@ -126,6 +126,13 @@ def build_population_info(
         "quality_diversity_coverage": (
             population._qd_archive.coverage if getattr(population, "_qd_archive", None) else 0.0
         ),
+        "quality_diversity_cells_data": (
+            [
+                {"cell": list(cell), "fitness": elite.fitness, "descriptor": list(elite.descriptor)}
+                for cell, elite in sorted(population._qd_archive.cells.items())
+            ]
+            if getattr(population, "_qd_archive", None) else []
+        ),
         "n_quality_diversity_updates": getattr(population, "_n_qd_updates", 0),
         "n_quality_diversity_injections": getattr(population, "_n_qd_injections", 0),
         # Mutation success tracking
@@ -175,6 +182,18 @@ def build_population_info(
     # Population-wide average mutation rates
     evaluated = population._evaluated
     if evaluated:
+        pareto_points = [
+            {
+                "objectives": list(g.objectives),
+                "fitness": g.fitness,
+                "nodes": len(g.nodes),
+                "connections": g.connection_count,
+            }
+            for g in evaluated
+            if getattr(g, "objectives", None) is not None and len(g.objectives) >= 2
+        ]
+        if pareto_points:
+            info["pareto_points"] = pareto_points
         info["pop_avg_sigma_global"] = sum(
             g.sigma_global for g in evaluated) / len(evaluated)
         info["pop_avg_lamarck_sigma"] = sum(

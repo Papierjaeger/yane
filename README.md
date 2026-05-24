@@ -43,6 +43,7 @@ Die GUI bietet:
 - `Run Best` für renderbare Gymnasium-Beispiele
 - API-Server-Tab zum Starten der HTTP-Schnittstelle
 - Advanced-Controls für Lamarck-Modi inkl. CMA-ES, Multi-Objective und Quality Diversity
+- Experiment-Presets für wiederholbare GUI/API-Konfigurationen
 
 ### Beispiel per Skript trainieren
 
@@ -265,6 +266,19 @@ Für größere Forschungsaufgaben gibt es zusätzliche Module:
 - `yane.evolution.indirect_encoding`: CPPN/HyperNEAT-artige Connection-Generierung
 - `yane.evolution.matrix_export`: Matrixexport für NumPy/CuPy-kompatible DAGs
 - `yane.evolution.backprop`: optionaler PyTorch-Finetuning-Hook
+- `yane.evolution.async_evaluation`: Future-basierte Evaluation-Queues
+- `yane.evolution.descriptors`: Descriptor-Registry und Fitness-Komponenten
+
+### Presets und Benchmark-Gates
+
+```bash
+python -m yane.benchmarks.run_suite --fast --gate
+python -m yane.benchmarks.profile_serialization --sizes 0 10 50 200
+```
+
+`presets/*.json` enthält wiederverwendbare Experimentprofile. Die API stellt
+sie über `GET /presets` und `GET /presets/{name}` bereit; die GUI hat ein
+Preset-Dropdown und kann aktuelle Einstellungen als neues Preset speichern.
 
 ### Lamarckian Refinement
 

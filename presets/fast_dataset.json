@@ -1,0 +1,12 @@
+{
+  "name": "fast dataset",
+  "description": "Small deterministic datasets with quick feedback.",
+  "config": {
+    "population_size": 100,
+    "target_species": 10,
+    "n_workers": 1,
+    "lamarck_mode": "adaptive",
+    "multi_eval": 1,
+    "fitness_shaping": true
+  }
+}

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QPushButton, QFrame, QLabel, QSizePolicy, QFormLayout,
     QGroupBox, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
-    QMessageBox, QProgressBar, QTabWidget,
+    QMessageBox, QProgressBar, QTabWidget, QInputDialog,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
@@ -16,6 +16,7 @@ from yane.gui.canvas import FitnessChart, SpeciesChart
 from yane.gui.worker import TrainingWorker, EpisodeRunner
 from yane.gui.examples import load_examples
 from yane.gui._helpers import _label, _divider, CollapsibleGroup
+from yane.util.presets import list_presets, load_preset, save_preset
 
 class GymRenderWidget(QLabel):
     """Displays gymnasium render frames (rgb_array numpy arrays)."""
@@ -105,6 +106,24 @@ class TrainingTab(QWidget):
         self._build_example_combo()
         self.example_combo.currentIndexChanged.connect(self._on_example_changed)
         cfg_form.addRow("Example:", self.example_combo)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("Custom", None)
+        self._preset_by_index: dict[int, object] = {}
+        for preset in list_presets():
+            self._preset_by_index[self.preset_combo.count()] = preset
+            self.preset_combo.addItem(preset.name, preset)
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+        preset_row = QWidget()
+        preset_lay = QHBoxLayout(preset_row)
+        preset_lay.setContentsMargins(0, 0, 0, 0)
+        preset_lay.setSpacing(4)
+        preset_lay.addWidget(self.preset_combo, stretch=1)
+        self.btn_save_preset = QPushButton("Save")
+        self.btn_save_preset.setToolTip("Save the current GUI settings as a reusable preset.")
+        self.btn_save_preset.clicked.connect(self._save_current_preset)
+        preset_lay.addWidget(self.btn_save_preset)
+        cfg_form.addRow("Preset:", preset_row)
 
         self.desc_label = _label("", "sectionTitle")
         self.desc_label.setWordWrap(True)
@@ -758,6 +777,64 @@ class TrainingTab(QWidget):
     def _on_lamarck_mode_changed(self, index: int) -> None:
         self.spin_lamarck.setEnabled(index in (1, 2, 3, 4))  # Explizit / NES / SA / CMA-ES
 
+    def _on_preset_changed(self, index: int) -> None:
+        preset = self._preset_by_index.get(index)
+        if preset is None:
+            return
+        cfg = preset.config
+        if "population_size" in cfg:
+            self.spin_pop.setValue(int(cfg["population_size"]))
+        if "target_species" in cfg:
+            self.spin_species.setValue(int(cfg["target_species"]))
+        if "n_workers" in cfg:
+            self.spin_workers.setValue(int(cfg["n_workers"]))
+        if "multi_eval" in cfg:
+            self.spin_multi_eval.setValue(int(cfg["multi_eval"]))
+        if "aggregation" in cfg:
+            self.combo_aggregation.setCurrentText(str(cfg["aggregation"]))
+        if "sigma_penalty" in cfg:
+            self.dspin_sigma_penalty.setValue(float(cfg["sigma_penalty"]))
+        if "fitness_shaping" in cfg:
+            self.chk_fitness_shaping.setChecked(bool(cfg["fitness_shaping"]))
+        if "quality_diversity" in cfg:
+            self.chk_quality_diversity.setChecked(bool(cfg["quality_diversity"]))
+        if "quality_diversity_descriptor" in cfg:
+            self.combo_qd_descriptor.setCurrentText(str(cfg["quality_diversity_descriptor"]))
+        if "multi_objective" in cfg:
+            self.chk_multi_objective.setChecked(bool(cfg["multi_objective"]))
+        if "multi_objective_complexity_weight" in cfg:
+            self.dspin_mo_complexity.setValue(float(cfg["multi_objective_complexity_weight"]))
+        if "diversity_injection" in cfg:
+            self.chk_diversity_injection.setChecked(bool(cfg["diversity_injection"]))
+
+    def _current_preset_config(self) -> dict:
+        return {
+            "population_size": self.spin_pop.value(),
+            "target_species": self.spin_species.value(),
+            "n_workers": self.spin_workers.value(),
+            "multi_eval": self.spin_multi_eval.value(),
+            "aggregation": self.combo_aggregation.currentText(),
+            "sigma_penalty": self.dspin_sigma_penalty.value(),
+            "fitness_shaping": self.chk_fitness_shaping.isChecked(),
+            "multi_objective": self.chk_multi_objective.isChecked(),
+            "multi_objective_complexity_weight": self.dspin_mo_complexity.value(),
+            "quality_diversity": self.chk_quality_diversity.isChecked(),
+            "quality_diversity_descriptor": self.combo_qd_descriptor.currentText(),
+            "diversity_injection": self.chk_diversity_injection.isChecked(),
+        }
+
+    def _save_current_preset(self) -> None:
+        name, ok = QInputDialog.getText(self, "Save preset", "Preset name:")
+        if not ok or not name.strip():
+            return
+        path = save_preset(name.strip(), self._current_preset_config(), "Saved from GUI")
+        preset = load_preset(path)
+        idx = self.preset_combo.count()
+        self._preset_by_index[idx] = preset
+        self.preset_combo.addItem(preset.name, preset)
+        self.preset_combo.setCurrentIndex(idx)
+        self.status_lbl.setText(f"Preset saved: {path.name}")
+
     def _on_multi_eval_changed(self, value: int) -> None:
         enabled = value > 1
         self.combo_aggregation.setEnabled(enabled)
@@ -829,13 +906,7 @@ class TrainingTab(QWidget):
             elif lamarck_mode == "Aus":
                 self._yane.set_lamarck_adaptive(max_steps=0)
             n_eval = self.spin_multi_eval.value()
-            if n_eval > 1 and self.chk_multi_objective.isChecked():
-                QMessageBox.warning(
-                    self,
-                    "Multi-objective",
-                    "Multi-eval is currently disabled for GUI multi-objective runs.",
-                )
-            elif n_eval > 1:
+            if n_eval > 1:
                 self._yane.set_multi_eval(
                     n=n_eval,
                     aggregation=self.combo_aggregation.currentText(),
@@ -923,6 +994,8 @@ class TrainingTab(QWidget):
             self._yane._log_run_dir = _log_dir
             self._yane._log_run_name = ex.name
             _wj(_log_dir / "config.json", self._yane._config_dict())
+            if self.preset_combo.currentIndex() in self._preset_by_index:
+                _wj(_log_dir / "preset.json", self._preset_by_index[self.preset_combo.currentIndex()].to_json())
             _li("GUI training started  example=%s  pop_size=%d  target=%s",
                 ex.name, self.spin_pop.value(),
                 self.dspin_target.value() if self.dspin_target.value() > -1e9 else "none")

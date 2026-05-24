@@ -1,844 +1,423 @@
-# Tasks: YANE stärker machen
+# Tasks: YANE staerker machen
 
-Diese Datei sammelt Ideen, Aufgaben und Forschungsrichtungen, um YANE allgemein leistungsfähiger zu machen. Es geht hier bewusst nicht um Spezialtuning einzelner Beispiele, sondern um Verbesserungen am Framework, damit größere, schwierigere und längere Aufgaben besser bewältigt werden können.
+Diese Datei ist die aktuelle Roadmap fuer YANE. Offene und neue Tasks stehen
+oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
+
+## Status
+
+**Aktueller Stand:** Die bisherigen Roadmap-Phasen sind abgeschlossen.
+
+- Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging und Checkpoints sind implementiert.
+- Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates und GUI-Smoke-Tests sind implementiert.
+- Naechster Schwerpunkt: vorhandene Features adaptiv machen und in der GUI eindeutig sichtbar steuern.
+- Letzter kompletter Testlauf: `595 passed`.
 
 ## Legende
 
-- `P0`: hoher Hebel, nah am aktuellen Code, wahrscheinlich direkt nützlich
+- `P0`: hoher Hebel, nah am aktuellen Code, direkt nuetzlich
 - `P1`: wichtiger Ausbau, mittlerer Aufwand
-- `P2`: experimentell oder größerer Umbau
-- ✅ = vollständig implementiert → Details stehen unter [Erledigte Aufgaben](#erledigte-aufgaben)
-- ⚡ = teilweise implementiert → Rest-Aufgaben sind direkt unter dem jeweiligen Task beschrieben
+- `P2`: experimentell, Forschungsarbeit oder groesserer Umbau
+- ✅: erledigt
+- ⚡: teilweise erledigt
+- 🔲: offen
 
 ---
 
-## 1. Fitness, Evaluation und Training
+## Offene Tasks: Adaptive YANE
 
-### P1: Curriculum Learning ✅
+### P0 🔲 Adaptive Control Layer einfuehren
 
-Schwere Aufgaben können in Stufen gelernt werden.
+YANE hat viele starke Einzelfunktionen. Der naechste grosse Schritt ist eine
+gemeinsame adaptive Steuerung, die diese Funktionen anhand von Stagnation,
+Diversity, Fitness-Trend, Kosten und Species-Zustand automatisch dosiert.
 
-**Bereits implementiert:** `CurriculumStage(fitness_fn, target_fitness, name)` + `Curriculum`-Klasse in `evolution/curriculum.py`. `NeuroEvolution.set_curriculum(stages, on_stage_advance)` aktiviert den Curriculum-Modus; `train()` akzeptiert dann kein explizites `fitness_fn` mehr. Automatischer Stufenwechsel sobald der beste Genome die `target_fitness` einer Stufe erreicht — Population wird behalten, Stagnationszähler und `_best_fitness_seen` werden für den neuen Task zurückgesetzt (Re-Evaluierungs-Zyklus). `on_stage_advance`-Callback (Index + Stage). `curriculum_stage`-Property. Curriculum-Infos (Stage-Index, -Name, -Target, -Best, -Evals, n_advances) in `population_memory_info()`. Stoppgrund `"curriculum_complete"` wenn letzte Stufe ihre Ziel-Fitness erreicht. 24 Tests in `tests/test_curriculum.py`.
+Aufgaben:
 
-**Noch offen:** — (alle Aufgaben sind implementiert).
-
-Nutzen:
-
-- Komplexe Aufgaben werden schrittweise lernbar.
-- Besonders nützlich für lange Sequenzen und Control-Aufgaben.
-
-### P1: Fitness-Landscape Diagnostics ✅
-
-Wie verteilt sich Fitness in der Population? Gibt es Sprünge, Plateaus, bimodale Verteilungen?
-
-**Bereits implementiert:** IQR der Fitness in `population_memory_info()`, Fitness-Histogramm (10 Bins) in GUI (`FitnessHistogram`-Widget), Plateau-Ratio (`stagnation_count / stagnation_threshold`) als GUI-Label, Fitness-Sprungrate (`jump_rate = n_new_best / n_submitted`) in `population_memory_info()` und GUI.
-
-**Noch offen:** — (alle geplanten Diagnostics sind jetzt implementiert).
+- Zentrale `AdaptiveController`-Komponente entwerfen.
+- Einheitliche Signale definieren: Fitness-Trend, Plateau, Diversity, Species-Stagnation, Evaluation-Kosten, Best-Genome-Komplexitaet.
+- Gemeinsames Policy-Format fuer adaptive Features definieren: `off`, `fixed`, `adaptive`, `auto`.
+- Diagnostics fuer Policy-Entscheidungen sammeln: Grund, alte Rate, neue Rate, betroffene Species, Trigger-Signal.
+- API- und Checkpoint-Kompatibilitaet fuer adaptive Policy-State sichern.
 
 Nutzen:
 
-- Sieht man sofort, ob die Population kollabiert (alle gleich gut), exploriert (breite Verteilung) oder stagniert.
-- Hilft beim Tuning von Populationsgröße, Elitismus und Novelty-Gewicht.
+- Adaptive Faehigkeiten werden ein Systemmerkmal statt einzelner Spezialfaelle.
+- Neue adaptive Features koennen spaeter konsistent angeschlossen werden.
 
-### P2: Multi-Objective Optimization ✅
+### P0 🔲 Lamarck-Modi adaptiv vereinheitlichen
 
-Aktuell wird Fitness als einzelner Zahlenwert optimiert.
+In der GUI gibt es bereits `Adaptiv`, aber der Modus wirkt aktuell wie eine
+Lamarck-Hill-Climbing-Option. NES, SA und CMA-ES sollten ebenfalls klar als
+adaptive Varianten steuerbar sein.
 
-**Bereits implementiert:** `NeuroEvolution.set_multi_objective(enabled=True, weights=None, maximize=None)` erlaubt Fitness-Vektoren. Objective-Vektoren werden auf `genome.objectives` gespeichert; eine gewichtete Skalarfitness bleibt für Logs, Stop-Kriterien und bestehende APIs erhalten. `evolution/multi_objective.py` enthält Pareto-Dominanz, Non-Dominated Sorting, Crowding-Distance und Pareto-Scores. `Population` kann Shared Fitness per Pareto-Rang + Crowding formen. Diagnostics enthalten Multi-Objective-Status. Tests in `tests/test_multi_objective.py`.
+Aufgaben:
 
-**GUI:** Advanced-Control für GUI-Multi-Objective ist vorhanden. Die GUI wickelt Beispiel-Fitness als `(raw_fitness, connection_count)` ein, nutzt Pareto-Selektion und zeigt den Status im LeftPanel. Eine echte Pareto-Front-Plot-Ansicht wäre nur noch Visual Polish.
-
-Nutzen:
-
-- YANE muss nicht alle Ziele in eine fragile Fitnessformel pressen.
-- Gute Basis für größere Aufgaben mit Trade-offs.
-
-## 2. Evolution und Suchstrategie
-
-### P1: Adaptive Strukturmutation — Restaufgaben ✅
-
-**Bereits implementiert:** Drei neue Mutationsmechanismen (gewichtsbasierte Remove, Spike-Mutation, Rewiring), alle selbst-adaptiv. Erfolgsrate pro Mutationstyp wird getrackt und in GUI angezeigt („Mutation success"-Gruppe). Mutationstypen werden populationsweit nach historischem Nutzen gewichtet (`_apply_mutation_success_weights`). Per-Species-Mutationstendenzen: jede Species entwickelt eigene Biases (`mutation_biases`), die die Mutationsraten ihrer Genome modulieren (`_apply_species_mutation_biases`).
-
-**Noch offen:** — (alle Restaufgaben sind jetzt implementiert).
+- Lamarck-Modell klaeren: Optimierer `Hill-Climb`, `NES`, `SA`, `CMA-ES`; Zeitplan `aus`, `explizit`, `adaptiv`.
+- Adaptive Varianten fuer NES, SA und CMA-ES implementieren oder vorhandene Pfade eindeutig anbinden.
+- Per-Species-Entscheidung erlauben: manche Species bekommen lokale Suche, andere nur Mutation.
+- Kostenbudget einfuehren: adaptive lokale Suche darf nicht unkontrolliert Evaluationen verbrennen.
+- Diagnostics erweitern: Modus, Optimierer, Trigger, Schritte, Kosten, Verbesserung pro Optimierer.
 
 Nutzen:
 
-- Weniger blinde Mutation bei komplexen Aufgaben.
-- Bessere Diagnose, welche Strukturmutation tatsächlich hilft.
+- Der Begriff `Adaptiv` ist nicht mehr nur an einen Lamarck-Spezialfall gekoppelt.
+- Nutzer sehen klar, welche lokale Suche wann und warum aktiv war.
 
-### P1: Speciation robuster machen ✅
+### P0 🔲 GUI fuer adaptive Features eindeutig machen
 
-Die Speziation ist zentral für NEAT-artige Evolution.
+Adaptive Optionen muessen in der GUI sichtbar, unterscheidbar und nachvollziehbar
+sein. Aktuell ist nicht immer klar, ob `Adaptiv` nur Lamarck betrifft oder ein
+allgemeines Automatikverhalten meint.
 
-**Bereits implementiert:** Hard-Cap gegen Species-Explosion, inkrementelle Speziation (O(0) Steady-State), Threshold-Adjustment-Diagnostics. Dynamische Ziel-Species: `target_species=0` → auto aus `sqrt(pop_size)`. Alternative Kompatibilitätsmetrik `"topology_no_disabled"` (ignoriert deaktivierte Connections, via `set_speciation_metric`). Kleine Species werden geschützt: Mindestalter (`_min_species_age` = 1 Generation) und Mindestgröße (`_min_species_size` = 2). Species-Historie: `created_at_spawn`, `parent_species_id`, `merge_count` pro Species (in `population_memory_info()` als `species_lineage`).
+Aufgaben:
 
-**Noch offen:** — (alle Restaufgaben sind jetzt implementiert).
-
-Nutzen:
-
-- Mehr strukturelle Vielfalt.
-- Weniger lokales Festfahren.
-
-### P1: Reproduktion per Species-Budget ✅
-
-Kinder entstehen species-budgetiert statt rein aus der gesamten evaluierten Population.
-
-**Bereits implementiert:** Rolling Spawn-Credits pro Species in `Population._select_parent_species()`: Spawn-Anteile werden aus Shared-Fitness, Stagnationsfaktor und Jugendbonus berechnet. Schwache/stagnierende Species erhalten weniger, aber durch ein Mindestbudget nie null Reproduktion. Junge Species bekommen einen Bonus. Parent-Tournament läuft innerhalb der ausgewählten Species; Crossover wählt den zweiten Parent bevorzugt aus derselben Species und nutzt Interspecies-Crossover nur mit konfigurierter Wahrscheinlichkeit. Diagnostics expose `species_spawn_scores`.
-
-**Noch offen:** — (alle Aufgaben sind implementiert).
+- Eigene GUI-Sektion `Adaptive Control` bauen.
+- Fuer jedes adaptive Feature denselben UI-Aufbau verwenden: Modus, Min/Max, Budget, aktueller Wert, letzter Trigger.
+- Lamarck-GUI in zwei Controls splitten: `Optimierer` und `Zeitplan`.
+- Live-Anzeige fuer adaptive Entscheidungen ergaenzen: Warum wurde etwas erhoeht, gesenkt oder deaktiviert?
+- Tooltips und Labels so formulieren, dass `Adaptiv` nicht mit `Explizit` oder `Auto-Preset` verwechselt wird.
+- Presets fuer adaptive Profile ergaenzen: konservativ, balanciert, aggressiv, analysefreundlich.
 
 Nutzen:
 
-- Näher an klassischem NEAT.
-- Besserer Schutz neuer Strukturinnovationen.
+- YANE wird als adaptives System bedienbar, nicht als Sammlung versteckter Schalter.
+- GUI-Runs lassen sich besser erklaeren und debuggen.
 
-### P2: Quality Diversity / MAP-Elites ✅
+### P0 🔲 Interspecies-Crossover adaptiv machen
 
-YANE hat bereits Novelty Search. Der nächste Schritt wäre Quality Diversity.
+Interspecies-Crossover ist aktuell als feste Rate steuerbar. Sinnvoller waere
+eine adaptive Rate, die bei Stagnation steigt und bei zu viel Instabilitaet oder
+Diversity-Verlust wieder sinkt.
 
-**Bereits implementiert:** `evolution/quality_diversity.py` mit `MAPElitesArchive`, Zell-Binning, Coverage, bestes Genom pro Zelle und Sampling archivierter Eliten. `NeuroEvolution.set_quality_diversity(descriptor_fn, bins, ranges, enabled=True, max_cells=None)` aktiviert QD. `Population.submit()` aktualisiert das Archiv; bei Stagnation können Archiv-Eliten mutiert und injiziert werden. Diagnostics: Coverage, Zellzahl, Updates, QD-Injektionen. Tests in `tests/test_quality_diversity.py`.
+Aufgaben:
 
-**GUI:** Advanced-Control für Quality Diversity ist vorhanden (Topology- oder Behavior-Descriptor). LeftPanel zeigt Enabled, Cells, Coverage, Updates und QD-Injections. Eine Heatmap wäre nur noch Visual Polish.
-
-Nutzen:
-
-- Evolution sammelt viele verschiedene brauchbare Lösungen.
-- Sehr nützlich für Aufgaben mit sparse rewards.
-
-### P2: Coevolution ✅
-
-Einige Aufgaben können durch Gegenspieler oder Aufgabenvariation stärker werden.
-
-**Bereits implementiert:** `evolution/coevolution.py` mit `HallOfFame(max_size)`, `competitive_fitness(genome, opponents, match_fn, aggregation)` und `mixed_opponents(current_population, hall_of_fame, ...)`. Der Hall-of-Fame speichert starke historische Gegner als Kopien und reduziert zyklisches Vergessen. Tests in `tests/test_coevolution.py`.
-
-**Noch offen:** Direkte GUI/API-Orchestrierung für zwei gleichzeitig trainierende Populationen wäre ein eigener Bedienbarkeitsausbau.
+- Adaptive Interspecies-Policy implementieren: Basisrate, Min/Max, Ramp-up, Cooldown.
+- Trigger definieren: Species-Stagnation, globales Plateau, geringe Novelty, zu starke Species-Isolation.
+- Schutzregeln einbauen: Eliten bewahren, inkompatible Eltern meiden, Rate bei Fitness-Einbruch senken.
+- Diagnostics ergaenzen: aktuelle Rate, Cross-Species-Erfolg, Nachkommen-Fitness, verworfene Paarungen.
+- GUI-Control ergaenzen: `Aus`, `Fix`, `Adaptiv`; mit Live-Rate und letzter Entscheidung.
 
 Nutzen:
 
-- Starke Methode für Strategien, Spiele und robuste Policies.
+- YANE kann genetische Inseln gezielt verbinden, ohne permanent Struktur zu verwischen.
+- Crossover wird vom Ablationsschalter zum aktiven Suchinstrument.
 
-### P2: Adaptive Populationsgröße ✅
+### P0 🔲 Adaptive Operator-Scheduler fuer Mutation, QD und Pruning
 
-Die Populationsgröße ist aktuell fix. Dynamische Anpassung könnte Ressourcen effizienter nutzen.
+Viele Operatoren existieren bereits, aber ihre Aktivierung ist noch zu oft fest
+oder lokal verteilt. Ein Scheduler sollte entscheiden, wann welcher Operator mehr
+oder weniger Druck bekommt.
 
-**Bereits implementiert:** `set_adaptive_population(min_size, max_size, growth_rate=0.05, enabled=True)` in `NeuroEvolution`. Intern in `Population._adjust_population_size()` (debounced auf 1× pro Generation via `spawn_count % max_size`). Wächst bei hoher Stagnation oder wenig Species; schrumpft bei Excess-Species und gesunder Population. Klemmt immer auf `[min_size, max_size]`. Zähler `_n_pop_size_adjustments` in Diagnostics (`n_pop_size_adjustments`). Config in `_config_dict()`. 18 Tests in `tests/test_adaptive_population.py`.
+Aufgaben:
 
-**Noch offen:** — (alle geplanten Aufgaben sind implementiert).
-
-Nutzen:
-
-- Weniger Evaluierungen in konvergierten Phasen, mehr Vielfalt in Explorationsphasen.
-- Bessere Ressourcennutzung bei langen Runs.
-
-### P2: Warm-Start und Transfer Learning ✅
-
-Trainiertes Bestes Genome oder ganze Population als Startpunkt für verwandte Aufgaben nutzen.
-
-**Bereits implementiert:** `NeuroEvolution.warm_start_from_checkpoint(path, fitness_fn=None, min_fitness=None, reset_strategy=False)` importiert Checkpoint-Populationen in eine neu konfigurierte Aufgabe. Optionaler Fitness-Filter hält nur Genome über Baseline; optionales Strategy-Reset initialisiert sigma/rates neu. I/O-Größen-Unterschiede werden automatisch adaptiert: fehlende Nodes werden ohne Verbindungen hinzugefügt, überschüssige Nodes werden mit ihren Connections entfernt. Beispiel in `benchmarks/warm_start_demo.py` (CartPole 4→1 → Acrobot 6→1).
-
-**Noch offen:** — (alle Aufgaben sind implementiert).
+- Mutation-Operatoren adaptiv gewichten: Add-Node, Add-Connection, Rewire, Disable/Enable, Spike, Remove.
+- Novelty/QD-Druck adaptiv steuern: mehr Exploration bei Plateau, weniger bei Zielnaehe.
+- Pruning adaptiv dosieren: Komplexitaetsdruck erhoehen, wenn Fitness stagniert und Netzgroesse waechst.
+- Population Size und Species Target in dieselbe Policy-Sicht integrieren.
+- Operator-Erfolg pro Species und global tracken.
 
 Nutzen:
 
-- Verkürzte Konvergenzzeit bei verwandten Aufgaben.
-- Sinnvoll für Curriculum Learning (automatischer Wechsel).
+- YANE reagiert besser auf unterschiedliche Phasen eines Laufs.
+- Mehr Exploration, wenn sie gebraucht wird; mehr Verdichtung, wenn Netzwerke ausufern.
 
-## 3. Netzwerkmodell
+### P1 🔲 Adaptive Benchmark- und Ablation-Suite
 
-### P0: Netzwerkgröße kontrollierter wachsen lassen ✅
+Adaptive Features brauchen Benchmarks, die nicht nur Endfitness messen, sondern
+auch Kosten, Stabilitaet und Entscheidungsqualitaet.
 
-Größere Aufgaben brauchen größere Netze, aber unkontrolliertes Wachstum wird teuer.
+Aufgaben:
 
-**Bereits implementiert:** Strukturell aktive Nodes/Connections werden erkannt (`Genome.active_structure_info()` und `memory_info()`). Population-Diagnostics enthalten durchschnittliche aktive/inaktive Connections und inaktive Hidden Nodes. `remove_node` bevorzugt inaktive Hidden Nodes, `remove_connection` bevorzugt enabled Connections, die auf keinem Input→Output-Pfad liegen. Eine optionale weiche Komplexitätsstrafe ist via `set_complexity_penalty(node_penalty, connection_penalty)` verfügbar und standardmäßig aus.
-
-**Noch offen:** — (alle Aufgaben sind implementiert).
-
-Nutzen:
-
-- Bessere Balance zwischen Ausdrucksstärke und Geschwindigkeit.
-
-### P1: Normalisierung als Framework-Feature ✅
-
-Aktuell normalisieren Beispiele manuell.
-
-**Bereits implementiert:** `ScaleNormalizer` in `yane.util.normalization` abstrahiert per-channel Input-/Output-Skalierung, normalisierte Samples und Denormalisierung. Multiplication und Pi nutzen den Normalizer; GUI-Inspect verwendet dieselben Scale-Metadaten weiter. `MinMaxNormalizer` (maps [min,max]→[0,1]), `ZScoreNormalizer` ((x-mean)/std, frozen dataclass), `ClipNormalizer` (Clipping + optionales Rescaling), `RunningStatsNormalizer` (Online-Welford-Algorithmus, mutable) in `yane.util.normalization`. Alle Normalizer implementieren dasselbe Interface (normalize_input/output, denormalize_input/output, normalize_samples). `NeuroEvolution.set_normalizer(normalizer)` / `get_normalizer()` — Normalizer wird zusammen mit dem Checkpoint gespeichert und bei `load_checkpoint()` wiederhergestellt. 31 Tests in `tests/test_normalization.py`.
-
-**Noch offen:** — (alle Aufgaben sind implementiert).
+- Benchmark-Matrix bauen: fixed vs adaptive fuer Lamarck, Interspecies-Crossover, Mutation-Scheduler, QD-Druck.
+- Kostenmetriken aufnehmen: Evaluationen, Lamarck-Schritte, Wall-Time, Fitnessgewinn pro Zusatzkosten.
+- Ablations fuer jeden adaptiven Trigger ergaenzen.
+- Gates fuer adaptive Profile kalibrieren.
+- Markdown-Report um adaptive Decision-Summary erweitern.
 
 Nutzen:
 
-- Größere Aufgaben werden leichter korrekt skaliert.
-- Weniger Beispiel-spezifischer Boilerplate.
+- Adaptive Features werden messbar statt nur plausibel.
+- Schlechte Automatik laesst sich schnell erkennen.
 
-### P1: Bessere Memory-Mechanismen ✅
+### P1 🔲 Matrix-Forward automatisch im Training nutzen
 
-Persistente Node-Werte sind einfach und flexibel, aber schwer steuerbar.
+`MatrixGenome`, `MatrixForwardCache` und Batch-Helfer existieren. Der naechste
+Schritt ist die kontrollierte Integration in echte Evaluationspfade.
 
-**Bereits implementiert:** Persistente Nodes (`persistent=True`) behalten Werte über Forward-Passes hinweg, `reset()` löscht sie. Memory-Toggle in GUI. Leaky Memory ist als evolvierbares `leak_alpha` auf Nodes implementiert (`0.0` = kein Carry, `1.0` = volle Retention), inklusive Copy/Pickle-Kompatibilität, Mutation-Clamping und Forward-Pfad-Unterstützung. Zusätzlich gibt es ein evolvierbares `memory_gate` für persistente Nodes: `state = gate * old + (1 - gate) * new`. Dynamisches Gating: `gate_node`-Slot auf Node — wenn gesetzt, wird `sigmoid(gate_node.value)` als Gate verwendet statt dem statischen `memory_gate`-Parameter. `Genome._mutate_gate_source()` kann zufällig einen persistent-hidden-Node mit einem beliebigen anderen Node als Gate-Source verknüpfen oder die Verbindung wieder auflösen. Alle Forward-Pfade (BFS, compiled small, compiled large) unterstützen `gate_node`. Copy/Crossover remappen die Referenz korrekt; Checkpoints serialisieren sie via Pickle. `allow_memory=False` löscht `gate_node` auf allen Nodes. 8 Tests in `test_memory_nodes.py::TestDynamicGating`.
+Aufgaben:
 
-**Noch offen:** — (alle Aufgaben sind implementiert).
-
-Nutzen:
-
-- Bessere Sequenz- und Control-Fähigkeiten.
-- Stabilere rekurrente Dynamik.
-- Ermöglicht LLM-artiges Verhalten über Tick-basierte sequentielle Verarbeitung.
-
-### P2: Modulare Subnetze ✅
-
-Für große Aufgaben können Module hilfreich sein.
-
-**Bereits implementiert:** `evolution/modularity.py` erkennt Hidden-Node-Komponenten (`hidden_modules`) und dupliziert Module (`duplicate_module`) inklusive interner Connections, eingehender/ausgehender Modul-Connections und neuer Innovationsnummern. Tests in `tests/test_modularity.py`.
-
-**Noch offen:** Modul-Crossover und persistente Modulbibliothek bleiben mögliche Forschungs-Upgrades.
+- Kompatible DAG-Subpopulationen waehrend Dataset-Evaluation erkennen.
+- Matrixexport nur nutzen, wenn Batchgroesse und Topologie es rechtfertigen.
+- Fallback auf `Genome.forward()` bei Zyklen, Memory oder unsupported Activation.
+- Benchmark: sampleweises `forward()`, `forward_batch()`, Matrix-Forward.
+- Diagnostics fuer Matrix-Cache-Hits/Misses ergaenzen.
 
 Nutzen:
 
-- Skalierung auf komplexere Aufgaben.
-- Evolution kann bereits gefundene Teilfunktionen wiederverwenden.
+- Groessere supervised Aufgaben werden realistischer.
+- GPU-/CuPy-Pfad bekommt einen praktischen Einstiegspunkt.
 
-### P2: Indirekte Kodierung / CPPN ✅
+### P1 🔲 Preset-System fuer adaptive Profile erweitern
 
-Direkte Kodierung jeder Connection skaliert schlecht für sehr große Netze.
+Presets existieren, aber sollten adaptive Policies als erstklassige Konfiguration
+speichern koennen.
 
-**Bereits implementiert:** `evolution/indirect_encoding.py` mit `layered_coordinates(genome)`, `radial_cppn_weight(...)` und `generate_connections_from_coordinates(...)`. Verbindungen können HyperNEAT-artig aus Quell-/Zielkoordinaten und Distanz erzeugt werden. Tests in `tests/test_indirect_encoding.py`.
+Aufgaben:
 
-**Noch offen:** Evolvierbare CPPN-Genome als eigene Population wären ein größerer Forschungszweig.
-
-Nutzen:
-
-- Potenziell viel bessere Skalierung bei großen, regelmäßigen Strukturen.
-- Interessant für Bild- und Steuerungsaufgaben.
-
-## 4. Optimierung und Hybrid-Training
-
-### P1: Lamarckian Refinement — Restaufgaben ⚡
-
-**Bereits implementiert:** Adaptives Lamarck (stagnationsbasiert 0→max_steps, Top-20%), expliziter Modus, per-Species Lamarck (Steps skalieren mit Species-Stagnation), `lamarck_per_species`-Diagnostics in GUI, `_lamarck_sigma`-Multiplier, kumulative Lamarck-Zeitmessung (`lamarck_time_ms`) in GUI.
-
-**Bereits implementiert:** `genome.lamarck_sigma` als eigenständiges Strategy-Gen (0.001–10.0, selbst-adaptiv via `mutation_lamarck_sigma`), unabhängig von `sigma_global`. `LamarckRefiner.refine()` nutzt `genome.lamarck_sigma` direkt; `LamarckRefiner.sigma` bleibt als globaler Multiplikator für `set_lamarck(sigma=...)`. `pop_avg_lamarck_sigma` in Diagnostics. Best-Genome-Sigma im GUI (Lamarck-Gruppe). Tests in `TestLamarckSigma`.
-
-**Noch offen:** — (alle Restaufgaben sind jetzt implementiert).
+- Preset-Schema mit Version, Validierung und `adaptive_policies` einfuehren.
+- Presets fuer konkrete Beispiele ergaenzen: XOR, Regression 2->2, CartPole, Acrobot.
+- Adaptive Profile speichern: konservativ, balanciert, aggressiv, stabilitaetsorientiert.
+- GUI-Preset-Editor verbessern: Name, Beschreibung, Save/Overwrite, adaptive Summary.
+- Preset-Name und adaptive Policy-State in Logs und Checkpoints mitschreiben.
 
 Nutzen:
 
-- Bessere Diagnose des Lamarck-Overheads.
-- Feinere Kontrolle der Schrittweite.
+- Adaptive Experimente werden reproduzierbar.
+- GUI-Konfiguration wird schneller und weniger fehleranfaellig.
 
-### P1: Lokale Optimierer für Gewichte ✅
+### P1 🔲 Stabilitaetslauf fuer GUI-Regression 2->2
 
-Statt reinem Hill-Climbing könnten bessere lokale Verfahren helfen.
+Die offenen Crash-Logs deuten darauf hin, dass laengere GUI-Laeufe weiterhin
+gesondert beobachtet werden sollten.
 
-**Bereits implementiert:**
-- **Simulated Annealing** — `set_lamarck(mode='sa', cooling_rate=0.95)` / `set_lamarck_adaptive(mode='sa')`. Geometrische Abkühlung: T_k = T0 * cooling^k. Schlechtere Moves werden mit Wahrscheinlichkeit exp(Δf / T_k) akzeptiert. Gibt das Beste über die gesamte Kette zurück. `sa_cooling`, `sa_t0` in `_config_dict()`. 18 Tests in `tests/test_sa.py`.
-- **NES (Natural Evolution Strategies)** — `set_lamarck(mode='nes')` — implementiert seit vorherigem PR.
-- **CMA-ES** — `set_lamarck(mode='cma_es', cma_population=...)` / `set_lamarck_adaptive(mode='cma_es')`. Kleine volle-Kovarianz-Variante über Gewichte und Biases einer festen Topologie. Config-Diagnostics enthalten CMA-Modus und Population. Tests in `tests/test_cma_es.py`.
+Aufgaben:
 
-**Noch offen:** — (alle geplanten lokalen Optimierer sind implementiert).
-
-Nutzen:
-
-- Topologie wird evolutionär gesucht, Gewichte werden effizienter verfeinert.
-
-### P2: Backprop-Hybrid für differenzierbare Teile ✅
-
-Wenn ein Netz azyklisch und differenzierbar ist, könnte Backprop optional helfen.
-
-**Bereits implementiert:** `evolution/matrix_export.py` exportiert kompatible azyklische Genome als Matrixform. `evolution/backprop.py` enthält `backprop_finetune_linear_outputs(...)` als optionalen PyTorch-Hook für kurzes Finetuning und schreibt Gewichte zurück ins Genom. PyTorch ist keine harte Abhängigkeit; ohne Installation wird ein klarer `ImportError` ausgelöst. Tests für Matrixexport in `tests/test_matrix_export.py`.
-
-**Noch offen:** Breitere Aktivierungs-/Loss-Abdeckung und GUI-Konfiguration wären separate Ausbauschritte.
+- Crash-Logs unter `logs/gui/Regression 2->2/...` auswerten.
+- Reproduzierbaren GUI-Run fuer Regression 2->2 definieren.
+- Headless/CLI-nahe Reproduktion bauen, falls der Crash nicht rein Qt-seitig ist.
+- Crash-State-Snapshots und `run.log` mit Worker-Modus, Preset und adaptiven Feature-Flags korrelieren.
+- Fix oder Guard implementieren, wenn eine konkrete Ursache sichtbar wird.
 
 Nutzen:
 
-- Deutlich bessere Skalierung bei großen supervised Aufgaben.
-- Bleibt optional, Neuroevolution bleibt Kernidee.
+- Erhoeht Vertrauen in lange GUI-Trainingslaeufe.
+- Verhindert, dass neue adaptive Features alte Stabilitaetsprobleme ueberdecken.
 
-### P2: Natural Evolution Strategies (NES) als Lamarck-Alternative ✅
+### P1 🔲 Release-Cleanup und API-Konsistenz
 
-Hill-Climbing ändert Gewichte zufällig und hält die bessere Variante. NES schätzt aus mehreren Perturbationen einen approximierten Fitness-Gradienten und macht gerichtete Schritte.
+Nach vielen schnellen Feature-Adds sollte die oeffentliche Oberflaeche einmal
+geglättet werden.
 
-**Bereits implementiert:** `LamarckRefiner.refine_nes()` mit antithetischen Perturbationen (2k+1 Evals pro Schritt, Varianzreduktion durch ± Paare). Gradient-Normalisierung: `theta += lr * grad / (k * sigma)`. Accept/Revert-Mechanismus analog zu Hill-Climbing. `set_lamarck(mode='nes', learning_rate=...)` und `set_lamarck_adaptive(mode='nes')` in `NeuroEvolution`. `mode`-Property: `"nes_explicit"` / `"nes_adaptive"`. In Diagnostics und Config-Dict. 16 Tests in `tests/test_nes.py`.
+Aufgaben:
 
-**Noch offen:** — Benchmark-Skript ist implementiert: `benchmarks/compare_lamarck_modes.py` vergleicht HC/NES/SA/CMA-ES auf Acrobot oder LunarLander.
-
-Nutzen:
-
-- Gerichtete Gewichtsoptimierung statt reinem Zufalls-Climbing.
-- Skaliert besser mit Genomgröße (ein Schritt pro k Evaluierungen statt k Schritte).
-- Theoretisch fundierter als blindes Hill-Climbing.
-
-## 5. Parallelisierung und Performance
-
-### P0: Einheitliche Worker-Abstraktion ✅
-
-Die Trainingspfade unterscheiden sich aktuell: `train()`, GUI sequenziell, GUI multiprocess, manuell/API.
-
-**Bereits implementiert:** `_run_evaluations()` als zentrale Evaluierungs-Pipeline, `EvaluationResult`-Dataclass für Rückgaben. Explizites Lamarck-Refinement aus `train()` in `EvaluationRunner.run()` verschoben — alle Pfade (train, GUI sequential, GUI multiprocess) durchlaufen jetzt dieselbe vollständige Pipeline: Lamarck → Evaluation → `_finalize_fitness`.
-
-**Noch offen:** — (alle Restaufgaben sind jetzt implementiert).
+- Public API auf Namenskonsistenz pruefen (`set_*`, `get_*`, Diagnostics-Keys).
+- Adaptive Parameter einheitlich benennen: `*_mode`, `*_policy`, `*_min`, `*_max`, `*_budget`.
+- README-Beispiele gegen aktuellen Code ausfuehren.
+- Veraltete Kommentare/Docstrings entfernen oder aktualisieren.
+- Importpfade und `__all__` fuer neue Module pruefen.
+- Minimalen Release-Abschnitt in README ergaenzen.
 
 Nutzen:
 
-- Weniger doppelte Logik.
-- Features greifen automatisch in GUI, Skripten und API.
+- YANE wirkt nach aussen weniger wie ein Forschungsnotizbuch.
+- Neue Nutzer finden schneller den richtigen Einstieg.
 
-### P0: Forward-Performance weiter messen ✅
+### P1 🔲 Remote/Distributed Evaluation konkretisieren
 
-Der Fast Path ist bereits optimiert, aber große Netze brauchen Benchmarks.
+`AsyncEvaluationQueue` ist ein lokaler Baustein. Remote-Auswertung ist noch
+nicht produktiv nutzbar.
 
-**Bereits implementiert:** `benchmarks/forward_bench.py` — Microbenchmarks für `forward()` über hidden-Node-Größen {10, 50, 200, 1000}, azyklisch vs. zyklisch, Median-µs/call, CLI mit `--sizes` und `--save`.
+Aufgaben:
 
-**Noch offen:** — (Basis-Benchmarks sind implementiert; Kosten-pro-Node/Regression-Tests können bei Bedarf ergänzt werden).
-
-Nutzen:
-
-- Optimierungen bleiben messbar.
-- Große Aufgaben werden planbarer.
-
-### P1: Vektorisierte Batch-Auswertung ✅
-
-Dataset-Aufgaben bewerten viele Samples pro Genom. Aktuell läuft das meist sampleweise.
-
-**Bereits implementiert:** `Genome.forward_batch(batch)` verarbeitet eine Liste/NumPy-Array von Inputs vektorisiert via NumPy `(N, n_nodes)`-Matrix im Push-Modell, topologisch geordnet. Fallback auf sequentielles `forward()` bei Zyklen oder persistenten Hidden Nodes. `NeuroEvolution.forward_batch()` delegiert ans beste Genom. Alle 15 Aktivierungstypen als NumPy-Vektorfunktionen in `util/activation.py` (`get_batch_activation_fns()`), lazy-geladen und gecacht.
-
-**Noch offen:** — (alle geplanten Aufgaben sind implementiert).
+- Remote-Worker-Protokoll entwerfen: Job, Genome-Payload, Result, Error, Timeout.
+- HTTP- oder WebSocket-Prototyp bauen.
+- Retry/Timeout/Cancel-Policy implementieren.
+- Security-Grenzen dokumentieren: keine fremden Pickles ungeprueft laden.
+- Benchmark gegen lokales Multiprocessing.
 
 Nutzen:
 
-- Viel schneller für Regression/Klassifikation.
-- Wichtig für MNIST-artige Aufgaben.
+- Lange Simulationen koennen auf mehrere Prozesse oder Maschinen verteilt werden.
+- Saubere Grundlage fuer Cluster- oder Server-Experimente.
 
-### P1: Genom-Serialisierung optimieren ✅
+### P1 🔲 Checkpoint-Format langfristig haerten
 
-Größere Populationen und Multiprocessing leiden unter Pickle-Kosten.
+Checkpoint v2 mit Migration und Metadata-Sidecar ist implementiert. Langfristig
+sollten Payloads robuster und besser inspizierbar werden.
 
-**Bereits implementiert:** Genome-Pickle-State entfernt jetzt rebuildbare Runtime-/Topology-Caches (`_triggered`, `_exec_order`, `_reset_nodes`, `_compiled_forward`, `_forward_dispatch`, `_innov_cache`, `_values_arr`) vor IPC/Checkpoint-Payloads. Connections strippen weiterhin NumPy-Weight-Arrays. Matrixexport bietet aktive, kompakte DAG-Repräsentation für kompatible Netze. Tests in `TestGenomePickle`.
+Aufgaben:
 
-**Noch offen:** Shared immutable topology für verwandte Genome bleibt eine mögliche spätere Speicheroptimierung.
-
-Nutzen:
-
-- Schnellere Parallelisierung.
-- Weniger RAM-Druck.
-
-### P2: GPU-Unterstützung für kompatible Netze ✅
-
-Nicht jedes evolvierte Netz passt gut auf GPU, aber Batch-Auswertung schon.
-
-**Bereits implementiert:** `evolution/matrix_export.py` exportiert feed-forward-kompatible Genome als `MatrixGenome`. `forward_matrix()` läuft mit NumPy-kompatiblen Array-Modulen; `forward_matrix_gpu()` nutzt CuPy, wenn installiert, und bleibt ansonsten optional. Tests in `tests/test_matrix_export.py`.
-
-**Noch offen:** Automatische GPU-Auswahl nach Batchgröße ist bewusst noch nicht im Standard-Forward-Pfad aktiv.
+- Kleine Fixture-Checkpoints fuer v1/v2 in Tests versionieren.
+- JSON-Metadaten in GUI/API sichtbar machen.
+- Optional: getrennte Speicherung von Config, Tracker, Population, QD-Archiv.
+- Import-Warnungen fuer fehlende Descriptor-Callbacks in GUI anzeigen.
+- Dokumentieren, welche Teile Pickle bleiben und warum.
 
 Nutzen:
 
-- Größere supervised Aufgaben werden realistischer.
+- Alte Laeufe bleiben langfristig nutzbar.
+- Checkpoints werden besser debugbar.
 
-## 6. Robustheit und Reproduzierbarkeit
+### P1 🔲 Pareto- und MAP-Elites-Visualisierung polishen
 
-### P1: Sicherheitslimits für Werte ✅
+Basisplots existieren. Fuer echte Analyse fehlen noch Interaktion und Export aus
+der GUI.
 
-Sehr große Gewichte/Aktivierungen können Netze instabil machen.
+Aufgaben:
 
-**Bereits implementiert:** `set_weight_clipping(w_max, b_max)` in `NeuroEvolution` — klemmt alle Gewichte auf `[-w_max, w_max]` und alle Biases auf `[-b_max, b_max]` nach jeder Mutation. `b_max` defaults zu `w_max`. `None` (default) deaktiviert Clipping. `set_output_sanitizing(enabled, fallback)` ersetzt NaN/Inf in Forward-Outputs (alle 4 Forward-Pfade). Zähler `n_weight_clipped`, `n_bias_clipped`, `n_output_sanitized` in Diagnostics. 17 Tests.
-
-**Noch offen:** — (alle Aufgaben sind implementiert).
-
-Nutzen:
-
-- Stabilere Langzeitläufe.
-- Weniger degenerative Genome.
-
-## 7. API, GUI und Bedienbarkeit
-
-### P0: GUI für fortgeschrittene Evolutionseinstellungen ✅
-
-**Bereits in der GUI konfigurierbar:** Multi-eval, Aggregation, Sigma-Penalty, Lamarck-Modus/-Steps, Worker-Anzahl, Target-Species, Memory-Toggle, Population-Size, Max-Nodes/Connections, Target-Fitness, Checkpoint Save/Load, Normalization-Toggle, Fitness-Shaping-Toggle, Interspecies-Crossover-Rate, Convergence-Stop (eps + stagnation), Early-Stopping-Factor, Effizienzstrafe (max_ms + penalty), Elitismus (global + per species).
-
-**Noch offen:** — (alle geplanten GUI-Einstellungen sind jetzt exponiert; neue Controls für Multi-Objective, Quality Diversity und CMA-ES sind ergänzt).
+- Hover/Tooltip fuer Pareto-Punkte und MAP-Elites-Zellen.
+- Export-Buttons fuer QD-Archiv JSON/CSV in der GUI.
+- Farbschema fuer Fitness/Complexity klarer trennen.
+- Pareto-Plotachsen beschriften und skalieren.
+- Optional: Klick auf Zelle/Punkt zeigt Genome im Inspect-Tab.
 
 Nutzen:
 
-- YANE wird als Experimentierwerkzeug deutlich brauchbarer.
+- QD- und Multi-Objective-Laeufe werden besser interpretierbar.
+- GUI wird als Analysewerkzeug staerker.
 
-### P1: API vollständiger machen ✅
+### P2 🔲 Evolvierbare Descriptor-Gewichte
 
-**Bereits implementiert:** `POST /configure` mit `n_inputs`, `n_outputs`, `max_nodes`, `max_connections`, `n_initial_hidden`, `stateful`, `population_size`, `target_species`, `lamarck_steps`, `lamarck_sigma`, `lamarck_adaptive_max_steps`, `lamarck_adaptive_top_k`, `seed`. `GET /population/status`, `GET /population/best`, `GET /population/diagnostics`, `GET /population/best/export`, `POST /checkpoint/save`, `POST /checkpoint/load`.
+Descriptor-Registry und Fitness-Komponenten sind vorhanden. Evolvierbare oder
+adaptive Gewichtung ist noch Forschungsarbeit.
 
-**Noch offen:** — (alle geplanten API-Endpunkte sind jetzt implementiert).
+Aufgaben:
 
-Nutzen:
-
-- Externe Tools können YANE ernsthaft steuern.
-
-### P1: Genome visualisieren und inspizieren ✅
-
-**Bereits implementiert:** NetworkCanvas (Topologie-Visualisierung), WeightHistogram (Gewichtsverteilung), FitnessChart, SpeciesChart, MutationRateChart. Connection-Gewichte farblich (blau = positiv, rot = negativ) und nach Stärke (Alpha + Linienbreite). Aktivierungsfunktion pro Node als Buchstaben-Label. Persistente Nodes in Violett mit gestricheltem Ring und Gedächtnis-Punkt. Deaktivierte Connections als graue gestrichelte Linie. Innovationsnummern als kleine Zahl unter jedem Node.
-
-**Noch offen:** — (alle geplanten Visualisierungen sind jetzt implementiert).
+- Gewichtshistorie fuer Fitness-Komponenten speichern.
+- Adaptive Gewichtung bei Stagnation testen.
+- Descriptor-Kombinationen per Ablation benchmarken.
+- Mechanismus gegen Descriptor-Collapse entwerfen.
 
 Nutzen:
 
-- Man versteht besser, welche Strukturen Evolution findet.
+- Weniger manuelles Descriptor-Design.
+- Bessere Archive fuer unbekannte Aufgaben.
 
-## 8. Benchmarking
+### P2 🔲 Meta-adaptive Policies evolvieren
 
-### P1: Ablation Tests ✅
+Wenn die handgebauten adaptiven Policies stabil sind, koennen ihre Parameter
+selbst zum Evolutionsobjekt werden.
 
-Um zu wissen, welche Features wirklich helfen, sollten sie abschaltbar sein.
+Aufgaben:
 
-**Bereits implementiert:** Alle sechs Mechanismen sind per API deaktivierbar:
-- `set_novelty_search(False)` — Novelty-Bonus wird auf 0 gesetzt.
-- `set_speciation(False)` — Population läuft als eine einzige Species, keine Kompatibilitätsschwelle.
-- `set_crossover(False)` — nur Mutations-Offspring, kein sexuelles Crossover.
-- `set_lamarck_adaptive(max_steps=0)` — Lamarck deaktiviert (beide Modi aus).
-- `set_diversity_injection(False)` — keine Stagnations-Injektion, weder frische Genome noch strukturelle Diversität.
-- `stateful=False` in `configure()` — Memory/Persistenz deaktiviert.
-
-Alle Flags werden in `population_memory_info()` unter `ablation_*`-Keys exponiert. 14 Smoke-Tests in `tests/test_ablation.py`.
-
-**Noch offen:** — (alle Aufgaben sind implementiert).
+- Policy-Gene fuer Operator-Scheduler, Lamarck-Budget und Interspecies-Rate modellieren.
+- Policy-Gene pro Species und global vergleichen.
+- Sicherheitsgrenzen fuer extreme Policies einbauen.
+- Meta-Ablation: feste Policy vs handadaptive Policy vs evolvierte Policy.
 
 Nutzen:
 
-- Klarheit, welche Mechanismen bei welchen Aufgaben helfen.
+- YANE lernt nicht nur Netzwerke, sondern auch bessere Suchstrategien.
+- Gute Auto-Konfiguration kann ueber Aufgaben hinweg uebertragen werden.
 
-## 9. Dokumentation
+### P2 🔲 Modul-Crossover und Modulbibliothek
 
-### P0: Dokumentation aktuell halten ✅
+Module koennen erkannt und dupliziert werden. Wiederverwendung ueber Genome und
+Laeufe hinweg ist noch offen.
 
-Die technische Dokumentation sollte mit neuen Features mitwachsen.
+Aufgaben:
 
-**Bereits implementiert:** README und technische Dokumentation beschreiben Multi-Objective, Quality Diversity, Coevolution, modulare Subnetze, CPPN/indirekte Kodierung, Matrix/GPU/Backprop-Export, CMA-ES und Benchmarks. Technische Doku enthält Architekturdiagramm, Genom-Lifecycle, Spawn-Zyklus, Worker-Pfade, Fitness-Konventionen und Glossar.
-
-**Noch offen:** — (Dokumentation ist auf den aktuellen Stand gebracht).
-
-Nutzen:
-
-- YANE bleibt verstehbar, auch wenn es komplexer wird.
-
-### P1: Entwicklerdokumentation für interne APIs ✅
-
-**Bereits implementiert:** `TECHNISCHE_DOKUMENTATION.md` enthält dedizierte Abschnitte zu Genom-Lifecycle, Population-Spawn-Zyklus, Worker-Pfaden und Fitness-Konventionen.
-
-**Noch offen:** — (geplante Entwicklerdokumentation ist ergänzt).
+- Modul-Crossover zwischen kompatiblen Subgraphen erforschen.
+- Gute Module in einer Bibliothek speichern.
+- Mutationsoperator: Modul aus Bibliothek einfuegen.
+- Diagnostics: Modulhaeufigkeit und Wiederverwendungsrate.
 
 Nutzen:
 
-- Weniger Risiko bei größeren Refactors.
+- Evolution kann gefundene Teilfunktionen besser wiederverwenden.
+- Skalierung auf komplexere Aufgaben koennte stabiler werden.
+
+### P2 🔲 Evolvierbare CPPNs
+
+Indirekte Kodierung kann Verbindungen aus Koordinaten erzeugen, aber die
+CPPN-Funktion selbst ist noch nicht evolvierbar.
+
+Aufgaben:
+
+- CPPN-Genome als eigene kleine Netzklasse oder normales YANE-Genome modellieren.
+- Weight-Pattern aus CPPN-Outputs erzeugen.
+- HyperNEAT-artige Substrate fuer Inputs/Outputs definieren.
+- Benchmark gegen direkte Kodierung auf regelmaessigen Aufgaben.
+
+Nutzen:
+
+- Bessere Skalierung bei grossen, geometrisch strukturierten Netzen.
+- Interessant fuer Bild- und Steuerungsaufgaben.
 
 ---
 
-## Entwicklungsphasen (aktualisiert)
+## Naechste empfohlene Reihenfolge
 
-| Phase | Fokus | Enthaltene Tasks (offen) |
-|---|---|---|
-| **Phase 3** · Skalierung | Species-Budget-Reproduktion, Batch-Forward, Serialisierung, Worker-Pipeline | — |
-| **Phase 4** · Schwierige Aufgaben | Curriculum, Multi-Objective, MAP-Elites, Memory/Gating, Hybrid-Optimierung | — |
-
-> Phase 1 und 2 sind vollständig abgeschlossen. Species-Budget-Reproduktion wurde bewusst von Phase 2 auf Phase 3 verschoben (erfordert Umbau von steady-state zu generationsbasiertem Spawn-Modell).
-
----
-
-## TODO-Liste (nach Code-Analyse bereinigt)
-
-### ✅ Vollständig implementiert
-
-- [x] Automatische Effizienzbewertung in der Elternauswahl anwenden.
-- [x] Bewertungszeit in den GUI-Worker-Pfaden messen.
-- [x] Einheitliche Evaluation-Statistiken (mean/median/p95/max Eval-Zeit, Offspring-Zähler, Topologie-Historie).
-- [x] GUI-Diagnostics für Eval-Zeit und Offspring-Zähler.
-- [x] Elitismus explizit machen (elite_count, species_elite_count, set_elitism()).
-- [x] Fitness-Sanitizing zentralisieren (nan/inf/clipping, Diagnose-Zähler).
-- [x] Mehrfachbewertung pro Genom (set_multi_eval, mean/median/min, sigma-Penalty).
-- [x] Species-Explosion beheben (aktives Mergen + Hard-Cap + Threshold-Kalibrierung).
-- [x] Connection Enable/Disable (reversibles Deaktivieren, Forward-Filter, forward-Pfad compile-time).
-- [x] Adaptive Strukturmutation (weight-biased remove, Spike-Mutation, Rewiring).
-- [x] Adaptives Lamarckian Refinement (stagnationsbasiert 0→max_steps, Top-20%).
-- [x] Per-Species adaptives Lamarck (Steps skalieren mit Species-Stagnation, Diagnostics in GUI).
-- [x] Raten des besten Genoms in GUI anzeigen (sigma_global, Struktur-Raten, Weight/Bias/Activation-Raten).
-- [x] Durchschnittliche Mutationsraten populationsweit ausgeben.
-- [x] Mutationsraten-Historie in GUI plotten (MutationRateChart).
-- [x] Inkrementelle Speziation (_assign_species O(0) im Steady-State, periodischer Vollscan).
-- [x] Debug-Tab mit Live-Log, Toggle und Clipboard-Kopie.
-- [x] Species-Hard-Cap gegen Pop-Overflow bei extremer Stagnation.
-- [x] Threshold-Adjustment-Diagnostics (dbg_last_adj_n, dbg_adj_count) im Log und GUI.
-- [x] UI: Collapsible Groups im LeftPanel, Übersetzung auf Englisch, Visual Polish.
-- [x] EvaluationResult-Objekt (genome, fitness, elapsed_ms, n_lamarck_steps, stopped_early, raw_fitnesses).
-- [x] Seed-Parameter für NeuroEvolution (set_seed).
-- [x] Checkpoint-Speicherung (save_checkpoint / load_checkpoint, GUI Save/Load-Buttons).
-- [x] Benchmark-Suite mit mehreren Seeds (benchmarks/run_suite.py).
-- [x] API /configure erweitert (max_nodes, max_connections, n_initial_hidden, stateful, population_size, target_species, Lamarck, seed).
-- [x] Fitness-Shaping (Rank-basierte Transformation vor Selektion, set_fitness_shaping).
-- [x] Convergence Detection (set_convergence_stop, set_max_evaluations, on_stop-Callback, GUI-Stoppgrund).
-- [x] Interspecies Crossover (~5%, set_interspecies_crossover, n_interspecies_crossover-Zähler).
-- [x] Output-Scale als Strategie-Gen auf Output-Nodes (analog zu input_scale).
-- [x] Ensemble-Inferenz vervollständigt (mode='mean'/'vote'/'weighted', GUI Top-5-Avg-Fitness).
-- [x] Early Stopping pro Genom (Generator-Protokoll, auto-N-Kalibrierung, 20%-Warmup, Hochrechnung).
-- [x] Strukturiertes Logging (logs/<kategorie>/<timestamp>/ mit run.log, config.json, best_genome.json, fitness_history.csv, Auto-Cleanup).
-- [x] Testabdeckung: 359 Tests, pytest -m ci < 1 s, Coverage ≥ 80% für core/ und evolution/.
-- [x] GUI: Advanced-Sektion mit Fitness-Shaping, Interspecies-Crossover, Convergence-Stop, Early-Stop, Effizienzstrafe, Elitismus.
-- [x] API: Checkpoint-Endpunkte, Best-Genom-Export, Diagnostics-Endpunkt.
-- [x] Fitness-Landscape: Histogramm (FitnessHistogram-Widget) + Plateau-Ratio + Sprungrate (jump_rate) in GUI.
-- [x] Lamarck: Kumulative Refinement-Zeitmessung in GUI.
-- [x] Adaptive Strukturmutation: Erfolgsrate-Tracking, Nutzen-Gewichtung, Per-Species-Tendenzen.
-- [x] Weight/Bias-Clipping: set_weight_clipping(w_max, b_max) nach jeder Mutation.
-- [x] Forward-Microbenchmarks: benchmarks/forward_bench.py (acyclic vs cyclic, n∈{10,50,200,1000}).
-- [x] Vektorisierte Batch-Auswertung: forward_batch() (NumPy push-Modell, topologisch, Fallback bei Zyklen/Memory, alle 15 Aktivierungen, 8 Tests).
-- [x] Curriculum Learning: set_curriculum(stages, on_stage_advance), automatischer Stufenwechsel, Population behalten, curriculum_complete-Stopp, 24 Tests.
-- [x] Species-Budget-Reproduktion: Rolling Spawn-Credits, Jugend-Mindestbudget, Stagnationsreduktion, species-internes Tournament/Crossover.
-
-### ✅ Früher teilweise, jetzt abgeschlossen
-
-- [x] Fitness-Landscape Diagnostics: IQR + Histogramm + Plateau-Ratio + Sprungrate done.
-- [x] Speciation robuster: Dynamische Ziel-Species, alternative Metrik, kleine Species geschützt, Stammbaum.
-- [x] Worker-Abstraktion: _run_evaluations() + EvaluationResult done; explizites Lamarck in Runner verschoben, GUI-Pfad vereinheitlicht.
-- [x] Genome-Visualisierung: Basis-Canvas + Gewichtsfarben + Aktivierungslabel + Persistent-Ring + Disabled-Connections + Innovationsnummern.
-- [x] Lamarck Rest: per-Species + Zeitmessung done; `genome.lamarck_sigma` als eigenes evolvierbares Strategy-Gen implementiert.
-- [x] Netzwerkgröße kontrollieren: Inactive-Detection, gezieltes Pruning, Komplexitätsdiagnostik und optionale Komplexitätsstrafe done.
-- [x] Normalisierung: MinMaxNormalizer, ZScoreNormalizer, ClipNormalizer, RunningStatsNormalizer + Persistenz via Checkpoint. 31 Tests.
-- [x] Warm-Start / Transfer Learning: I/O-Adaption + CartPole→Acrobot-Demo in benchmarks/warm_start_demo.py.
-- [x] Memory-Mechanismen: Persistente Nodes + Leaky Memory + statisches Gating + dynamisches Gating (gate_node) done. 8 Tests.
-
-### ✅ Neu abgeschlossen
-
-- [x] Multi-Objective Optimization
-- [x] Quality Diversity / MAP-Elites
-- [x] Coevolution
-- [x] Adaptive Populationsgröße
-- [x] Modulare Subnetze
-- [x] CPPN / Indirekte Kodierung
-- [x] Lokale Optimierer: SA + NES + CMA-ES
-- [x] Backprop-Hybrid
-- [x] NES als Lamarck-Alternative
-- [x] Genom-Serialisierung optimieren
-- [x] GPU-Unterstützung
-- [x] Ablation Tests: set_novelty_search, set_speciation, set_crossover, set_diversity_injection + bestehende Lamarck/Memory-Knöpfe. 14 Tests in test_ablation.py.
-- [x] Dokumentation aktuell halten
-- [x] Entwicklerdokumentation
+1. **P0 Adaptive Control Layer einfuehren**
+2. **P0 Lamarck-Modi adaptiv vereinheitlichen**
+3. **P0 GUI fuer adaptive Features eindeutig machen**
+4. **P0 Interspecies-Crossover adaptiv machen**
+5. **P0 Adaptive Operator-Scheduler fuer Mutation, QD und Pruning**
+6. **P1 Adaptive Benchmark- und Ablation-Suite**
+7. **P1 Stabilitaetslauf fuer GUI-Regression 2->2**
 
 ---
 
-## Nächste Ausbaustufe
-
-Die alte Taskliste ist abgeschlossen. Diese neue Liste sammelt die nächsten
-Hebel, um YANE weiter robuster, schneller und experimentell stärker zu machen.
-
-### P0: GUI-Snapshot-Tests und Headless Smoke-Suite
-
-Die GUI ist inzwischen ein echtes Experimentierwerkzeug. Sie braucht eigene
-Regressionstests, damit neue Controls und Diagnostics nicht unbemerkt brechen.
-
-Aufgaben:
-
-- Headless Qt-Smoke-Test für `TrainingTab`, `LeftPanel`, `InspectTab` und `MainWindow`.
-- Screenshot-/Layout-Checks für Desktop- und kleine Viewport-Größen.
-- Automatischer Test, dass alle Advanced-Controls in `_config_dict()` oder Diagnostics sichtbar werden.
-- Start/Stop/Pause/Checkpoint-Save/Load als GUI-Workflow testen.
-
-Nutzen:
-
-- Weniger Risiko bei GUI-Ausbau.
-- Schnelleres Erkennen von kaputten Controls, fehlenden Labels oder Layout-Regressionen.
-
-### P0: Benchmark-Gates für Kernaufgaben
-
-Viele Features sind implementiert; jetzt braucht YANE klare Performance- und
-Qualitäts-Grenzwerte, damit Verbesserungen messbar bleiben.
-
-Aufgaben:
-
-- `benchmarks/run_suite.py` um Gate-Modus erweitern (`--gate baseline.json`).
-- Kleine Pflicht-Gates für XOR, Regression 2→2, Multiplication und CartPole definieren.
-- Zeit-, Erfolgsraten- und Best-Fitness-Grenzen separat prüfen.
-- Ergebnisvergleich als Markdown-Report ausgeben.
-
-Nutzen:
-
-- Verhindert unbemerkte Trainingsregressionen.
-- Macht Optimierungen objektiver.
-
-### P1: Multi-Objective Aggregation vollständig machen
-
-Multi-Objective ist implementiert, aber Multi-eval in der GUI ist dafür bewusst
-deaktiviert. Der nächste saubere Schritt ist eine echte Aggregation für
-Objective-Vektoren.
-
-Aufgaben:
-
-- `aggregate_fitnesses()` für Vektoren erweitern.
-- Mean/median/min pro Objective unterstützen.
-- Sigma-Penalty pro Objective oder nur auf Skalarfitness definieren.
-- GUI-Multi-eval wieder für Multi-Objective freigeben.
-
-Nutzen:
-
-- Multi-Objective wird auch für stochastische Gym-Umgebungen praktisch.
-- Weniger Spezialfälle in GUI und Runner.
-
-### P1: Pareto- und MAP-Elites-Visualisierung
-
-Die Daten sind vorhanden, aber die GUI zeigt bisher nur kompakte Textdiagnostik.
-
-Aufgaben:
-
-- Pareto-Scatterplot für zwei Objectives.
-- MAP-Elites-Heatmap für zweidimensionale Archive.
-- Tooltip pro Archivzelle: Fitness, Descriptor, Node-/Connection-Zahl.
-- Export des Archivs als JSON/CSV.
-
-Nutzen:
-
-- Man sieht Trade-offs und Diversity sofort.
-- Besonders nützlich für QD-Experimente und Complexity-vs-Performance-Runs.
-
-### P1: Experiment-Presets und Config-Profile
-
-Viele Einstellungen sind inzwischen mächtig, aber schwer per Hand reproduzierbar.
-
-Aufgaben:
-
-- Preset-Dateien für GUI und API (`presets/*.json`) einführen.
-- Presets für `fast dataset`, `robust gym`, `quality diversity`, `multi-objective compact`.
-- GUI: Preset-Dropdown und Save-current-as-preset.
-- Logs speichern den Preset-Namen zusätzlich zur vollständigen Config.
-
-Nutzen:
-
-- Bessere Reproduzierbarkeit.
-- Schnellere Experimente ohne manuelles Nachklicken.
-
-### P1: Checkpoint-Kompatibilität und Migrationen
-
-Checkpoints sind Pickle-basiert und wachsen mit vielen neuen Feldern. Das sollte
-aktiver versioniert werden.
-
-Aufgaben:
-
-- Explizite Checkpoint-Migrationsfunktionen pro Version.
-- Kompatibilitätstest mit kleinen Fixture-Checkpoints.
-- Optional: sicheres JSON/MsgPack-Metadatenformat neben Pickle-Payload.
-- Warnung, wenn QD-Descriptor-Callbacks nach Load neu gesetzt werden müssen.
-
-Nutzen:
-
-- Alte Experimente bleiben ladbar.
-- Weniger Überraschungen nach größeren Refactors.
-
-### P1: Profiling-Suite für Multiprocessing und Serialisierung
-
-Die Pickle-Payloads sind schlanker, aber die tatsächlichen Kosten sollten als
-Benchmark sichtbar werden.
-
-Aufgaben:
-
-- Benchmark für Genome-Pickle-Größe und Pickle-Zeit nach Topologiegröße.
-- IPC-Benchmark für GUI-Multiprocessing-Batches.
-- Vergleich: normales Genome-Pickle vs. Matrixexport für kompatible DAGs.
-- Report in `benchmarks/results/`.
-
-Nutzen:
-
-- Klare Grundlage für weitere Performance-Arbeit.
-- Hilft bei großen Populationen und teuren Environments.
-
-### P2: Async/Distributed Evaluation
-
-Aktuell ist Parallelisierung lokal. Für größere Aufgaben wäre asynchrone oder
-verteilte Evaluation ein großer Hebel.
-
-Aufgaben:
-
-- Evaluation-Queue mit Futures/Tasks abstrahieren.
-- Async-Submit unterstützen, ohne Population-Konsistenz zu verlieren.
-- Optionaler Remote-Worker-Prozess per HTTP/WebSocket.
-- Timeouts und Retry-Policy pro Genome.
-
-Nutzen:
-
-- Bessere Ressourcennutzung bei langsamen Simulationen.
-- Grundlage für Multi-Machine-Experimente.
-
-### P2: Evolvierbare Descriptor- und Fitness-Komponenten
-
-QD und Multi-Objective nutzen aktuell vom Nutzer definierte Descriptors und
-Objectives. Der nächste Forschungshebel wäre, Teile davon adaptiv zu machen.
-
-Aufgaben:
-
-- Descriptor-Registry mit wiederverwendbaren Bausteinen.
-- Automatische Descriptor-Auswahl aus Topologie-, Verhalten- und Timing-Features.
-- Fitness-Komponenten als benannte Metriken mit Gewichtshistorie speichern.
-- Ablation/Benchmark: statischer vs. adaptiver Descriptor.
-
-Nutzen:
-
-- Weniger manuelles Design für neue Aufgaben.
-- Bessere Archive für unbekannte Suchräume.
-
-### P2: Compiled Matrix-Forward für kompatible Subpopulationen
-
-`MatrixGenome` existiert, ist aber noch nicht automatisch im normalen
-Trainingspfad aktiv.
-
-Aufgaben:
-
-- Feed-forward-kompatible Genome automatisch erkennen.
-- Matrixexport cachen und invalidieren.
-- Batch-Evaluation über Matrixform für ganze kompatible Gruppen.
-- Optional CuPy/PyTorch nur bei großen Batches aktivieren.
-
-Nutzen:
-
-- Größere supervised Aufgaben werden schneller.
-- GPU-Support wird praktisch statt nur API-Baustein.
-
----
-
-## Erledigte Aufgaben
-
-### Early Stopping pro Genom bei Dataset-Aufgaben (P0)
-
-Bei Klassifikations- und Regressions-Aufgaben wird jedes Genom auf allen Samples bewertet, auch wenn es nach wenigen Fällen offensichtlich schlecht ist.
-
-**Design: optionales Generator-Protokoll (rückwärtskompatibel)**
-
-Die bestehende Signatur `fitness_fn(genome) -> float` bleibt unverändert. Zusätzlich kann eine Fitnessfunktion ein **Generator** sein, der nach jedem Sample (oder Batch) einen Partial-Score yieldet. YANE erkennt Generator-Funktionen via `inspect.isgeneratorfunction()` und bricht die Auswertung ab, wenn die akkumulierte Partial-Fitness unter den Schwellwert fällt. Nicht-Generator-Funktionen laufen unverändert durch.
-
-Beispiel (neues optionales Format):
-```python
-def evaluate(genome):
-    fitness = 0.0
-    for sample in dataset:
-        genome.reset()
-        outputs = genome.forward(sample["input"])
-        fitness -= abs(outputs[0] - sample["output"][0])
-        yield fitness  # YANE kann hier abbrechen
-```
-
-Implementierte Details:
-
-- `set_early_stopping(factor: float | None = 1.0)` in `NeuroEvolution` — Abbruch wenn `partial_fitness < best_fitness - abs(best_fitness) * factor`. Formel ist sign-unabhängig: bei negativer Fitness (XOR) wie bei positiver (CartPole) und bei exponentiell wachsender Fitness korrekt.
-- **Hochrechnung für Dataset-Aufgaben:** `estimated = partial_fitness * (N/k_sofar)` mit linearer Akkumulationsannahme.
-- **Automatische N-Inferenz:** Erstes vollständiges Genom kalibriert N und schaltet Early Stopping frei. Prüfung startet ab 20% der aktuellen N.
-- Abbruchzähler `n_early_stopped` in `population_memory_info()`; `stopped_early: bool` in `EvaluationResult`.
-- `_early_stopping_n` in Checkpoint serialisiert.
-
-### Fitness-Shaping / Rank-basierte Transformation (P1)
-
-`set_fitness_shaping(enabled: bool)` in `NeuroEvolution`. Nach `_compute_shared_fitness()` werden alle `shared_fitness`-Werte durch Ränge ersetzt (linear: Rang 1 = schlechtestes Genom). In `_compute_selection_scores()` wird `rank(g.shared_fitness) / pop_size` statt `max(0.0, g.shared_fitness - min_fit + 1e-6)` verwendet. Fitness-Sharing bleibt aktiv — Rank-Shaping ersetzt nur den rohen `shared_fitness`-Wert.
-
-### Convergence Detection und automatisches Training-Stop (P1)
-
-`set_convergence_stop(fitness_spread_eps, min_stagnation)`: Training stoppt wenn `stagnation_count >= stagnation_threshold * min_stagnation` UND IQR der Fitness < `fitness_spread_eps`.
-`set_max_evaluations(n)`: zusätzlich zu `set_max_iterations()`, zählt tatsächliche Evaluierungen.
-`train(fitness_fn, on_stop: Callable[[str], None] | None = None)`: Callback mit Stoppgrund (`"target_reached"`, `"max_iterations"`, `"converged"`, `"max_evaluations"`).
-GUI zeigt Stoppgrund an. `min_fitness` + `max_iterations` waren bereits vorhanden.
-
-### Automatische Effizienz in der Elternauswahl
-
-YANE misst Bewertungszeiten in `train()` und in den GUI-Worker-Pfaden. Die Rohfitness bleibt unverändert; Effizienz wird als eigene Variable geführt und wirkt dynamisch nur auf die Elternauswahl. Bei Stagnation sinkt die Effizienz-Relevanz bis auf `0`.
-
-### Einheitliche Evaluation-Statistiken
-
-Pro Trainingsschritt werden erfasst: mean/median/p95/max der Eval-Zeiten über alle evaluierten Genome, kumulative Offspring-Zähler (crossover / mutation / diversity injection), sowie eine Topologie-Historie des besten Genoms bei jeder Fitness-Verbesserung. Alle Werte fließen via `population_memory_info()` in die GUI.
-
-### Elitismus explizit machen
-
-`elite_count` (globale Top-k) und `species_elite_count` (bestes je Species) sind konfigurierbar via `set_elitism()`. Single-member-Species-Champions sind ebenfalls geschützt. Eliten werden nie gelöscht, aber weiterhin als Elternteile genutzt — nur Kopien mutieren.
-
-### Fitness-Sanitizing zentralisieren
-
-Zentrale `_apply_sanitize()`-Funktion in `NeuroEvolution`. Behandelt `nan` und `inf` defensiv (Fallback-Wert konfigurierbar), optionales Fitness-Clipping (clip_low, clip_high), Diagnose-Zähler für invalide und geclippte Werte (`n_invalid_fitness`, `n_clipped_fitness`). Konfigurierbar via `set_fitness_sanitizing()`.
-
-### Mehrfachbewertung pro Genom
-
-`set_multi_eval(n, aggregation, sigma_penalty)` erlaubt mehrere Episoden pro Genom. Aggregation: mean / median / min. Sigma-Penalty subtrahiert ein Vielfaches der Standardabweichung. Automatische Worker-Anpassung berücksichtigt den Mehraufwand. GUI konfigurierbar.
-
-### Species-Explosion beheben
-
-Die "try last species first"-Optimierung in `_assign_species()` verhinderte, dass ein steigender Kompatibilitäts-Threshold Species zusammenführen konnte — Genome landeten immer in ihrer alten Species. Fix: Aktives Mergen von Species-Paaren nach der Zuweisung, Hard-Cap gegen Pop-Overflow, kalibrierte Threshold-Anpassung (per-Evaluation-Frequenz). Species-Anzahl stabilisiert sich bei ~Ziel.
-
-### Connection Enable/Disable
-
-`enabled`-Flag auf `Connection`. Deaktivierte Verbindungen bleiben im Genom (reversibel), werden aber im Forward-Pass übergangen. Compile-time-Filter in allen Forward-Pfaden (acyclisch: Snapshot bei Compile, kein Runtime-Overhead; cyclisch: `if conn.enabled` in `fire()`). Selbst-adaptive Mutations-Raten. Crossover und Pickle unterstützen das Flag.
-
-### Adaptive Strukturmutation
-
-Drei neue Mutationsmechanismen, alle selbst-adaptiv:
-- **Gewichtsbasiertes remove_connection**: Soft-min Sampling (Wahrscheinlichkeit ~ 1/|w|) bevorzugt das Entfernen unwichtiger Verbindungen.
-- **Spike-Mutation**: Jede Connection kann ihr Gewicht komplett neu initialisieren (N(0, sigma_global)) statt nur zu perturbieren.
-- **Rewiring**: Atomisches Remove-dann-Add; Netzgröße stabil, Topologie wird exploriert.
-
-### Adaptives Lamarckian Refinement
-
-Lamarck feuert automatisch ohne manuelle Konfiguration. Anzahl der Hill-Climbing-Schritte skaliert linear mit Stagnation (0 bei gutem Fortschritt → max_steps bei voller Stagnation). Nur Top-20% des evaluierten Pools werden verfeinert. Per-Species: Steps skalieren zusätzlich mit Species-Stagnation, `lamarck_per_species`-Diagnostics in GUI. Expliziter Modus (`set_lamarck(n_steps)`) bleibt für Override-Fälle erhalten.
-
-### Mutationsraten-Visualisierung
-
-Im LeftPanel werden die selbst-adaptiven Raten des aktuell besten Genoms angezeigt: `sigma_global`, die vier Struktur-Raten (Add/Remove Node, Add/Remove Connection) sowie populationsdurchschnittliche Weight-shift-rate, Weight-delta, Bias-rate, Bias-delta und Activation-Wechsel-rate. Populationsweite Durchschnitte zusätzlich zum Best-Genom. `MutationRateChart`-Sparkline in GUI für sigma_global + weight-rate-Historie.
-
-### Inkrementelle Speziation
-
-`_assign_species()` läuft im Steady-State in O(0) statt O(pop): Jedes neu evaluierte Genom cached seine letzte Species und wird beim nächsten Aufruf direkt dort eingesetzt, wenn die Kompatibilität noch stimmt. Ein periodischer Vollscan (jede k-te Generation) korrigiert Drift.
-
-### Debug-Tab mit Live-Log
-
-Debug-Tab in der GUI: zeilenweise Snapshot aller `population_memory_info()`-Werte alle 0.5 s, Toggle zum Pausieren, Clipboard-Kopie des vollständigen Logs.
-
-### Species-Hard-Cap und Stabilitätsfixes
-
-Mehrere aufeinanderfolgende Fixes für Randfälle bei Stagnation: Hard-Cap, Threshold-Freeze-Fix, Threshold-Schritt-Kalibrierung (per-Evaluation-Frequenz), Dead-Band entfernt. Diagnostics: `dbg_last_adj_n` und `dbg_adj_count` in `population_memory_info()` und im Debug-Tab sichtbar.
-
-### UI-Verbesserungen
-
-- **Collapsible Groups im LeftPanel**: Alle Diagnostik-Sektionen können ein- und ausgeklappt werden; Zustand bleibt erhalten.
-- **Vollständige Übersetzung auf Englisch**: GUI-Texte, Labels und Tooltips durchgehend auf Englisch.
-- **Visual Polish**: Chart-Ticks, Δ-Styling, Canvas-Legende, Progress-Form und Tab-Indikator verbessert; Inspect-Tab-Notification-Dot erscheint nur bei neuem Bestwert.
-
-### Interspecies Crossover (P1)
-
-`set_interspecies_crossover(rate: float)` in `NeuroEvolution`. Zweiter Elternteil wird mit `rate` Wahrscheinlichkeit aus anderer Species gewählt. Zähler `n_interspecies_crossover` in `population_memory_info()`. Offspring bekommt keine Sonderbehandlung bei Species-Zuweisung.
-
-### Ensemble-Inferenz der Top-k Genome (P1)
-
-`forward_ensemble(inputs, k, mode='mean'|'vote'|'weighted')` mit drei Modi: Mittelwert (default), Majority-Vote für binäre Klassifikation, fitness-gewichtetes Averaging. `get_ensemble(k)` gibt Top-k Genome zurück. GUI zeigt `top5_avg_fitness` im LeftPanel.
-
-### Output-Scale als Strategie-Gen (P1)
-
-`output_scale: float = 1.0` auf Output-Nodes (wie `input_scale` auf Input-Nodes). Evolvierbar via `mutation_output_scale`. Forward-Pass multipliziert Ausgabe-Aktivierung mit `output_scale`. In `node.py`: `_SLOT_DEFAULTS`, `copy()`, `mutate()`.
-
-### Seeding zentralisieren (P0)
-
-`NeuroEvolution(seed=...)` / `set_seed(seed)` setzt Python `random` und `numpy.random` reproduzierbar. Seed wird in Logs, `config.json` und GUI angezeigt. Gym-Env-Seeds liegen beim Nutzer.
-
-### Checkpoints (P0)
-
-`save_checkpoint(path)` / `load_checkpoint(path)`: Population + InnovationTracker atomar speichern und laden. GUI Save/Load-Buttons mit Dateidialog. API `POST /configure` akzeptiert `seed`-Parameter. `_early_stopping_n`, `_n_early_stopped` etc. werden mit serialisiert.
-
-### API /configure erweitert (P1)
-
-`POST /configure` akzeptiert: `n_inputs`, `n_outputs`, `max_nodes`, `max_connections`, `n_initial_hidden`, `stateful`, `population_size`, `target_species`, `lamarck_steps`, `lamarck_sigma`, `lamarck_adaptive_max_steps`, `lamarck_adaptive_top_k`, `seed`.
-
-### API-Endpunkte vervollständigt (P1)
-
-`POST /checkpoint/save` + `POST /checkpoint/load` zum Speichern/Laden der Population. `GET /population/best/export` liefert das beste Genom als JSON mit allen Nodes und Connections. `GET /population/diagnostics` gibt die vollen `population_memory_info()`-Daten zurück.
-
-### GUI für fortgeschrittene Einstellungen vervollständigt (P0)
-
-Neue „Advanced"-Sektion in den Training-Settings: Fitness-Shaping-Toggle, Interspecies-Crossover-Rate, Convergence-Stop (IQR-Schwelle × Stagnationsfaktor), Early-Stopping-Factor, Effizienzstrafe (max_ms × penalty), Elitismus (global + per species).
-
-### Fitness-Landscape Diagnostics (P1)
-
-Fitness-Histogramm (10 Bins) als `FitnessHistogram`-Widget in der GUI (Population-Sektion). Plateau-Ratio (`stagnation_count / stagnation_threshold`) als Label. IQR war bereits vorhanden.
-
-### Lamarck Refinement-Zeitmessung (P1)
-
-Kumulative `lamarck_time_ms`-Messung in `_lamarck_refine()`, exponiert in `population_memory_info()` und GUI („Time total (ms)"). Serialisiert in Checkpoints.
-
-### Standard-Benchmark-Suite (P0)
-
-`benchmarks/run_suite.py`: XOR, basic_multiplication, CartPole-v1, Acrobot-v1. Pro Benchmark n Runs mit Seeds 0..n-1, Time-to-Solve, Erfolgsrate. Ergebnisse als JSON in `benchmarks/results/`. `--fast`-Flag für CI-Suite (nur XOR + basic_multiplication).
-
-### Strukturiertes Logging (P1)
-
-`logs/<kategorie>/<timestamp>/`-Struktur mit `run.log`, `config.json`, `best_genome.json`, `fitness_history.csv`. `util/logger.py`: `setup_logging(name, log_root_override)`, Auto-Cleanup pro Kategorie (max 20). API-Server nutzt `"api"`-Kategorie. 359 Tests, `pytest -m ci` < 1 s, Coverage ≥ 80% für `core/` und `evolution/`.
+## Abgeschlossene Capability-Gruppen
+
+### Fitness, Evaluation und Training ✅
+
+- Curriculum Learning mit Stage-Wechsel und Diagnostics.
+- Fitness-Landscape-Diagnostics: IQR, Histogramm, Plateau-Ratio, Jump-Rate.
+- Multi-eval mit mean/median/min und Sigma-Penalty.
+- Early-Stopping-Protokoll fuer Generator-Fitnessfunktionen.
+- Fitness-Shaping und zentrale Fitness-Sanitizing-Pipeline.
+- Multi-Objective-Fitness inklusive Pareto-Rang, Crowding-Distance und Vector-Aggregation.
+
+### Evolution und Suchstrategie ✅
+
+- Robuste Speciation mit Hard-Cap, dynamischer Ziel-Species und alternativer Metrik.
+- Species-budgetierte Reproduktion mit Spawn-Credits, Jugendbonus und Species-internem Tournament.
+- Adaptive Strukturmutation: weight-biased remove, Spike, Rewiring, Enable/Disable.
+- Mutation-Success-Tracking und per-Species-Mutation-Biases.
+- Adaptive Populationsgroesse.
+- Quality Diversity / MAP-Elites mit Archiv, Diagnostics, GUI-Control und Export.
+- Coevolution-Bausteine: Hall-of-Fame, competitive fitness, mixed opponents.
+- Async Evaluation Queue fuer lokale Future-basierte Batch-Auswertung.
+
+### Netzwerkmodell ✅
+
+- Aktive/inaktive Strukturdiagnostik und gezieltes Pruning.
+- Normalizer-Framework mit Scale/MinMax/ZScore/Clip/RunningStats.
+- Memory Nodes mit Leaky Memory, statischem und dynamischem Gating.
+- Modulare Subnetze erkennen und duplizieren.
+- Indirekte Kodierung / CPPN-artige Connection-Generierung.
+- Matrixexport, MatrixForwardCache, kompatible Batch-Auswertung und optionaler CuPy-Pfad.
+
+### Optimierung und Hybrid-Training ✅
+
+- Lamarckian Refinement adaptiv, explizit und per Species.
+- Evolvierbares `genome.lamarck_sigma`.
+- Lokale Optimierer: Hill-Climbing, Simulated Annealing, NES, CMA-ES.
+- Optionaler Backprop-Hook fuer kompatible feed-forward Genome.
+- Benchmark zum Vergleich von Lamarck-Modi.
+
+### Performance und Parallelisierung ✅
+
+- Einheitliche Evaluation-Pipeline fuer train/API/GUI.
+- GUI sequential, ThreadPool und Multiprocessing-Pfade.
+- Forward-Microbenchmarks.
+- Vektorisierter `forward_batch()`.
+- Schlankerer Pickle-State fuer Genome.
+- Serialization-/Matrixexport-Profiling-Skript.
+
+### Robustheit und Reproduzierbarkeit ✅
+
+- Seed-Handling fuer Python und NumPy.
+- Checkpoints mit Migration v1->v2 und JSON-Metadaten-Sidecar.
+- Warm-Start / Transfer Learning mit I/O-Adaption.
+- Weight-/Bias-Clipping und Output-Sanitizing.
+- ResourceGuard und Memory-Trim.
+- Strukturierte Logs mit Config, Fitness-History, Best-Genome und Crash-State.
+
+### GUI, API und Bedienbarkeit ✅
+
+- PySide6-GUI mit Training, Inspect, API-Server und Debug-Tab.
+- NetworkCanvas, WeightHistogram, FitnessChart, SpeciesChart, MutationRateChart.
+- ParetoScatter und MAP-Elites-Heatmap.
+- Advanced-Controls fuer Fitness-Shaping, Ablations, Lamarck-Modi, Multi-Objective, QD, Elitismus und mehr.
+- GUI-Smoke- und Screenshot-Tests.
+- FastAPI-Konfiguration, Population-Endpoints, Diagnostics, Best-Export, Checkpoint-Endpunkte.
+- Preset-System fuer GUI und API.
+
+### Benchmarking und Dokumentation ✅
+
+- Benchmark-Suite mit Gate-Modus und Markdown-Report.
+- Ablation-Schalter und Tests.
+- README und technische Dokumentation fuer aktuelle Architektur.
+- Entwicklerdokumentation: Genom-Lifecycle, Spawn-Zyklus, Worker-Pfade, Fitness-Konventionen.
