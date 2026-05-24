@@ -1,6 +1,6 @@
 import unittest
 
-from yane import NeuroEvolution
+from yane import NeuroEvolution, PolicyGeneBounds, PolicyGenes
 from yane.core.genome import Genome
 from yane.evolution.population import Population
 from yane.evolution.species import Species
@@ -473,6 +473,58 @@ class TestNeuroEvolutionAdaptiveAPI(unittest.TestCase):
         yane.configure(2, 1)
         info = yane.population_memory_info()
         self.assertIn("operator_scheduler", info)
+
+    def test_meta_adaptive_policies_apply_safe_global_genes(self):
+        yane = NeuroEvolution(seed=1)
+        yane.configure(2, 1)
+        yane.set_meta_adaptive_policies(
+            enabled=True,
+            bounds=PolicyGeneBounds(
+                operator_exploration=(0.5, 2.0),
+                lamarck_budget=(1, 20),
+                interspecies_rate=(0.01, 0.1),
+            ),
+            initial_genes=PolicyGenes(
+                operator_exploration=99.0,
+                lamarck_budget=999,
+                interspecies_rate=9.0,
+            ),
+            mutation_strength=0.0,
+        )
+        yane.next_genome()
+        yane.submit_fitness(1.0)
+
+        meta = yane.get_meta_adaptive_policies()
+        meta.tick(yane.population, yane.get_operator_scheduler(), yane._lamarck)
+
+        info = yane.population_memory_info()
+        genes = info["meta_adaptive_policies"]["global_genes"]
+        self.assertLessEqual(genes["operator_exploration"], 2.0)
+        self.assertLessEqual(genes["lamarck_budget"], 20)
+        self.assertLessEqual(genes["interspecies_rate"], 0.1)
+        self.assertEqual(yane._lamarck.budget_per_gen, genes["lamarck_budget"])
+        self.assertEqual(info["interspecies_crossover_mode"], "fixed")
+
+    def test_meta_adaptive_tracks_species_genes(self):
+        yane = NeuroEvolution(seed=2)
+        yane.configure(2, 1)
+        yane.set_meta_adaptive_policies(enabled=True, mutation_strength=0.0)
+        genome = yane.next_genome()
+        yane.submit_fitness(1.0)
+        sp = yane.population.get_species_for_genome(genome)
+        self.assertIsNotNone(sp)
+
+        yane.get_meta_adaptive_policies().tick(
+            yane.population,
+            yane.get_operator_scheduler(),
+            yane._lamarck,
+        )
+
+        diag = yane.population_memory_info()["meta_adaptive_policies"]
+        self.assertEqual(len(diag["species_genes"]), 1)
+        self.assertTrue(any(row["source"].startswith("species:") for row in diag["history"]))
+        for op in ("add_node", "add_connection", "rewire"):
+            self.assertGreater(sp.mutation_biases[op], 0.0)
 
 
 # ---------------------------------------------------------------------------

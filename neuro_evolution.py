@@ -35,6 +35,9 @@ from yane.util.resource_guard import ResourceGuard
 from yane.evolution.curriculum import Curriculum, CurriculumStage  # noqa: F401
 from yane.evolution.adaptive_controller import AdaptiveController
 from yane.evolution.operator_scheduler import OperatorScheduler
+from yane.evolution.descriptors import AdaptiveFitnessComponentWeights, FitnessComponent
+from yane.evolution.meta_adaptive import MetaAdaptivePolicyEvolver, PolicyGeneBounds, PolicyGenes
+from yane.evolution.modularity import ModuleLibrary
 
 # Re-export for gui/worker.py backwards compatibility
 _aggregate_fitnesses = aggregate_fitnesses
@@ -87,6 +90,11 @@ class NeuroEvolution:
         # Operator Scheduler
         self._operator_scheduler: OperatorScheduler = OperatorScheduler()
         self._operator_scheduler_enabled: bool = False
+        self._fitness_component_weights: AdaptiveFitnessComponentWeights | None = None
+        self._meta_adaptive: MetaAdaptivePolicyEvolver | None = None
+        self._meta_adaptive_enabled: bool = False
+        self._module_library: ModuleLibrary | None = None
+        self._module_insert_rate: float = 0.0
         # Multi-eval + early stopping
         self._runner = EvaluationRunner()
         # Elitism (applied to population on configure())
@@ -245,6 +253,8 @@ class NeuroEvolution:
         self._population._operator_scheduler = (
             self._operator_scheduler if self._operator_scheduler_enabled else None
         )
+        self._population._module_library = self._module_library
+        self._population._module_insert_rate = self._module_insert_rate
         self._qd_enabled = getattr(self._population, "_qd_enabled", self._qd_enabled)
         self._qd_archive = getattr(self._population, "_qd_archive", self._qd_archive)
         self._qd_descriptor_fn = getattr(self._population, "_qd_descriptor_fn", self._qd_descriptor_fn)
@@ -642,6 +652,105 @@ class NeuroEvolution:
         """Return the OperatorScheduler for advanced configuration."""
         return self._operator_scheduler
 
+    def set_fitness_components(
+        self,
+        components: list[FitnessComponent],
+        *,
+        mode: str = "fixed",
+        min_weight: float = 0.0,
+        max_weight: float = 5.0,
+        adaptation_rate: float = 0.25,
+        collapse_floor: float = 0.05,
+        history_max: int = 200,
+    ) -> None:
+        """Attach weighted auxiliary fitness components.
+
+        Components are evaluated for each genome and added to task fitness as a
+        scalar shaping term. With ``mode="adaptive"``, weights are updated once
+        per generation during stagnation and every update is kept in diagnostics.
+        """
+        self._fitness_component_weights = AdaptiveFitnessComponentWeights(
+            components,
+            mode=mode,
+            min_weight=min_weight,
+            max_weight=max_weight,
+            adaptation_rate=adaptation_rate,
+            collapse_floor=collapse_floor,
+            history_max=history_max,
+        )
+
+    def get_fitness_component_weights(self) -> AdaptiveFitnessComponentWeights | None:
+        """Return the fitness-component scalarizer, if configured."""
+        return self._fitness_component_weights
+
+    def set_meta_adaptive_policies(
+        self,
+        enabled: bool = True,
+        *,
+        seed: int | None = None,
+        bounds: PolicyGeneBounds | None = None,
+        initial_genes: PolicyGenes | None = None,
+        mutation_strength: float = 1.0,
+    ) -> None:
+        """Enable evolvable policy genes for adaptive-control parameters.
+
+        The meta-policy layer evolves compact genes for operator exploration,
+        Lamarck budget, and interspecies-crossover rate. It compares global and
+        per-species scores each generation, clamps all values to safe bounds,
+        and applies them through existing YANE controls.
+        """
+        self._meta_adaptive_enabled = enabled
+        if self._meta_adaptive is None:
+            self._meta_adaptive = MetaAdaptivePolicyEvolver(
+                enabled=enabled,
+                seed=seed if seed is not None else self._seed,
+                bounds=bounds,
+                mutation_strength=mutation_strength,
+            )
+        else:
+            self._meta_adaptive.enabled = enabled
+            if bounds is not None:
+                self._meta_adaptive.bounds = bounds
+            self._meta_adaptive.mutation_strength = max(0.0, float(mutation_strength))
+        if initial_genes is not None and self._meta_adaptive is not None:
+            self._meta_adaptive.global_genes = initial_genes.clamped(self._meta_adaptive.bounds)
+        if enabled:
+            self.set_operator_scheduler(True)
+
+    def get_meta_adaptive_policies(self) -> MetaAdaptivePolicyEvolver | None:
+        """Return the meta-adaptive policy evolver, if configured."""
+        return self._meta_adaptive
+
+    def set_module_library(
+        self,
+        enabled: bool = True,
+        *,
+        max_modules: int = 50,
+        min_fitness: float | None = None,
+        insert_rate: float = 0.02,
+    ) -> None:
+        """Enable reusable hidden-module storage and insertion mutations."""
+        if enabled:
+            if self._module_library is None:
+                self._module_library = ModuleLibrary(
+                    max_modules=max_modules,
+                    min_fitness=min_fitness,
+                )
+            else:
+                self._module_library.max_modules = max_modules
+                self._module_library.min_fitness = min_fitness
+            self._module_insert_rate = max(0.0, min(1.0, float(insert_rate)))
+        else:
+            self._module_library = None
+            self._module_insert_rate = 0.0
+        if self._population is not None:
+            self._population._module_library = self._module_library
+            self._population._module_insert_rate = self._module_insert_rate
+
+    def get_module_library(self) -> ModuleLibrary | None:
+        """Return the active module library, if configured."""
+        return self._module_library
+
     def set_matrix_forward(self, enabled: bool = True) -> None:
         """Enable matrix-accelerated forward() for compatible genomes during training.
 
@@ -799,6 +908,21 @@ class NeuroEvolution:
             "quality_diversity_bins": self._qd_archive.bins if self._qd_archive else None,
             "quality_diversity_ranges": self._qd_archive.ranges if self._qd_archive else None,
             "quality_diversity_descriptor_needs_reattach": self._qd_descriptor_needs_reattach,
+            "fitness_component_weights": (
+                {
+                    "mode": self._fitness_component_weights.mode,
+                    "weights": self._fitness_component_weights.weights,
+                    "last_reason": self._fitness_component_weights.last_reason,
+                }
+                if self._fitness_component_weights is not None else None
+            ),
+            "meta_adaptive_enabled": self._meta_adaptive_enabled,
+            "meta_adaptive_policies": (
+                self._meta_adaptive.get_diagnostics()
+                if self._meta_adaptive is not None else None
+            ),
+            "module_library_enabled": self._module_library is not None,
+            "module_insert_rate": self._module_insert_rate,
         }
 
     # -------------------------------------------------------------------------
@@ -890,6 +1014,14 @@ class NeuroEvolution:
 
             # Tick adaptive components once per generation
             if iterations % _gen_size == 0:
+                if self._fitness_component_weights is not None:
+                    self._fitness_component_weights.tick(self._population)
+                if self._meta_adaptive_enabled and self._meta_adaptive is not None:
+                    self._meta_adaptive.tick(
+                        self._population,
+                        self._operator_scheduler if self._operator_scheduler_enabled else None,
+                        self._lamarck,
+                    )
                 if self._adaptive_ctrl_enabled:
                     self._adaptive_ctrl.tick(self._population, self._lamarck)
                 self._lamarck.reset_generation_budget()
@@ -1077,6 +1209,8 @@ class NeuroEvolution:
             self._runner.n_early_stopped,
             adaptive_ctrl=self._adaptive_ctrl if self._adaptive_ctrl_enabled else None,
             operator_scheduler=self._operator_scheduler if self._operator_scheduler_enabled else None,
+            fitness_component_weights=self._fitness_component_weights,
+            meta_adaptive=self._meta_adaptive if self._meta_adaptive_enabled else None,
         )
         if self._curriculum is not None:
             info.update(self._curriculum.info())
@@ -1483,6 +1617,10 @@ class NeuroEvolution:
             "adaptive_ctrl":              self._adaptive_ctrl,
             "operator_scheduler_enabled": self._operator_scheduler_enabled,
             "operator_scheduler":         self._operator_scheduler,
+            "meta_adaptive_enabled":      self._meta_adaptive_enabled,
+            "meta_adaptive":              self._meta_adaptive,
+            "module_library":             self._module_library,
+            "module_insert_rate":         self._module_insert_rate,
         })
 
     def load_checkpoint(self, path: str | Path) -> None:
@@ -1521,8 +1659,15 @@ class NeuroEvolution:
         if "operator_scheduler" in payload:
             self._operator_scheduler = payload["operator_scheduler"]
         self._operator_scheduler_enabled = payload.get("operator_scheduler_enabled", False)
+        self._meta_adaptive = payload.get("meta_adaptive", None)
+        self._meta_adaptive_enabled = payload.get("meta_adaptive_enabled", False)
+        self._module_library = payload.get("module_library", None)
+        self._module_insert_rate = payload.get("module_insert_rate", 0.0)
         if self._operator_scheduler_enabled and self._population is not None:
             self._population._operator_scheduler = self._operator_scheduler
+        if self._population is not None:
+            self._population._module_library = self._module_library
+            self._population._module_insert_rate = self._module_insert_rate
         # Restore cached config so _config_dict() + logs are accurate.
         self._n_inputs           = cfg.get("n_inputs", self._n_inputs)
         self._n_outputs          = cfg.get("n_outputs", self._n_outputs)
@@ -1820,6 +1965,9 @@ class NeuroEvolution:
             fitness = scalar
         elif genome is not None:
             genome.objectives = None
+        if genome is not None and self._fitness_component_weights is not None:
+            component_score, _ = self._fitness_component_weights.scalarize(genome)
+            fitness += component_score
         fitness = self._sanitizer.apply(fitness)
         if self._efficiency_penalty is not None and elapsed_ms is not None:
             fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)

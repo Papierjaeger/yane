@@ -37,6 +37,49 @@ class TestAsyncDescriptorsProfile(unittest.TestCase):
         self.assertEqual(values, (2,))
         self.assertEqual(score, 1.0)
 
+    def test_fitness_components_shape_submitted_fitness_and_diagnostics(self):
+        yane = NeuroEvolution()
+        yane.configure(1, 1)
+        yane.set_fitness_components([
+            FitnessComponent("nodes", lambda genome: len(genome.nodes), weight=0.5),
+        ])
+
+        yane.next_genome()
+        yane.submit_fitness(1.0)
+
+        best = yane.population.get_best()
+        self.assertEqual(best.fitness_component_values, (2,))
+        self.assertEqual(best.fitness, 2.0)
+        info = yane.population_memory_info()
+        self.assertIn("fitness_component_weights", info)
+        self.assertEqual(info["fitness_component_weights"]["weights"]["nodes"], 0.5)
+
+    def test_adaptive_component_weights_record_history_and_avoid_collapse(self):
+        yane = NeuroEvolution()
+        yane.configure(1, 1)
+        components = [
+            FitnessComponent("constant", lambda genome: 1.0, weight=1.9),
+            FitnessComponent("metric", lambda genome: getattr(genome, "test_metric", 0.0), weight=0.1),
+        ]
+        yane.set_fitness_components(components, mode="adaptive", adaptation_rate=1.0, collapse_floor=0.1)
+
+        g1 = yane.next_genome()
+        yane.submit_fitness(1.0)
+        g2 = g1.copy()
+        g2.test_metric = 10.0
+        yane.population._evaluated.append(g2)
+        yane.get_fitness_component_weights().scalarize(g2)
+        yane.population._stagnation_count = yane.population.stagnation_threshold
+
+        yane.get_fitness_component_weights().tick(yane.population)
+        diagnostics = yane.population_memory_info()["fitness_component_weights"]
+
+        self.assertEqual(diagnostics["last_reason"], "adaptive:stagnation")
+        self.assertGreaterEqual(len(diagnostics["history"]), 2)
+        total = sum(diagnostics["weights"].values())
+        for weight in diagnostics["weights"].values():
+            self.assertGreaterEqual(weight / total, 0.1 - 1e-9)
+
     def test_serialization_profile_smoke(self):
         result = profile_one(0, 1, repeats=1)
         self.assertGreater(result.pickle_bytes, 0)

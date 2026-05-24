@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from yane.evolution.fitness_sanitizer import FitnessSanitizer
     from yane.evolution.adaptive_controller import AdaptiveController
     from yane.evolution.operator_scheduler import OperatorScheduler
+    from yane.evolution.descriptors import AdaptiveFitnessComponentWeights
+    from yane.evolution.meta_adaptive import MetaAdaptivePolicyEvolver
 
 
 def _fitness_iqr(evaluated: list) -> float:
@@ -37,6 +39,8 @@ def build_population_info(
     n_early_stopped: int,
     adaptive_ctrl: "AdaptiveController | None" = None,
     operator_scheduler: "OperatorScheduler | None" = None,
+    fitness_component_weights: "AdaptiveFitnessComponentWeights | None" = None,
+    meta_adaptive: "MetaAdaptivePolicyEvolver | None" = None,
 ) -> dict:
     """Build the full diagnostics dict for a population snapshot."""
     all_genomes = population._evaluated + list(population._unevaluated)
@@ -205,6 +209,9 @@ def build_population_info(
         # Best genome topology history
         "best_topology_history": population._best_topology_history,
     }
+    if getattr(population, "_module_library", None) is not None:
+        info["module_library"] = population._module_library.diagnostics()
+        info["module_insert_rate"] = getattr(population, "_module_insert_rate", 0.0)
 
     # Population-wide average mutation rates
     evaluated = population._evaluated
@@ -296,5 +303,11 @@ def build_population_info(
         info["operator_scheduler"] = operator_scheduler.get_diagnostics()
     elif population._operator_scheduler is not None:
         info["operator_scheduler"] = population._operator_scheduler.get_diagnostics()
+
+    if fitness_component_weights is not None:
+        info["fitness_component_weights"] = fitness_component_weights.get_diagnostics()
+
+    if meta_adaptive is not None:
+        info["meta_adaptive_policies"] = meta_adaptive.get_diagnostics()
 
     return info

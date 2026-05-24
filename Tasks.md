@@ -29,57 +29,44 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Offene Tasks
 
-### P2 🔲 Evolvierbare Descriptor-Gewichte
-
-Descriptor-Registry und Fitness-Komponenten sind vorhanden. Evolvierbare oder
-adaptive Gewichtung ist noch Forschungsarbeit.
-
-Aufgaben:
-
-- Gewichtshistorie fuer Fitness-Komponenten speichern.
-- Adaptive Gewichtung bei Stagnation testen.
-- Descriptor-Kombinationen per Ablation benchmarken.
-- Mechanismus gegen Descriptor-Collapse entwerfen.
-
-### P2 🔲 Meta-adaptive Policies evolvieren
-
-Wenn die handgebauten adaptiven Policies stabil sind, koennen ihre Parameter
-selbst zum Evolutionsobjekt werden.
-
-Aufgaben:
-
-- Policy-Gene fuer Operator-Scheduler, Lamarck-Budget und Interspecies-Rate modellieren.
-- Policy-Gene pro Species und global vergleichen.
-- Sicherheitsgrenzen fuer extreme Policies einbauen.
-- Meta-Ablation: feste Policy vs handadaptive Policy vs evolvierte Policy.
-
-### P2 🔲 Modul-Crossover und Modulbibliothek
-
-Module koennen erkannt und dupliziert werden. Wiederverwendung ueber Genome und
-Laeufe hinweg ist noch offen.
-
-Aufgaben:
-
-- Modul-Crossover zwischen kompatiblen Subgraphen erforschen.
-- Gute Module in einer Bibliothek speichern.
-- Mutationsoperator: Modul aus Bibliothek einfuegen.
-- Diagnostics: Modulhaeufigkeit und Wiederverwendungsrate.
-
-### P2 🔲 Evolvierbare CPPNs
-
-Indirekte Kodierung kann Verbindungen aus Koordinaten erzeugen, aber die
-CPPN-Funktion selbst ist noch nicht evolvierbar.
-
-Aufgaben:
-
-- CPPN-Genome als eigene kleine Netzklasse oder normales YANE-Genome modellieren.
-- Weight-Pattern aus CPPN-Outputs erzeugen.
-- HyperNEAT-artige Substrate fuer Inputs/Outputs definieren.
-- Benchmark gegen direkte Kodierung auf regelmaessigen Aufgaben.
-
 ---
 
 ## Abgeschlossen
+
+### ✅ P2 Modul-Crossover und Modulbibliothek
+
+- `ModuleBlueprint` und `ModuleLibrary` speichern wiederverwendbare Hidden-Module.
+- `module_crossover()` kopiert kompatible Donor-Subgraphen in Recipient-Genome.
+- Optionaler Population-Mutationsoperator fuegt Module aus der Bibliothek ein.
+- `NeuroEvolution.set_module_library()` aktiviert Bibliothek und Insert-Rate.
+- Diagnostics melden Modulanzahl, Inserts, Uses und Wiederverwendungsrate.
+- Tests fuer Modul-Crossover, Bibliothek, Reinsert und Diagnostics.
+
+### ✅ P2 Evolvierbare CPPNs
+
+- `CPPNGenome` modelliert CPPNs als normale kleine YANE-Genome.
+- CPPN-Outputs erzeugen sparse Weight-Patterns ueber `generate_weight_pattern()`.
+- `hyperneat_substrate()` definiert Input/Hidden/Output-Substrate.
+- `generate_genome_from_cppn()` decodiert CPPN-Muster zu normalen YANE-Genomen.
+- `benchmarks/cppn_indirect_ablation.py` vergleicht direkte Kodierung mit CPPN-Substrat.
+- Tests fuer CPPN-Muster, Substrat-Genome und indirekte Genome-Generierung.
+
+### ✅ P2 Meta-adaptive Policies evolvieren
+
+- `PolicyGenes` fuer Operator-Exploration, Lamarck-Budget und Interspecies-Rate.
+- `MetaAdaptivePolicyEvolver` vergleicht globale und per-Species-Scores und mutiert Policy-Gene.
+- Sicherheitsgrenzen ueber `PolicyGeneBounds`, Clamping und begrenzte Operator-Gewichte.
+- `NeuroEvolution.set_meta_adaptive_policies()` aktiviert die Schicht und Diagnostics.
+- `benchmarks/meta_policy_ablation.py` vergleicht feste Policy, handadaptive Policy und evolvierte Policy.
+- Tests fuer API, Diagnostics, per-Species-Gene und Grenzwert-Clamping.
+
+### ✅ P2 Evolvierbare Descriptor-Gewichte
+
+- `AdaptiveFitnessComponentWeights` mit Gewichtshistorie, Diagnostics und Collapse-Floor.
+- `NeuroEvolution.set_fitness_components()` addiert optionale gewichtete Komponenten zur Task-Fitness.
+- Adaptive Updates laufen generationenweise bei Stagnation und nutzen Populationsvarianz/Kontributionsanteile.
+- `benchmarks/descriptor_weight_ablation.py` vergleicht Task-only, feste und adaptive Descriptor-Kombinationen.
+- Tests fuer Scalarization, Fitness-Shaping, Historie, Stagnationsupdate und Collapse-Schutz.
 
 ### ✅ P0 Adaptive Control Layer einfuehren
 

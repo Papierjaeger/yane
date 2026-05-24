@@ -13,12 +13,21 @@ zukünftigen Änderungen, um Regressionen und Verbesserungen zu erkennen.
 python -m yane.benchmarks.run_suite --fast
 python -m yane.benchmarks.forward_bench --sizes 10 50 200 1000
 python -m yane.benchmarks.compare_lamarck_modes --env Acrobot-v1 --modes hc nes sa cma_es
+python -m yane.benchmarks.descriptor_weight_ablation --max-iter 1000 --seeds 3
+python -m yane.benchmarks.meta_policy_ablation --max-iter 1000 --seeds 3
+python -m yane.benchmarks.cppn_indirect_ablation --max-iter 1000 --seeds 3
 ```
 
 - `run_suite.py`: Standard-Suite über mehrere Seeds.
 - `forward_bench.py`: Microbenchmarks für `forward()`.
 - `compare_lamarck_modes.py`: Vergleich von Hill-Climbing, NES, SA und CMA-ES auf
   Acrobot/LunarLander.
+- `descriptor_weight_ablation.py`: Vergleich von Task-only, festen und adaptiven
+  Descriptor-/Fitness-Komponenten auf XOR.
+- `meta_policy_ablation.py`: Vergleich von festen, handadaptiven und evolvierten
+  Policy-Parametern auf XOR.
+- `cppn_indirect_ablation.py`: Vergleich von direkter Kodierung und
+  CPPN-generierten HyperNEAT-Substraten auf XOR.
 
 ## Standardkonfiguration (sofern nicht anders angegeben)
 

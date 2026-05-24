@@ -21,6 +21,7 @@ from yane.evolution.compatibility import (  # noqa: F401 (re-exported for tests/
 from yane.evolution.multi_objective import pareto_scores
 from yane.evolution.quality_diversity import MAPElitesArchive
 from yane.evolution.operator_scheduler import OperatorScheduler
+from yane.evolution.modularity import ModuleLibrary
 
 # Module-level key functions — C-level attrgetter is ~2× faster than a Python
 # lambda for attribute access in max()/min()/sorted() calls.
@@ -194,6 +195,8 @@ class Population:
         # Adaptive Operator Scheduler — applies adaptive mutation weights.
         # Set to None to disable (default). Assigned by NeuroEvolution.
         self._operator_scheduler: OperatorScheduler | None = None
+        self._module_library: ModuleLibrary | None = None
+        self._module_insert_rate: float = 0.0
 
         # Quality Diversity / MAP-Elites archive. Descriptor function is
         # user-supplied via NeuroEvolution.set_quality_diversity().
@@ -228,6 +231,8 @@ class Population:
         self.__dict__.setdefault("_species_last_interspecies", {})
         self.__dict__.setdefault("_species_isolation_threshold", 100)
         self.__dict__.setdefault("_operator_scheduler", None)
+        self.__dict__.setdefault("_module_library", None)
+        self.__dict__.setdefault("_module_insert_rate", 0.0)
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
@@ -296,6 +301,9 @@ class Population:
             descriptor = self._qd_descriptor_fn(genome)
             if self._qd_archive.add(descriptor, genome, fitness):
                 self._n_qd_updates += 1
+
+        if self._module_library is not None:
+            self._module_library.add_from_genome(genome)
 
         # Assign to species immediately while fitness and topology are fresh.
         # _prune() (called below) handles removal from sp.members if the genome
@@ -1457,6 +1465,13 @@ class Population:
             self._operator_scheduler.apply_to_genome(child, child_sp_id)
 
         child.mutate(self._tracker)
+        if (
+            self._module_library is not None
+            and self._module_insert_rate > 0.0
+            and random.random() < self._module_insert_rate
+            and self._module_library.insert_into(child, self._tracker)
+        ):
+            child._mutation_types_fired.append("insert_module")
         if self._weight_clip is not None:
             w_max, b_max = self._weight_clip
             for node in child.nodes:
