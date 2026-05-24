@@ -5,14 +5,14 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0-Adaptive-Tasks und alle beschriebenen P1-Tasks abgeschlossen. Teststand: `699 passed`.
+**Aktueller Stand:** Alle P0- und P1-Tasks abgeschlossen. Teststand: `699 passed`.
 
-- Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging und Checkpoints: implementiert.
+- Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
 - AdaptiveController, OperatorScheduler, Lamarck-Budget, Interspecies-Trigger (Novelty/Isolation/Schutz): implementiert.
-- Adaptive Benchmark-Suite (`benchmarks/adaptive_suite.py`), GUI-Stability-Guard: implementiert.
-- Preset-Schema v2 mit `adaptive_policies`-Sektion, 4 adaptive Profilpresets, GUI-Round-Trip: implementiert.
-- Naechster Schwerpunkt: Release-Cleanup und API-Konsistenz, Pareto-Visualisierung polishen.
+- Adaptive Benchmark-Suite, GUI-Stability-Guard, Preset-Schema v2 mit `adaptive_policies`: implementiert.
+- Matrix-Forward-Integration, Checkpoint-State fuer Adaptive-Objekte: implementiert.
+- Naechster Schwerpunkt: Checkpoint-Format weiter haerten, P2-Forschungsfeatures.
 
 ## Legende
 
@@ -27,79 +27,27 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Offene Tasks
 
-### P1 ✅ Preset-System fuer adaptive Profile erweitern
+### P1 ⚡ Checkpoint-Format langfristig haerten
 
-Presets speichern aktuell nur Netzwerk-Hyperparameter. Adaptive Policies
-(`AdaptiveController`, `OperatorScheduler`, `LamarckBudget`, `InterspeciesMode`)
-sollten erstklassig in Presets mitgespeichert werden koennen.
-
-Aufgaben:
-
-- Preset-Schema um Abschnitt `adaptive_policies` erweitern (Versionierung, Validierung). ✅
-- Adaptive-Preset-Profile als Dateien anlegen: konservativ, balanciert, aggressiv, analysefreundlich. ✅
-- GUI-Preset-Editor: Save/Overwrite speichert auch adaptive Einstellungen. ✅
-- Beim Laden eines Presets werden adaptive Widgets automatisch befuellt. ✅
-- Preset-Name und adaptive Policy-State in Logs und Checkpoints mitschreiben. ✅
-
-Nutzen:
-
-- Adaptive Experimente werden reproduzierbar und zwischen Nutzern austauschbar.
-- GUI-Konfiguration wird schneller und weniger fehleranfaellig.
-
-### P1 ✅ Release-Cleanup und API-Konsistenz
-
-Nach vielen schnellen Feature-Adds sollte die oeffentliche Oberflaeche
-geglaettet werden.
+Checkpoint v2 mit Migration, Metadata-Sidecar und Adaptive-State ist
+implementiert. Fuer langfristige Robustheit fehlen noch einige Punkte.
 
 Aufgaben:
 
-- Public API auf Namenskonsistenz pruefen: `set_*`, `get_*`, Diagnostics-Keys. ✅
-- Adaptive Parameter einheitlich benennen: `*_mode`, `*_policy`, `*_min`, `*_max`, `*_budget`. ✅
-- README-Beispiele gegen aktuellen Code ausfuehren und aktualisieren. ✅
-- Veraltete Kommentare und Docstrings entfernen oder aktualisieren. ✅
-- Importpfade und `__all__` fuer neue Module (`adaptive_controller`, `operator_scheduler`) pruefen. ✅
-- Minimalen Release-Abschnitt in README ergaenzen. ✅
+- Kleine Fixture-Checkpoints fuer v1/v2 in Tests versionieren.
+- JSON-Metadaten in GUI/API sichtbar machen.
+- Optional: getrennte Speicherung von Config, Tracker, Population, QD-Archiv.
+- Import-Warnungen fuer fehlende Descriptor-Callbacks in GUI anzeigen.
+- Dokumentieren, welche Teile Pickle bleiben und warum.
+
+Bereits erledigt:
+
+- Checkpoint-State fuer `AdaptiveController` und `OperatorScheduler`. ✅
 
 Nutzen:
 
-- YANE wirkt nach aussen weniger wie ein Forschungsnotizbuch.
-- Neue Nutzer finden schneller den richtigen Einstieg.
-
-### P1 ✅ Pareto- und MAP-Elites-Visualisierung polishen
-
-Basisplots existieren. Fuer echte Analyse fehlen noch Interaktion und
-Export aus der GUI.
-
-Aufgaben:
-
-- Hover/Tooltip fuer Pareto-Punkte und MAP-Elites-Zellen. ✅
-- Export-Buttons fuer QD-Archiv (JSON/CSV) in der GUI. ✅
-- Farbschema fuer Fitness/Complexity klarer trennen. ✅
-- Pareto-Plotachsen beschriften und skalieren. ✅
-- Optional: Klick auf Zelle/Punkt zeigt Genome im Inspect-Tab.
-
-Nutzen:
-
-- QD- und Multi-Objective-Laeufe werden besser interpretierbar.
-- GUI wird als Analysewerkzeug staerker.
-
-### P1 ✅ Matrix-Forward automatisch im Training nutzen
-
-`MatrixGenome`, `MatrixForwardCache` und Batch-Helfer existieren. Der naechste
-Schritt ist die kontrollierte Integration in echte Evaluationspfade.
-
-Aufgaben:
-
-- Kompatible DAG-Subpopulationen waehrend Dataset-Evaluation erkennen. ✅
-- Matrixexport nur nutzen, wenn Batchgroesse und Topologie es rechtfertigen. ✅
-- Fallback auf `Genome.forward()` bei Zyklen, Memory oder unsupported Activation. ✅
-- Benchmark: sampleweises `forward()`, `forward_batch()`, Matrix-Forward.
-- Diagnostics fuer Matrix-Cache-Hits/Misses ergaenzen. ✅
-
-Nutzen:
-
-- Groessere supervised Aufgaben werden realistischer.
-- GPU-/CuPy-Pfad bekommt einen praktischen Einstiegspunkt.
+- Alte Laeufe bleiben langfristig nutzbar.
+- Checkpoints werden besser debugbar.
 
 ### P1 🔲 Remote/Distributed Evaluation konkretisieren
 
@@ -118,25 +66,6 @@ Nutzen:
 
 - Lange Simulationen koennen auf mehrere Prozesse oder Maschinen verteilt werden.
 - Saubere Grundlage fuer Cluster- oder Server-Experimente.
-
-### P1 ⚡ Checkpoint-Format langfristig haerten
-
-Checkpoint v2 mit Migration und Metadata-Sidecar ist implementiert. Langfristig
-sollten Payloads robuster und besser inspizierbar werden.
-
-Aufgaben:
-
-- Kleine Fixture-Checkpoints fuer v1/v2 in Tests versionieren.
-- JSON-Metadaten in GUI/API sichtbar machen.
-- Optional: getrennte Speicherung von Config, Tracker, Population, QD-Archiv.
-- Import-Warnungen fuer fehlende Descriptor-Callbacks in GUI anzeigen.
-- Checkpoint-State fuer `AdaptiveController` und `OperatorScheduler` pruefen und testen. ✅
-- Dokumentieren, welche Teile Pickle bleiben und warum.
-
-Nutzen:
-
-- Alte Laeufe bleiben langfristig nutzbar.
-- Checkpoints werden besser debugbar.
 
 ### P2 🔲 Evolvierbare Descriptor-Gewichte
 
@@ -188,17 +117,6 @@ Aufgaben:
 
 ---
 
-## Naechste empfohlene Reihenfolge
-
-1. **P1 Preset-System fuer adaptive Profile erweitern** — direkt auf neuem Adaptive-Code aufbauend
-2. **P1 Release-Cleanup und API-Konsistenz** — API glaetten, README-Beispiele aktualisieren
-3. **P1 Pareto- und MAP-Elites-Visualisierung polishen** — GUI als Analysewerkzeug staerken
-4. **P1 Checkpoint-Format langfristig haerten** — insb. AdaptiveController/OperatorScheduler-State
-5. **P1 Matrix-Forward automatisch im Training nutzen** — Performance-Gewinn fuer Dataset-Tasks
-6. **P1 Remote/Distributed Evaluation** — groessere Infrastrukturarbeit
-
----
-
 ## Abgeschlossen
 
 ### ✅ P0 Adaptive Control Layer einfuehren
@@ -241,33 +159,12 @@ Aufgaben:
 - `benchmarks/adaptive_suite.py`: 7 Konfigurationen (baseline → full_adaptive) auf XOR und CartPole.
 - Metriken: Loesung, Iterationen, Wall-Time, Best-Fitness, adaptive Diagnostics.
 
-### ✅ P1 Matrix-Forward automatisch im Training nutzen
+### ✅ P1 GUI-Stability-Analyse
 
-- `set_matrix_forward(enabled=True)` aktiviert transparente Matrix-Beschleunigung.
-- `_run_with_matrix_forward()` patcht `genome.__dict__['forward']` vor `fitness_fn` und stellt es danach zuverlaessig wieder her.
-- Fallback auf Standard-Forward bei inkompatiblen Genomen (Zyklen, Memory, unbekannte Aktivierung).
-- Diagnostics: `matrix_forward_hits` und `matrix_forward_misses` in `population_memory_info()`.
-- 6 neue Tests in `test_matrix_export.py`. 699 passed.
-
-### ✅ P1 Checkpoint: AdaptiveController und OperatorScheduler State
-
-- `save_checkpoint()` speichert jetzt `adaptive_ctrl`, `adaptive_ctrl_enabled`, `operator_scheduler`, `operator_scheduler_enabled`.
-- `load_checkpoint()` stellt diese wieder her; `_operator_scheduler` wird neu an die Population verdrahtet.
-- Rueckwaertskompatibel: Alte Checkpoints ohne diese Keys laden mit `enabled=False`.
-- 6 neue Tests in `test_checkpoint_migration.py`. 693 passed.
-
-### ✅ P1 Pareto- und MAP-Elites-Visualisierung polishen
-
-- `ParetoScatter`: Achsenbeschriftung (Min/Max-Ticks), Punkte farbig nach Fitness (blau→gruen), Hover-Tooltip mit Objectives/Fitness/Nodes/Connections.
-- `MapElitesHeatmap`: Hover-Tooltip mit Zell-Koordinaten und Fitness, Fitness-Range in Titelzeile.
-- `LeftPanel`: Export-Button fuer QD-Archiv (JSON und CSV), `_last_qd_cells` fuer spaetere Exporte gespeichert.
-- 5 neue GUI-Smoke-Tests. 687 passed.
-
-### ✅ P1 Release-Cleanup und API-Konsistenz
-
-- `__init__.py`: `AdaptiveController`, `AdaptiveSignals`, `FeaturePolicy`, `OperatorScheduler` zu `__all__` hinzugefuegt.
-- README: Abschnitt Adaptive Control Layer + Operator Scheduler ergaenzt, Projektstruktur aktualisiert, Presets-Abschnitt um `adaptive_policies` und Preset-Tabelle erweitert, Status-Abschnitt aktualisiert.
-- API-Namenskonsistenz bestaetigt: `set_*`/`get_*` konsistent, Diagnostics-Keys konsistent.
+- Crash-State-Snapshot alle 100 Iterationen nach `_crash_state.json`.
+- `ResourceGuard` fuer System- und Prozess-RAM.
+- Crash-Guard in `_update_adaptive_labels`.
+- Tests: alle Crash-State-Keys im `population_memory_info()`-Dict vorhanden.
 
 ### ✅ P1 Preset-System fuer adaptive Profile erweitern
 
@@ -275,11 +172,31 @@ Aufgaben:
 - 4 Preset-Dateien in `presets/`: `adaptive_konservativ`, `adaptive_balanciert`, `adaptive_aggressiv`, `adaptive_analysefreundlich`.
 - `_current_adaptive_policies()` und `_apply_adaptive_policies(ap)` in `TrainingTab`.
 - `_save_current_preset()` persistiert adaptive Einstellungen, `_on_preset_changed()` befuellt adaptive Widgets.
-- 11 neue Tests in `test_presets.py`, 2 neue GUI-Smoke-Tests in `test_gui_smoke.py`.
+- 11 neue Tests in `test_presets.py`, 2 neue GUI-Smoke-Tests.
 
-### ✅ P1 GUI-Stability-Analyse
+### ✅ P1 Release-Cleanup und API-Konsistenz
 
-- Crash-State-Snapshot alle 100 Iterationen nach `_crash_state.json`.
-- `ResourceGuard` fuer System- und Prozess-RAM.
-- Crash-Guard in `_update_adaptive_labels`.
-- Tests: alle Crash-State-Keys im `population_memory_info()`-Dict vorhanden.
+- `__init__.py`: `AdaptiveController`, `AdaptiveSignals`, `FeaturePolicy`, `OperatorScheduler` zu `__all__` hinzugefuegt.
+- README: Abschnitt Adaptive Control Layer + Operator Scheduler, Projektstruktur, Presets-Abschnitt mit `adaptive_policies`-Tabelle, Status-Sektion aktualisiert.
+- API-Namenskonsistenz bestaetigt.
+
+### ✅ P1 Pareto- und MAP-Elites-Visualisierung polishen
+
+- `ParetoScatter`: Achsenbeschriftung (Min/Max-Ticks), Punkte farbig nach Fitness (blau→gruen), Hover-Tooltip mit Objectives/Fitness/Nodes/Connections.
+- `MapElitesHeatmap`: Hover-Tooltip mit Zell-Koordinaten und Fitness, Fitness-Range in Titelzeile.
+- `LeftPanel`: Export-Button fuer QD-Archiv (JSON und CSV), `_last_qd_cells` fuer spaetere Exporte.
+- 5 neue GUI-Smoke-Tests.
+
+### ✅ P1 Checkpoint: AdaptiveController und OperatorScheduler State
+
+- `save_checkpoint()` speichert `adaptive_ctrl`, `adaptive_ctrl_enabled`, `operator_scheduler`, `operator_scheduler_enabled`.
+- `load_checkpoint()` stellt Zustand wieder her; `_operator_scheduler` wird neu an die Population verdrahtet.
+- Rueckwaertskompatibel: Alte Checkpoints ohne diese Keys laden mit `enabled=False`.
+- 6 neue Tests in `test_checkpoint_migration.py`.
+
+### ✅ P1 Matrix-Forward automatisch im Training nutzen
+
+- `set_matrix_forward(enabled=True)` aktiviert transparente Matrix-Beschleunigung per `genome.forward()`.
+- Automatischer Fallback bei inkompatiblen Genomen (Zyklen, Memory-Nodes, unbekannte Aktivierung).
+- Diagnostics: `matrix_forward_hits` und `matrix_forward_misses` in `population_memory_info()`.
+- 6 neue Tests in `test_matrix_export.py`.
