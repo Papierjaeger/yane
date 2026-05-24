@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from yane.evolution.population import Population
     from yane.evolution.lamarck_refiner import LamarckRefiner
     from yane.evolution.fitness_sanitizer import FitnessSanitizer
+    from yane.evolution.adaptive_controller import AdaptiveController
+    from yane.evolution.operator_scheduler import OperatorScheduler
 
 
 def _fitness_iqr(evaluated: list) -> float:
@@ -33,6 +35,8 @@ def build_population_info(
     n_evaluations: int,
     eval_aggregation: str,
     n_early_stopped: int,
+    adaptive_ctrl: "AdaptiveController | None" = None,
+    operator_scheduler: "OperatorScheduler | None" = None,
 ) -> dict:
     """Build the full diagnostics dict for a population snapshot."""
     all_genomes = population._evaluated + list(population._unevaluated)
@@ -150,6 +154,23 @@ def build_population_info(
         "lamarck_n_steps_total":    lamarck.n_steps_total,
         "lamarck_time_ms":          lamarck.time_ms,
         "lamarck_n_blocked_top_k":  lamarck.n_blocked_top_k,
+        "lamarck_n_improved":       getattr(lamarck, "n_improved", 0),
+        "lamarck_budget_per_gen":   getattr(lamarck, "budget_per_gen", None),
+        "lamarck_budget_used":      getattr(lamarck, "_budget_used_this_gen", 0),
+        "lamarck_budget_exhausted_count": getattr(lamarck, "_budget_exhausted_count", 0),
+        "lamarck_species_stats":    dict(getattr(lamarck, "_species_stats", {})),
+        # Interspecies crossover diagnostics (new)
+        "interspecies_n_offspring":  getattr(population, "_interspecies_n_offspring", 0),
+        "interspecies_n_improved":   getattr(population, "_interspecies_n_improved", 0),
+        "interspecies_n_rejected":   getattr(population, "_interspecies_n_rejected", 0),
+        "interspecies_success_rate": (
+            getattr(population, "_interspecies_n_improved", 0) /
+            max(1, getattr(population, "_interspecies_n_offspring", 1))
+            if getattr(population, "_interspecies_n_offspring", 0) > 0 else 0.0
+        ),
+        "interspecies_recent_fitness": list(
+            getattr(population, "_interspecies_offspring_fitness", [])[-10:]
+        ),
         "lamarck_per_species": [
             {
                 "species_idx": i,
@@ -265,5 +286,15 @@ def build_population_info(
             info["fitness_histogram"] = None
     else:
         info["fitness_histogram"] = None
+
+    # Adaptive Controller diagnostics
+    if adaptive_ctrl is not None:
+        info["adaptive_controller"] = adaptive_ctrl.get_diagnostics()
+
+    # Operator Scheduler diagnostics
+    if operator_scheduler is not None:
+        info["operator_scheduler"] = operator_scheduler.get_diagnostics()
+    elif population._operator_scheduler is not None:
+        info["operator_scheduler"] = population._operator_scheduler.get_diagnostics()
 
     return info

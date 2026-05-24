@@ -32,6 +32,67 @@ class LamarckRefiner:
         self.n_steps_total: int = 0
         self.time_ms: float = 0.0
         self.n_blocked_top_k: int = 0
+        # Per-optimizer improvement tracking
+        self.n_improved: int = 0    # refinements that actually improved fitness
+
+        # Cost budget: maximum Lamarck evaluations per generation.
+        # None = unlimited.  Resets each generation via reset_generation_budget().
+        self.budget_per_gen: int | None = None
+        self._budget_used_this_gen: int = 0
+        self._budget_exhausted_count: int = 0  # how many times budget ran out
+
+        # Per-species eligibility: set of species ids that should receive
+        # Lamarck refinement.  None = all species eligible (default).
+        self._eligible_species_ids: set[int] | None = None
+        # Per-species diagnostics: {species_id: {"applied": int, "steps": int, "improved": int}}
+        self._species_stats: dict[int, dict[str, int]] = {}
+
+    def set_budget(self, budget_per_gen: int | None) -> None:
+        """Set maximum Lamarck evaluations per generation. None = unlimited."""
+        self.budget_per_gen = budget_per_gen
+        self._budget_used_this_gen = 0
+
+    def reset_generation_budget(self) -> None:
+        """Reset the per-generation evaluation budget counter."""
+        self._budget_used_this_gen = 0
+
+    def _consume_budget(self, n_evals: int) -> bool:
+        """Record n_evals. Returns True if still within budget (or unlimited)."""
+        self._budget_used_this_gen += n_evals
+        if self.budget_per_gen is None:
+            return True
+        over = self._budget_used_this_gen > self.budget_per_gen
+        if over:
+            self._budget_exhausted_count += 1
+        return not over
+
+    @property
+    def budget_remaining(self) -> int | None:
+        """Remaining evaluations this generation, or None if unlimited."""
+        if self.budget_per_gen is None:
+            return None
+        return max(0, self.budget_per_gen - self._budget_used_this_gen)
+
+    def set_eligible_species(self, species_ids: set[int] | None) -> None:
+        """Restrict Lamarck refinement to given species ids. None = all."""
+        self._eligible_species_ids = species_ids
+
+    def is_eligible_for_species(self, species_id: int | None) -> bool:
+        """Return True if the genome's species is eligible for Lamarck refinement."""
+        if self._eligible_species_ids is None:
+            return True
+        if species_id is None:
+            return True  # no species assignment → allow refinement
+        return species_id in self._eligible_species_ids
+
+    def record_species_stats(self, species_id: int, n_steps: int, improved: bool) -> None:
+        """Update per-species diagnostics."""
+        if species_id not in self._species_stats:
+            self._species_stats[species_id] = {"applied": 0, "steps": 0, "improved": 0}
+        self._species_stats[species_id]["applied"] += 1
+        self._species_stats[species_id]["steps"] += n_steps
+        if improved:
+            self._species_stats[species_id]["improved"] += 1
 
     @property
     def mode(self) -> str:
@@ -177,9 +238,14 @@ class LamarckRefiner:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
         t0 = time.perf_counter()
-        best_fitness = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
+        baseline_f = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
+        best_fitness = baseline_f
+        n_evals = 0 if baseline_fitness is not None else 1
 
         for _ in range(steps):
+            if not self._consume_budget(1):
+                break
+            n_evals += 1
             saved_weights = [c.weight for c in conns]
             saved_biases  = [n.bias   for n in nodes]
             for c in conns:
@@ -196,6 +262,8 @@ class LamarckRefiner:
                     n.bias = b
 
         self.time_ms += (time.perf_counter() - t0) * 1000.0
+        if best_fitness > baseline_f:
+            self.n_improved += 1
         return best_fitness
 
     def refine_cma_es(

@@ -20,6 +20,7 @@ from yane.evolution.compatibility import (  # noqa: F401 (re-exported for tests/
 )
 from yane.evolution.multi_objective import pareto_scores
 from yane.evolution.quality_diversity import MAPElitesArchive
+from yane.evolution.operator_scheduler import OperatorScheduler
 
 # Module-level key functions — C-level attrgetter is ~2× faster than a Python
 # lambda for attribute access in max()/min()/sorted() calls.
@@ -152,6 +153,15 @@ class Population:
         self._interspecies_crossover_max: float = 0.2
         self._interspecies_crossover_current: float = 0.0
         self._interspecies_crossover_last_reason: str = "fixed"
+        # Cross-species success diagnostics
+        self._interspecies_n_offspring: int = 0
+        self._interspecies_n_improved: int = 0
+        self._interspecies_n_rejected: int = 0   # rejected due to protection rules
+        self._interspecies_offspring_fitness: list[float] = []   # recent offspring fitnesses
+        self._interspecies_offspring_fitness_max: int = 50
+        # Species isolation tracking: spawn_count at last interspecies event per species id
+        self._species_last_interspecies: dict[int, int] = {}
+        self._species_isolation_threshold: int = 100  # spawn cycles without interspecies event
 
         # Best-genome topology history — one entry per fitness improvement.
         # Each entry: (total_submitted, n_nodes, n_connections, fitness)
@@ -181,6 +191,10 @@ class Population:
         self._crossover_enabled: bool = True
         self._diversity_injection_enabled: bool = True
 
+        # Adaptive Operator Scheduler — applies adaptive mutation weights.
+        # Set to None to disable (default). Assigned by NeuroEvolution.
+        self._operator_scheduler: OperatorScheduler | None = None
+
         # Quality Diversity / MAP-Elites archive. Descriptor function is
         # user-supplied via NeuroEvolution.set_quality_diversity().
         self._qd_enabled: bool = False
@@ -206,6 +220,14 @@ class Population:
             self.__dict__.get("_interspecies_crossover_rate", 0.0),
         )
         self.__dict__.setdefault("_interspecies_crossover_last_reason", "fixed")
+        self.__dict__.setdefault("_interspecies_n_offspring", 0)
+        self.__dict__.setdefault("_interspecies_n_improved", 0)
+        self.__dict__.setdefault("_interspecies_n_rejected", 0)
+        self.__dict__.setdefault("_interspecies_offspring_fitness", [])
+        self.__dict__.setdefault("_interspecies_offspring_fitness_max", 50)
+        self.__dict__.setdefault("_species_last_interspecies", {})
+        self.__dict__.setdefault("_species_isolation_threshold", 100)
+        self.__dict__.setdefault("_operator_scheduler", None)
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
@@ -322,6 +344,20 @@ class Population:
             self._since_last_injection += 1
             self._topology_stagnation_count += 1
 
+        # ── Interspecies offspring success tracking ───────────────────────
+        interspecies_parent_fit = getattr(genome, '_interspecies_parent_fitness', None)
+        if interspecies_parent_fit is not None:
+            self._interspecies_n_offspring += 1
+            if fitness >= interspecies_parent_fit:
+                self._interspecies_n_improved += 1
+            self._interspecies_offspring_fitness.append(fitness)
+            if len(self._interspecies_offspring_fitness) > self._interspecies_offspring_fitness_max:
+                self._interspecies_offspring_fitness.pop(0)
+            # Rolling window to prevent unbounded counters
+            if self._interspecies_n_offspring >= 100:
+                self._interspecies_n_offspring //= 2
+                self._interspecies_n_improved //= 2
+
         # ── Mutation success tracking ─────────────────────────────────────
         # Track which mutation types led to fitness improvements.
         # "Improvement" = child fitness >= parent fitness.
@@ -389,13 +425,43 @@ class Population:
         if self._target_species > 0 and len(self._species) < self._target_species:
             scarcity_pressure = 0.5 * (1.0 - len(self._species) / self._target_species)
 
-        pressure = max(global_pressure, species_pressure, scarcity_pressure)
+        # Novelty trigger: low novelty means the population behavior has converged
+        novelty_pressure = 0.0
+        if self._novelty_cache:
+            mean_novelty = sum(self._novelty_cache.values()) / len(self._novelty_cache)
+            # pressure rises when mean novelty drops below 0.3 (converging population)
+            novelty_pressure = max(0.0, (0.3 - mean_novelty) / 0.3) * 0.6
+
+        # Isolation trigger: species that haven't participated in interspecies
+        # crossover for a long time contribute isolation pressure
+        isolation_pressure = 0.0
+        if self._spawn_count > 0:
+            n_isolated = sum(
+                1 for sp in self._species
+                if (self._spawn_count - self._species_last_interspecies.get(id(sp), 0))
+                >= self._species_isolation_threshold
+            )
+            isolation_pressure = min(0.5, n_isolated / max(1, len(self._species)))
+
+        pressure = max(global_pressure, species_pressure, scarcity_pressure,
+                       novelty_pressure, isolation_pressure)
+
+        # Protection: if recent interspecies offspring underperform, reduce rate
+        if self._interspecies_n_offspring >= 10:
+            success_rate = self._interspecies_n_improved / self._interspecies_n_offspring
+            if success_rate < 0.15:
+                pressure *= 0.5
+
         lo = self._interspecies_crossover_min
         hi = self._interspecies_crossover_max
         rate = lo + (hi - lo) * pressure
         self._interspecies_crossover_current = rate
         if pressure <= 0.0:
             reason = "adaptive:baseline"
+        elif pressure == novelty_pressure and novelty_pressure >= max(global_pressure, species_pressure):
+            reason = "adaptive:low_novelty"
+        elif pressure == isolation_pressure and isolation_pressure >= max(global_pressure, species_pressure):
+            reason = "adaptive:species_isolation"
         elif pressure == global_pressure:
             reason = "adaptive:global_stagnation"
         elif pressure == species_pressure:
@@ -1225,6 +1291,8 @@ class Population:
         if self._spawn_count % max(1, self.max_size // 2) == 0:
             self._apply_mutation_success_weights()
             self._apply_species_mutation_biases()
+            if self._operator_scheduler is not None:
+                self._operator_scheduler.tick(self)
 
         if self._diversity_injection_enabled:
             if self._since_last_injection >= self.stagnation_threshold:
@@ -1309,15 +1377,42 @@ class Population:
                     (sp for sp in self._species if parent in sp.members),
                     None,
                 )
-                other_species_members = [
-                    g for sp in self._species
+                # Protection: don't cross with very young or highly-stagnant species
+                # to avoid destabilising stable lineages.
+                stag_threshold = max(1, self.stagnation_threshold)
+                eligible_species = [
+                    sp for sp in self._species
                     if sp is not parent_sp
+                    and sp.stagnation_count < stag_threshold * 1.5  # not too stagnant
+                ]
+                if not eligible_species:
+                    eligible_species = [sp for sp in self._species if sp is not parent_sp]
+                other_species_members = [
+                    g for sp in eligible_species
                     for g in sp.members
                     if g is not parent
                 ]
+                # Additional protection: elites should not be used as interspecies second
+                # parent if their fitness is much higher — avoid diluting elite genomes.
+                best_fitness = self._best_fitness_seen
+                if best_fitness > float('-inf') and other_species_members:
+                    non_elite_candidates = [
+                        g for g in other_species_members
+                        if g.fitness < best_fitness * 0.95  # not an elite
+                    ]
+                    if non_elite_candidates:
+                        other_species_members = non_elite_candidates
                 candidates = other_species_members or [g for g in self._evaluated if g is not parent]
                 other = random.choice(candidates)
                 self._n_interspecies_crossover += 1
+                # Update isolation tracking for both species
+                if parent_sp is not None:
+                    self._species_last_interspecies[id(parent_sp)] = self._spawn_count
+                other_sp = next((sp for sp in self._species if other in sp.members), None)
+                if other_sp is not None:
+                    self._species_last_interspecies[id(other_sp)] = self._spawn_count
+                # Mark child so submit() can track success
+                _interspecies_parent_fitness = max(parent.fitness, other.fitness)
             else:
                 sp_members = next(
                     (sp.members for sp in self._species if parent in sp.members),
@@ -1330,8 +1425,13 @@ class Population:
             fitter, weaker = (parent, other) if parent.fitness >= other.fitness else (other, parent)
             child = fitter.crossover(weaker)
             self._n_crossover += 1
+            if use_interspecies:
+                child._interspecies_parent_fitness = _interspecies_parent_fitness
+            else:
+                child._interspecies_parent_fitness = None
         else:
             child = parent.copy()
+            child._interspecies_parent_fitness = None
             self._n_mutation_only += 1
 
         # Apply per-species mutation biases before mutating.
@@ -1350,6 +1450,11 @@ class Population:
                 bias = parent_sp.mutation_biases.get(mt, 1.0)
                 gene = getattr(child, gene_attr)
                 gene.bool_rate = max(Mutation.MIN_RATE, min(0.999, gene.bool_rate * bias))
+
+        # Apply operator scheduler weights before mutating.
+        if self._operator_scheduler is not None:
+            child_sp_id = id(parent_sp) if parent_sp is not None else None
+            self._operator_scheduler.apply_to_genome(child, child_sp_id)
 
         child.mutate(self._tracker)
         if self._weight_clip is not None:

@@ -175,24 +175,6 @@ Nutzen:
 - Adaptive Experimente werden reproduzierbar.
 - GUI-Konfiguration wird schneller und weniger fehleranfaellig.
 
-### P1 🔲 Stabilitaetslauf fuer GUI-Regression 2->2
-
-Die offenen Crash-Logs deuten darauf hin, dass laengere GUI-Laeufe weiterhin
-gesondert beobachtet werden sollten.
-
-Aufgaben:
-
-- Crash-Logs unter `logs/gui/Regression 2->2/...` auswerten.
-- Reproduzierbaren GUI-Run fuer Regression 2->2 definieren.
-- Headless/CLI-nahe Reproduktion bauen, falls der Crash nicht rein Qt-seitig ist.
-- Crash-State-Snapshots und `run.log` mit Worker-Modus, Preset und adaptiven Feature-Flags korrelieren.
-- Fix oder Guard implementieren, wenn eine konkrete Ursache sichtbar wird.
-
-Nutzen:
-
-- Erhoeht Vertrauen in lange GUI-Trainingslaeufe.
-- Verhindert, dass neue adaptive Features alte Stabilitaetsprobleme ueberdecken.
-
 ### P1 🔲 Release-Cleanup und API-Konsistenz
 
 Nach vielen schnellen Feature-Adds sollte die oeffentliche Oberflaeche einmal

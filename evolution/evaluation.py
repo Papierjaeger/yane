@@ -115,7 +115,11 @@ class EvaluationRunner:
         # Runs outside the elapsed_ms window so efficiency-penalty sees only the
         # actual eval time, not the hill-climbing overhead.
         n_lamarck_steps = 0
-        if lamarck.steps > 0:
+        sp = population.get_species_for_genome(genome)
+        species_id = id(sp) if sp is not None else None
+        _lamarck_eligible = lamarck.is_eligible_for_species(species_id)
+
+        if lamarck.steps > 0 and _lamarck_eligible:
             if lamarck.nes_mode:
                 refine_fn = lamarck.refine_nes
             elif lamarck.sa_mode:
@@ -128,10 +132,11 @@ class EvaluationRunner:
             n_lamarck_steps = lamarck.steps
             lamarck.n_applied += 1
             lamarck.n_steps_total += lamarck.steps
-            sp = population.get_species_for_genome(genome)
             if sp is not None:
                 sp.lamarck_n_applied += 1
                 sp.lamarck_n_steps_total += lamarck.steps
+            if species_id is not None:
+                lamarck.record_species_stats(species_id, lamarck.steps, improved=False)
 
         start = time.perf_counter()
         raw: list[float] = []
@@ -176,11 +181,11 @@ class EvaluationRunner:
 
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-        if lamarck.steps == 0:
+        if lamarck.steps == 0 and _lamarck_eligible:
             # Adaptive Lamarck fires after the baseline is known, only when
             # stagnation pressure is high.
             n_steps = lamarck.adaptive_steps(genome, fitness, population)
-            if n_steps > 0:
+            if n_steps > 0 and lamarck._consume_budget(n_steps):
                 if lamarck.nes_mode:
                     refine_fn = lamarck.refine_nes
                 elif lamarck.sa_mode:
@@ -189,18 +194,21 @@ class EvaluationRunner:
                     refine_fn = lamarck.refine_cma_es
                 else:
                     refine_fn = lamarck.refine
+                old_fitness = fitness
                 fitness = refine_fn(
                     genome, fitness_fn,
                     baseline_fitness=fitness,
                     n_steps=n_steps,
                 )
+                improved = fitness > old_fitness
                 n_lamarck_steps = n_steps
                 lamarck.n_applied += 1
                 lamarck.n_steps_total += n_steps
-                sp = population.get_species_for_genome(genome)
                 if sp is not None:
                     sp.lamarck_n_applied += 1
                     sp.lamarck_n_steps_total += n_steps
+                if species_id is not None:
+                    lamarck.record_species_stats(species_id, n_steps, improved)
 
         return EvaluationResult(
             genome=genome,

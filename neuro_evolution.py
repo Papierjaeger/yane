@@ -33,6 +33,8 @@ from yane.evolution.multi_objective import as_objectives
 from yane.evolution.quality_diversity import MAPElitesArchive
 from yane.util.resource_guard import ResourceGuard
 from yane.evolution.curriculum import Curriculum, CurriculumStage  # noqa: F401
+from yane.evolution.adaptive_controller import AdaptiveController
+from yane.evolution.operator_scheduler import OperatorScheduler
 
 # Re-export for gui/worker.py backwards compatibility
 _aggregate_fitnesses = aggregate_fitnesses
@@ -76,6 +78,15 @@ class NeuroEvolution:
         self._n_workers: int = 1
         # Lamarckian refinement
         self._lamarck = LamarckRefiner()
+        self._lamarck_eligible_species_indices: list[int] | None = None
+
+        # Adaptive Control Layer
+        self._adaptive_ctrl: AdaptiveController = AdaptiveController()
+        self._adaptive_ctrl_enabled: bool = False
+
+        # Operator Scheduler
+        self._operator_scheduler: OperatorScheduler = OperatorScheduler()
+        self._operator_scheduler_enabled: bool = False
         # Multi-eval + early stopping
         self._runner = EvaluationRunner()
         # Elitism (applied to population on configure())
@@ -225,6 +236,10 @@ class NeuroEvolution:
         self._population._qd_enabled = self._qd_enabled
         self._population._qd_archive = self._qd_archive
         self._population._qd_descriptor_fn = self._qd_descriptor_fn
+        # Wire operator scheduler
+        self._population._operator_scheduler = (
+            self._operator_scheduler if self._operator_scheduler_enabled else None
+        )
         self._qd_enabled = getattr(self._population, "_qd_enabled", self._qd_enabled)
         self._qd_archive = getattr(self._population, "_qd_archive", self._qd_archive)
         self._qd_descriptor_fn = getattr(self._population, "_qd_descriptor_fn", self._qd_descriptor_fn)
@@ -544,6 +559,84 @@ class NeuroEvolution:
             self._lamarck.cma_mode = False
             self._lamarck.set_adaptive(max_steps, top_k, sigma)
 
+    def set_lamarck_budget(self, budget_per_gen: int | None) -> None:
+        """Limit Lamarck refinement to at most budget_per_gen evaluations per generation.
+
+        When the budget is exhausted within a generation, further genomes in that
+        generation are not refined.  The counter resets at the start of each generation.
+        None (default) = unlimited.
+
+        Args:
+            budget_per_gen: Maximum extra fitness evaluations for Lamarck per generation.
+                            None = no limit.
+        """
+        self._lamarck.set_budget(budget_per_gen)
+
+    def set_lamarck_per_species(
+        self,
+        enabled_species: list[int] | None = None,
+    ) -> None:
+        """Restrict Lamarck refinement to specific species by their array index.
+
+        This allows per-species decisions: species 0 might be refined while
+        species 1 and 2 evolve by mutation only.
+
+        Args:
+            enabled_species: List of species *indices* (position in population._species)
+                             that should receive Lamarck refinement.  None (default) = all
+                             species are eligible.
+
+        Note: species indices change as species are born and die.  This is most
+        useful when combined with stable speciation (high min_species_age).
+        The setting is applied at evaluation time and re-evaluated each generation.
+        """
+        if enabled_species is None:
+            self._lamarck_eligible_species_indices: list[int] | None = None
+        else:
+            self._lamarck_eligible_species_indices = list(enabled_species)
+
+    def set_adaptive_control(self, enabled: bool = True) -> None:
+        """Enable or disable the central Adaptive Control Layer.
+
+        When enabled, the AdaptiveController automatically ticks each generation
+        and adjusts interspecies crossover, QD pressure, pruning, and Lamarck
+        budget based on unified population signals (plateau, diversity, etc.).
+
+        Individual feature policies can be configured via
+        ``get_adaptive_controller().configure_*()``.
+        """
+        self._adaptive_ctrl_enabled = enabled
+        if enabled and self._population is not None:
+            # Sync population's interspecies policy into the controller
+            pop = self._population
+            self._adaptive_ctrl.configure_interspecies_crossover(
+                mode=pop._interspecies_crossover_mode,
+                fixed_rate=pop._interspecies_crossover_rate,
+                min_rate=pop._interspecies_crossover_min,
+                max_rate=pop._interspecies_crossover_max,
+            )
+
+    def get_adaptive_controller(self) -> AdaptiveController:
+        """Return the AdaptiveController for advanced configuration."""
+        return self._adaptive_ctrl
+
+    def set_operator_scheduler(self, enabled: bool = True) -> None:
+        """Enable or disable the adaptive Operator Scheduler.
+
+        When enabled, mutation operator weights are automatically adjusted
+        each generation based on operator success rates and population signals.
+        Use ``get_operator_scheduler()`` for detailed configuration.
+        """
+        self._operator_scheduler_enabled = enabled
+        if self._population is not None:
+            self._population._operator_scheduler = (
+                self._operator_scheduler if enabled else None
+            )
+
+    def get_operator_scheduler(self) -> OperatorScheduler:
+        """Return the OperatorScheduler for advanced configuration."""
+        return self._operator_scheduler
+
     def set_curriculum(
         self,
         stages: list,
@@ -761,6 +854,7 @@ class NeuroEvolution:
         self._n_evaluations_done = 0
         stop_reason: str | None = None
         iterations = 0
+        _gen_size = max(1, self._population_size)  # generation boundary for periodic ticks
         while True:
             genome = self._population.select_for_evaluation()
 
@@ -769,6 +863,12 @@ class NeuroEvolution:
             self._population.submit(genome, fitness, result.elapsed_ms)
             iterations += 1
             self._n_evaluations_done += self._runner.n_evaluations
+
+            # Tick adaptive components once per generation
+            if iterations % _gen_size == 0:
+                if self._adaptive_ctrl_enabled:
+                    self._adaptive_ctrl.tick(self._population, self._lamarck)
+                self._lamarck.reset_generation_budget()
 
             # --- Periodic CSV logging ---------------------------------------
             if iterations % _log_interval == 0:
@@ -951,6 +1051,8 @@ class NeuroEvolution:
             self._runner.n_evaluations,
             self._runner.aggregation,
             self._runner.n_early_stopped,
+            adaptive_ctrl=self._adaptive_ctrl if self._adaptive_ctrl_enabled else None,
+            operator_scheduler=self._operator_scheduler if self._operator_scheduler_enabled else None,
         )
         if self._curriculum is not None:
             info.update(self._curriculum.info())

@@ -579,6 +579,117 @@ class TrainingTab(QWidget):
         layout.addWidget(cfg)
         layout.addWidget(advance_grp)
 
+        # --- Adaptive Control Section ---
+        adaptive_grp = CollapsibleGroup("Adaptive Control", collapsed=True)
+
+        # Interspecies Crossover live display
+        self.lbl_interspecies_live = _label("—", "mutRate")
+        self.lbl_interspecies_live.setToolTip(
+            "Live-Rate des adaptiven Interspecies-Crossovers.\n"
+            "Steigt bei Stagnation, niedrigem Novelty oder Species-Isolation.\n"
+            "Sinkt wenn Crossover-Offspring schlechter abschneiden als die Eltern.")
+
+        self.lbl_interspecies_trigger = _label("—", "sectionTitle")
+        self.lbl_interspecies_trigger.setWordWrap(True)
+        self.lbl_interspecies_trigger.setToolTip("Letzter Grund für die adaptive Rate-Anpassung.")
+
+        interspecies_live_row = QWidget()
+        interspecies_live_lay = QHBoxLayout(interspecies_live_row)
+        interspecies_live_lay.setContentsMargins(0, 0, 0, 0)
+        interspecies_live_lay.setSpacing(6)
+        interspecies_live_lay.addWidget(self.lbl_interspecies_live)
+        interspecies_live_lay.addWidget(QLabel("→"))
+        interspecies_live_lay.addWidget(self.lbl_interspecies_trigger, stretch=1)
+        adaptive_grp.addRow("Interspecies rate:", interspecies_live_row)
+
+        # Interspecies success diagnostics
+        self.lbl_interspecies_success = _label("—", "mutRate")
+        self.lbl_interspecies_success.setToolTip(
+            "Erfolgsrate Interspecies-Crossover: Anteil der Offspring, die besser\n"
+            "als ihre Eltern sind. Niedrig = Protection wird aktiv (Rate wird gesenkt).")
+        adaptive_grp.addRow("Cross-species success:", self.lbl_interspecies_success)
+
+        # Adaptive Controller
+        self.chk_adaptive_ctrl = QCheckBox("aktiv")
+        self.chk_adaptive_ctrl.setChecked(False)
+        self.chk_adaptive_ctrl.setToolTip(
+            "Aktiviert den zentralen Adaptive Control Layer.\n"
+            "Tick pro Generation: Interspecies-Crossover, QD-Druck, Pruning und\n"
+            "Lamarck-Budget werden anhand von Plateau, Diversität und Novelty gesteuert.")
+        adaptive_grp.addRow("Adaptive Control Layer:", self.chk_adaptive_ctrl)
+
+        # Operator Scheduler
+        self.chk_operator_scheduler = QCheckBox("aktiv")
+        self.chk_operator_scheduler.setChecked(False)
+        self.chk_operator_scheduler.setToolTip(
+            "Aktiviert den adaptiven Operator-Scheduler.\n"
+            "Mutationsgewichte (Add-Node, Remove, Rewire usw.) werden anhand\n"
+            "von Erfolgsraten pro Operator und Species automatisch dosiert.\n"
+            "Pruning-Druck steigt bei Komplexitäts-Wachstum + Stagnation.")
+        adaptive_grp.addRow("Operator Scheduler:", self.chk_operator_scheduler)
+
+        # Lamarck budget
+        self.spin_lamarck_budget = QSpinBox()
+        self.spin_lamarck_budget.setRange(0, 10000)
+        self.spin_lamarck_budget.setValue(0)
+        self.spin_lamarck_budget.setSpecialValueText("—")
+        self.spin_lamarck_budget.setToolTip(
+            "Maximale Lamarck-Evaluierungen pro Generation.\n"
+            "0 = unbegrenzt (Standard).\n"
+            "z.B. 50 = nach 50 Lamarck-Schritten werden weitere Genome\n"
+            "in dieser Generation nicht verfeinert.\n"
+            "Verhindert, dass Lamarck das gesamte Evaluierungsbudget verbraucht.")
+        self.lbl_lamarck_budget_used = _label("—", "mutRate")
+        self.lbl_lamarck_budget_used.setToolTip("Verwendete Lamarck-Schritte in der aktuellen Generation.")
+        lamarck_budget_row = QWidget()
+        lamarck_budget_lay = QHBoxLayout(lamarck_budget_row)
+        lamarck_budget_lay.setContentsMargins(0, 0, 0, 0)
+        lamarck_budget_lay.setSpacing(4)
+        lamarck_budget_lay.addWidget(self.spin_lamarck_budget)
+        lamarck_budget_lay.addWidget(QLabel("benutzt:"))
+        lamarck_budget_lay.addWidget(self.lbl_lamarck_budget_used)
+        adaptive_grp.addRow("Lamarck budget/gen:", lamarck_budget_row)
+
+        # Adaptive Presets
+        self.combo_adaptive_preset = QComboBox()
+        self.combo_adaptive_preset.addItems([
+            "Kein Preset",
+            "Konservativ",
+            "Balanciert",
+            "Aggressiv",
+            "Analysefreundlich",
+        ])
+        self.combo_adaptive_preset.setToolTip(
+            "Adaptive Profile:\n\n"
+            "Konservativ: Interspecies-Crossover fix, kein Operator-Scheduler.\n"
+            "  Gut für stabile, langsame Tasks.\n\n"
+            "Balanciert: Adaptiver Interspecies-Crossover (0.01–0.15),\n"
+            "  Operator-Scheduler aktiv, moderate Pruning-Pressung.\n\n"
+            "Aggressiv: Breite Interspecies-Rate (0.02–0.30),\n"
+            "  starker Operator-Scheduler, hoher QD-Druck bei Plateau.\n\n"
+            "Analysefreundlich: Alle adaptiven Features aktiv,\n"
+            "  aber konservative Grenzen für reproduzierbare Läufe.")
+        self.combo_adaptive_preset.currentIndexChanged.connect(self._on_adaptive_preset_changed)
+        adaptive_grp.addRow("Adaptives Profil:", self.combo_adaptive_preset)
+
+        # Adaptive signals display
+        self.lbl_plateau_ratio = _label("—", "mutRate")
+        self.lbl_plateau_ratio.setToolTip("Plateau-Ratio: Stagnation_count / Stagnation_threshold. 1.0 = volle Stagnation.")
+        self.lbl_diversity_score = _label("—", "mutRate")
+        self.lbl_diversity_score.setToolTip("Diversity-Score: Durchschnittliche Novelty der Population.")
+        signals_row = QWidget()
+        signals_lay = QHBoxLayout(signals_row)
+        signals_lay.setContentsMargins(0, 0, 0, 0)
+        signals_lay.setSpacing(6)
+        signals_lay.addWidget(QLabel("Plateau:"))
+        signals_lay.addWidget(self.lbl_plateau_ratio)
+        signals_lay.addWidget(QLabel("  Diversity:"))
+        signals_lay.addWidget(self.lbl_diversity_score)
+        signals_lay.addStretch()
+        adaptive_grp.addRow("Adaptive Signale:", signals_row)
+
+        layout.addWidget(adaptive_grp)
+
         # --- Controls ---
         ctrl = QWidget()
         ctrl_row = QHBoxLayout(ctrl)
@@ -851,6 +962,36 @@ class TrainingTab(QWidget):
         self.preset_combo.setCurrentIndex(idx)
         self.status_lbl.setText(f"Preset saved: {path.name}")
 
+    def _on_adaptive_preset_changed(self, index: int) -> None:
+        preset_name = self.combo_adaptive_preset.currentText()
+        if preset_name == "Konservativ":
+            self.combo_interspecies_mode.setCurrentText("Fix")
+            self.dspin_interspecies.setValue(0.05)
+            self.chk_adaptive_ctrl.setChecked(False)
+            self.chk_operator_scheduler.setChecked(False)
+            self.spin_lamarck_budget.setValue(0)
+        elif preset_name == "Balanciert":
+            self.combo_interspecies_mode.setCurrentText("Adaptiv")
+            self.dspin_interspecies.setValue(0.01)
+            self.dspin_interspecies_max.setValue(0.15)
+            self.chk_adaptive_ctrl.setChecked(True)
+            self.chk_operator_scheduler.setChecked(True)
+            self.spin_lamarck_budget.setValue(0)
+        elif preset_name == "Aggressiv":
+            self.combo_interspecies_mode.setCurrentText("Adaptiv")
+            self.dspin_interspecies.setValue(0.02)
+            self.dspin_interspecies_max.setValue(0.30)
+            self.chk_adaptive_ctrl.setChecked(True)
+            self.chk_operator_scheduler.setChecked(True)
+            self.spin_lamarck_budget.setValue(0)
+        elif preset_name == "Analysefreundlich":
+            self.combo_interspecies_mode.setCurrentText("Adaptiv")
+            self.dspin_interspecies.setValue(0.01)
+            self.dspin_interspecies_max.setValue(0.20)
+            self.chk_adaptive_ctrl.setChecked(True)
+            self.chk_operator_scheduler.setChecked(True)
+            self.spin_lamarck_budget.setValue(100)
+
     def _on_multi_eval_changed(self, value: int) -> None:
         enabled = value > 1
         self.combo_aggregation.setEnabled(enabled)
@@ -931,6 +1072,17 @@ class TrainingTab(QWidget):
                 self._yane.set_lamarck_adaptive(mode=lamarck_optimizer)
             elif lamarck_schedule == "Aus":
                 self._yane.set_lamarck_adaptive(max_steps=0)
+
+            # Lamarck budget
+            lamarck_budget = self.spin_lamarck_budget.value()
+            self._yane.set_lamarck_budget(lamarck_budget if lamarck_budget > 0 else None)
+
+            # Adaptive Control Layer
+            self._yane.set_adaptive_control(self.chk_adaptive_ctrl.isChecked())
+
+            # Operator Scheduler
+            self._yane.set_operator_scheduler(self.chk_operator_scheduler.isChecked())
+
             n_eval = self.spin_multi_eval.value()
             if n_eval > 1:
                 self._yane.set_multi_eval(
@@ -1184,6 +1336,7 @@ class TrainingTab(QWidget):
         self.genome_updated.emit(best_genome, mem, do_heavy)
         self._update_ram_bar()
         self.btn_run_best.setEnabled(self.btn_run_best.isVisible())
+        self._update_adaptive_labels(mem)
 
     def _run_best_episode(self) -> None:
         if self._episode_runner and self._episode_runner.isRunning():
@@ -1334,6 +1487,46 @@ class TrainingTab(QWidget):
         self._update_ram_bar()
         self._worker = None
         self._yane = None
+
+    def _update_adaptive_labels(self, mem: dict) -> None:
+        """Update live display of adaptive control diagnostics."""
+        try:
+            # Interspecies crossover
+            current_rate = mem.get("interspecies_crossover_current", None)
+            if current_rate is not None:
+                self.lbl_interspecies_live.setText(f"{current_rate:.3f}")
+            reason = mem.get("interspecies_crossover_last_reason", "—")
+            self.lbl_interspecies_trigger.setText(reason)
+
+            # Cross-species success
+            n_offspring = mem.get("interspecies_n_offspring", 0)
+            n_improved = mem.get("interspecies_n_improved", 0)
+            if n_offspring > 0:
+                rate = n_improved / n_offspring
+                self.lbl_interspecies_success.setText(
+                    f"{rate:.1%}  ({n_improved}/{n_offspring})"
+                )
+            else:
+                self.lbl_interspecies_success.setText("—")
+
+            # Lamarck budget
+            budget_used = mem.get("lamarck_budget_used", 0)
+            budget_limit = mem.get("lamarck_budget_per_gen", None)
+            if budget_limit is not None and budget_limit > 0:
+                self.lbl_lamarck_budget_used.setText(f"{budget_used}/{budget_limit}")
+            else:
+                self.lbl_lamarck_budget_used.setText(f"{budget_used} (unbegrenzt)")
+
+            # Adaptive signals from AdaptiveController
+            ctrl = mem.get("adaptive_controller", {})
+            signals = ctrl.get("signals", {}) if ctrl else {}
+            plateau = signals.get("plateau_ratio", mem.get("plateau_ratio", 0.0))
+            diversity = signals.get("diversity_score", 0.0)
+            self.lbl_plateau_ratio.setText(f"{plateau:.2f}")
+            self.lbl_diversity_score.setText(f"{diversity:.2f}")
+        except Exception as _e:
+            from yane.util.logger import log_warning
+            log_warning("_update_adaptive_labels failed: %s", _e)
 
     def _update_ram_bar(self) -> None:
         from yane.util.resource_guard import ResourceGuard
