@@ -860,7 +860,7 @@ def load_examples() -> list[ExampleConfig]:
             max_nodes=30, max_connections=100,
             n_initial_hidden=4,    # multiplication is non-linear; needs hidden layer
             make_eval=_mult_make_eval,
-            target_fitness=_MULT_FIT,
+            target_fitness=-0.5,  # avg raw error ≤ 0.4/sample → predictions correct to rounding (overrides _MULT_FIT=-5.0 which allows 4-unit error)
             category="Dataset",
             supports_normalization=True,
             stateful=False,
@@ -908,7 +908,7 @@ def load_examples() -> list[ExampleConfig]:
             max_nodes=30, max_connections=120,
             n_initial_hidden=12,   # extra capacity for parallel non-linear outputs
             make_eval=_reg33_make_eval,
-            target_fitness=_REG33_FIT,
+            target_fitness=-1.0,  # avg error ≤ 0.042/output (normalized) → well-fitted (overrides _REG33_FIT=-5.0)
             category="Dataset",
             stateful=False,
             test_cases=_REG33_TEST_CASES,
@@ -978,7 +978,7 @@ def load_examples() -> list[ExampleConfig]:
                 n_inputs=6, n_outputs=3,
                 max_nodes=30, max_connections=100,
                 make_eval=_make_acrobot_eval(max_steps=500),
-                target_fitness=0,
+                target_fitness=10.5,  # requires solving (bonus +10) + max_tip ≥ 0.5
                 category="Classic Control",
                 supports_render=True,
                 stateful=False,
@@ -1024,7 +1024,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=20, max_connections=60,
                 n_initial_hidden=2,    # continuous control benefits from hidden layer
                 make_eval=_make_pendulum_eval(max_train_steps=200),
-                target_fitness=-400,    # realistic target above the empty-genome baseline (-507)
+                target_fitness=-200,    # decent balance; baseline ≈ -507, good control ≈ -200
                 category="Classic Control",
                 supports_render=True,
                 stateful=False,
@@ -1065,7 +1065,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=60, max_connections=300,
                 n_initial_hidden=4,
                 make_eval=_make_continuous_action_eval("BipedalWalker-v3", n_outputs=4, early_stop=-50, max_steps=1000),
-                target_fitness=0,    # baseline ≈ -100; 0 = meaningful walking attempt
+                target_fitness=100,  # substantial walking; baseline ≈ -100, solved ≈ 300
                 category="Box2D",
                 supports_render=True,
                 stateful=False,
@@ -1183,7 +1183,7 @@ def load_examples() -> list[ExampleConfig]:
                 max_nodes=40, max_connections=150,
                 n_initial_hidden=6,    # 6 actions × full input visibility needed
                 make_eval=_make_taxi_eval(max_steps=500),
-                target_fitness=-120.0,    # requires pickup + significant progress toward destination
+                target_fitness=50.0,  # pickup bonus (30) + delivery bonus (50) + shaping minus steps
                 category="Toy Text",
                 supports_render=True,
                 stateful=False,
