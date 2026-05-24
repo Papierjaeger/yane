@@ -19,8 +19,9 @@ _C_NEG_CONN = QColor("#d94a4a")
 _C_TEXT     = QColor("#cccccc")
 _C_GRID     = QColor("#2a2a3e")
 _C_CHART    = QColor("#4CAF50")
-_C_MEM_RING = QColor("#f0c0ff")   # outer ring on memory nodes
-_NODE_R     = 13
+_C_MEM_RING    = QColor("#f0c0ff")   # outer ring on memory nodes
+_C_DISABLED    = QColor("#555566")   # disabled / inactive connections
+_NODE_R        = 13
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +269,18 @@ class NetworkCanvas(QWidget):
                     if dst is None:
                         continue
 
+                    if not conn.enabled:
+                        # Disabled connections: grey dashed, no arrow
+                        _pen.setColor(QColor(_C_DISABLED.red(), _C_DISABLED.green(),
+                                             _C_DISABLED.blue(), 90))
+                        _pen.setWidthF(0.8)
+                        _pen.setStyle(Qt.PenStyle.DashLine)
+                        painter.setPen(_pen)
+                        if conn.target is not node:
+                            painter.drawLine(src, dst)
+                        _pen.setStyle(Qt.PenStyle.SolidLine)
+                        continue
+
                     # Alpha and width both scale with |weight|
                     w_abs  = abs(conn.weight)
                     alpha  = min(220, max(35, int(w_abs * 150 + 35)))
@@ -363,6 +376,20 @@ class NetworkCanvas(QWidget):
                                p.y() - _NODE_R - dot_r * 0.5,
                                dot_r * 2, dot_r * 2)
                     )
+
+                # Innovation number below node
+                if node.innovation >= 0:
+                    inno_font = QFont()
+                    inno_font.setPointSize(5)
+                    painter.setFont(inno_font)
+                    painter.setPen(QColor("#6a6a8a"))
+                    painter.drawText(
+                        QRectF(p.x() - _NODE_R, p.y() + _NODE_R + 1,
+                               _NODE_R * 2, 10),
+                        Qt.AlignmentFlag.AlignCenter,
+                        str(node.innovation),
+                    )
+                    painter.setFont(font)  # restore node label font
 
             # ── Legend ────────────────────────────────────────────────────
             legend_font = QFont()

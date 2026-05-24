@@ -528,5 +528,104 @@ class TestFinalizeFitness(unittest.TestCase):
         self.assertLess(best.fitness, 1000.0)
 
 
+class TestLeakAlpha(unittest.TestCase):
+    """Leaky-memory gate on persistent hidden nodes."""
+
+    def _persistent_node(self, alpha: float = 1.0) -> Node:
+        n = Node(NodeType.HIDDEN)
+        n.persist_value = True
+        n.leak_alpha = alpha
+        return n
+
+    def test_default_leak_alpha_is_one(self):
+        n = Node(NodeType.HIDDEN)
+        self.assertEqual(n.leak_alpha, 1.0)
+
+    def test_full_retain_alpha_one(self):
+        """alpha=1.0 → value == activated (no decay)."""
+        n = self._persistent_node(alpha=1.0)
+        n.activation = __import__('yane.util.activation', fromlist=['ActivationType']).ActivationType.LINEAR
+        n.value = 2.0
+        n.fire(set())
+        self.assertAlmostEqual(n.value, 2.0, places=9)
+
+    def test_half_decay(self):
+        """alpha=0.5 → value == 0.5 * activated after one step."""
+        from yane.util.activation import ActivationType
+        n = self._persistent_node(alpha=0.5)
+        n.activation = ActivationType.LINEAR
+        n.value = 4.0
+        n.fire(set())
+        self.assertAlmostEqual(n.value, 2.0, places=9)
+
+    def test_zero_alpha_no_carry(self):
+        """alpha=0.0 → value == 0 after fire (no memory carry-over)."""
+        from yane.util.activation import ActivationType
+        n = self._persistent_node(alpha=0.0)
+        n.activation = ActivationType.LINEAR
+        n.value = 5.0
+        n.fire(set())
+        self.assertAlmostEqual(n.value, 0.0, places=9)
+
+    def test_output_node_ignores_leak_alpha(self):
+        """Output nodes always full-retain regardless of leak_alpha."""
+        from yane.util.activation import ActivationType
+        n = Node(NodeType.OUTPUT)
+        n.leak_alpha = 0.0
+        n.activation = ActivationType.LINEAR
+        n.value = 3.0
+        n.fire(set())
+        self.assertAlmostEqual(n.value, 3.0, places=9)
+
+    def test_fire_simple_respects_leak_alpha(self):
+        """fire_simple() applies the same leaky decay logic."""
+        from yane.util.activation import ActivationType
+        n = self._persistent_node(alpha=0.5)
+        n.activation = ActivationType.LINEAR
+        n.value = 6.0
+        n.fire_simple()
+        self.assertAlmostEqual(n.value, 3.0, places=9)
+
+    def test_copy_preserves_leak_alpha(self):
+        n = self._persistent_node(alpha=0.3)
+        c = n.copy()
+        self.assertAlmostEqual(c.leak_alpha, 0.3, places=9)
+
+    def test_pickle_roundtrip_preserves_leak_alpha(self):
+        import pickle
+        n = self._persistent_node(alpha=0.7)
+        n2 = pickle.loads(pickle.dumps(n))
+        self.assertAlmostEqual(n2.leak_alpha, 0.7, places=9)
+
+    def test_old_pickle_gets_default_leak_alpha(self):
+        """Pickles from before leak_alpha existed should unpickle with alpha=1.0."""
+        import pickle
+        n = self._persistent_node(alpha=0.5)
+        state = n.__getstate__()
+        del state['leak_alpha']
+        del state['mutation_leak_alpha']
+        n2 = Node.__new__(Node)
+        n2.__setstate__(state)
+        self.assertAlmostEqual(n2.leak_alpha, 1.0, places=9)
+
+    def test_mutate_clamps_leak_alpha(self):
+        """After many mutations, leak_alpha stays in [0, 1]."""
+        n = self._persistent_node(alpha=0.5)
+        for _ in range(200):
+            n.mutate(sigma=10.0)
+        self.assertGreaterEqual(n.leak_alpha, 0.0)
+        self.assertLessEqual(n.leak_alpha, 1.0)
+
+    def test_non_persistent_node_not_mutated(self):
+        """leak_alpha should not change for non-persistent hidden nodes."""
+        from yane.util.activation import ActivationType
+        n = Node(NodeType.HIDDEN)
+        n.persist_value = False
+        n.leak_alpha = 0.5
+        for _ in range(50):
+            n.mutate(sigma=1.0)
+        self.assertAlmostEqual(n.leak_alpha, 0.5, places=9)
+
+
 if __name__ == '__main__':
     unittest.main()

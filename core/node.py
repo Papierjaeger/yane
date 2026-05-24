@@ -23,10 +23,23 @@ class Node:
         'mutation_max_triggers', 'mutation_input_index', 'mutation_input_scale',
         'mutation_output_scale',
         'innovation',
+        # Leaky-memory gate: fraction of the activated value carried over to the
+        # next forward pass (only applied when persist_value=True on hidden nodes).
+        # 1.0 = full retain (no decay, current default behaviour).
+        # 0.0 = no carry-over (persistent flag has no observable effect).
+        # Values in between implement exponential decay of the memory state.
+        'leak_alpha', 'mutation_leak_alpha',
+        # True once persist_value has been explicitly set to True (via the
+        # property setter).  Random mutation of persist_value does NOT set this
+        # flag, so leak_alpha is only evolved for deliberately persistent nodes.
+        '_leak_alpha_mutable',
     )
 
     # Slot-level defaults for __setstate__ (handles genomes serialised before these slots existed).
-    _SLOT_DEFAULTS: dict = {'innovation': -1, 'input_scale': 1.0, 'output_scale': 1.0}
+    _SLOT_DEFAULTS: dict = {
+        'innovation': -1, 'input_scale': 1.0, 'output_scale': 1.0,
+        'leak_alpha': 1.0, '_leak_alpha_mutable': False,
+    }
 
     def __init__(self, node_type: NodeType = NodeType.HIDDEN, innovation: int = -1) -> None:
         self.type = node_type
@@ -47,6 +60,8 @@ class Node:
 
         self.connections: list[Connection] = []
 
+        self.leak_alpha: float = 1.0
+        self._leak_alpha_mutable: bool = False
         self.mutation_bias = Mutation()
         self.mutation_activation = Mutation()
         self.mutation_persist = Mutation()
@@ -54,6 +69,7 @@ class Node:
         self.mutation_input_index = Mutation()
         self.mutation_input_scale = Mutation()
         self.mutation_output_scale = Mutation()
+        self.mutation_leak_alpha = Mutation()
 
     # -- persist_value property -----------------------------------------------
     # Exposes _persist_value and keeps _retain_value in sync on every write.
@@ -66,6 +82,8 @@ class Node:
     def persist_value(self, value: bool) -> None:
         self._persist_value = value
         self._retain_value = (self.type is NodeType.OUTPUT) or value
+        if value:
+            self._leak_alpha_mutable = True
 
     # -- Pickle support -------------------------------------------------------
 
@@ -126,7 +144,8 @@ class Node:
         # _retain_value is pre-computed from `type is OUTPUT or persist_value`,
         # avoiding the compound check on every fire() call.
         if self._retain_value:
-            self.value = activated
+            # Persistent hidden nodes apply leaky decay; output nodes always full-retain.
+            self.value = self.leak_alpha * activated if self._persist_value else activated
         else:
             self.value = 0.0
 
@@ -141,7 +160,7 @@ class Node:
             if conn.enabled:
                 conn.target.value += conn._weight * activated   # _weight slot, not property
         if self._retain_value:
-            self.value = activated
+            self.value = self.leak_alpha * activated if self._persist_value else activated
         else:
             self.value = 0.0
 
@@ -150,8 +169,11 @@ class Node:
     def mutate(self, sigma: float = 1.0) -> None:
         self.bias = self.mutation_bias.mutate_value(self.bias, sigma)
         self.activation = self.mutation_activation.mutate_enum(self.activation, ActivationType)
-        # Use property setter so _retain_value stays in sync.
-        self.persist_value = self.mutation_persist.mutate_bool(self._persist_value)
+        # Bypass property setter so _leak_alpha_mutable is not touched during
+        # random evolution; _retain_value is kept in sync manually.
+        new_pv = self.mutation_persist.mutate_bool(self._persist_value)
+        self._persist_value = new_pv
+        self._retain_value = (self.type is NodeType.OUTPUT) or new_pv
         self.max_triggers = self.mutation_max_triggers.mutate_int(self.max_triggers, 1, 10)
 
         if self.type == NodeType.INPUT:
@@ -164,6 +186,11 @@ class Node:
             new_scale = self.mutation_output_scale.mutate_value(self.output_scale, sigma)
             self.output_scale = max(1e-6, min(1e6, new_scale))
             self.mutation_output_scale.mutate_rates()
+
+        if self._leak_alpha_mutable:
+            new_la = self.mutation_leak_alpha.mutate_value(self.leak_alpha, sigma * 0.1)
+            self.leak_alpha = max(0.0, min(1.0, new_la))
+            self.mutation_leak_alpha.mutate_rates()
 
         for conn in self.connections:
             conn.mutate(sigma)
@@ -179,7 +206,11 @@ class Node:
         n.bias = self.bias
         n.activation = self.activation
         # Use property setter so _retain_value is correctly initialised.
-        n.persist_value = self._persist_value
+        # Copy persistence state directly (bypassing the setter) so
+        # _leak_alpha_mutable is set explicitly rather than derived from persist_value.
+        n._persist_value = self._persist_value
+        n._retain_value = self._retain_value
+        n._leak_alpha_mutable = self._leak_alpha_mutable
         n.max_triggers = self.max_triggers
         n.input_index = self.input_index
         n.input_scale = self.input_scale
@@ -191,4 +222,6 @@ class Node:
         n.mutation_input_index = self.mutation_input_index.copy()
         n.mutation_input_scale = self.mutation_input_scale.copy()
         n.mutation_output_scale = self.mutation_output_scale.copy()
+        n.leak_alpha = self.leak_alpha
+        n.mutation_leak_alpha = self.mutation_leak_alpha.copy()
         return n

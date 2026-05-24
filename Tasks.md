@@ -317,16 +317,13 @@ Nutzen:
 
 ## 5. Parallelisierung und Performance
 
-### P0: Einheitliche Worker-Abstraktion ⚡
+### P0: Einheitliche Worker-Abstraktion ✅
 
 Die Trainingspfade unterscheiden sich aktuell: `train()`, GUI sequenziell, GUI multiprocess, manuell/API.
 
-**Bereits implementiert:** `_run_evaluations()` als zentrale Evaluierungs-Pipeline, `EvaluationResult`-Dataclass für Rückgaben.
+**Bereits implementiert:** `_run_evaluations()` als zentrale Evaluierungs-Pipeline, `EvaluationResult`-Dataclass für Rückgaben. Explizites Lamarck-Refinement aus `train()` in `EvaluationRunner.run()` verschoben — alle Pfade (train, GUI sequential, GUI multiprocess) durchlaufen jetzt dieselbe vollständige Pipeline: Lamarck → Evaluation → `_finalize_fitness`.
 
-**Noch offen:**
-
-- Timing, Fitness-Sanitizing, Effizienzstrafe und Logging wirklich zentral in EINER Pipeline anwenden (aktuell noch dupliziert zwischen `train()` und GUI-Worker).
-- GUI-Worker-Pfad auf dieselbe `_run_evaluations()`-Pipeline umstellen.
+**Noch offen:** — (alle Restaufgaben sind jetzt implementiert).
 
 Nutzen:
 
@@ -428,17 +425,11 @@ Nutzen:
 
 - Externe Tools können YANE ernsthaft steuern.
 
-### P1: Genome visualisieren und inspizieren ⚡
+### P1: Genome visualisieren und inspizieren ✅
 
-**Bereits implementiert:** NetworkCanvas (Topologie-Visualisierung), WeightHistogram (Gewichtsverteilung), FitnessChart, SpeciesChart, MutationRateChart.
+**Bereits implementiert:** NetworkCanvas (Topologie-Visualisierung), WeightHistogram (Gewichtsverteilung), FitnessChart, SpeciesChart, MutationRateChart. Connection-Gewichte farblich (blau = positiv, rot = negativ) und nach Stärke (Alpha + Linienbreite). Aktivierungsfunktion pro Node als Buchstaben-Label. Persistente Nodes in Violett mit gestricheltem Ring und Gedächtnis-Punkt. Deaktivierte Connections als graue gestrichelte Linie. Innovationsnummern als kleine Zahl unter jedem Node.
 
-**Noch offen:**
-
-- Connection-Gewichte farblich und nach Stärke darstellen.
-- Aktivierungsfunktionen pro Node anzeigen.
-- Persistente Nodes markieren.
-- Inaktive/nie getriggerte Struktur markieren.
-- Innovationsnummern optional anzeigen.
+**Noch offen:** — (alle geplanten Visualisierungen sind jetzt implementiert).
 
 Nutzen:
 
@@ -499,7 +490,7 @@ Nutzen:
 
 | Phase | Fokus | Enthaltene Tasks (offen) |
 |---|---|---|
-| **Phase 3** · Skalierung | Species-Budget-Reproduktion, Batch-Forward, Serialisierung, Worker-Pipeline | P1: Species-Budget, Batch-Auswertung, Serialisierung, Worker-Abstraktion (Rest) |
+| **Phase 3** · Skalierung | Species-Budget-Reproduktion, Batch-Forward, Serialisierung, Worker-Pipeline | P1: Batch-Auswertung, Serialisierung |
 | **Phase 4** · Schwierige Aufgaben | Curriculum, Multi-Objective, MAP-Elites, Memory/Gating, Hybrid-Optimierung | P1: Curriculum, Memory (Rest); P2: Multi-Obj, QD, NES, Backprop |
 
 > Phase 1 und 2 sind vollständig abgeschlossen. Species-Budget-Reproduktion wurde bewusst von Phase 2 auf Phase 3 verschoben (erfordert Umbau von steady-state zu generationsbasiertem Spawn-Modell).
@@ -555,9 +546,9 @@ Nutzen:
 
 - [x] Fitness-Landscape Diagnostics: IQR + Histogramm + Plateau-Ratio + Sprungrate done.
 - [x] Speciation robuster: Dynamische Ziel-Species, alternative Metrik, kleine Species geschützt, Stammbaum.
+- [x] Worker-Abstraktion: _run_evaluations() + EvaluationResult done; explizites Lamarck in Runner verschoben, GUI-Pfad vereinheitlicht.
+- [x] Genome-Visualisierung: Basis-Canvas + Gewichtsfarben + Aktivierungslabel + Persistent-Ring + Disabled-Connections + Innovationsnummern.
 - [ ] Lamarck Rest: per-Species + Zeitmessung done; separate Sigma-Strategie fehlt.
-- [ ] Worker-Abstraktion: _run_evaluations() + EvaluationResult done; GUI-Pfad noch nicht vereinheitlicht.
-- [ ] Genome-Visualisierung: Basis-Canvas done; Gewichtsfarben, Aktivierungen, Markierungen fehlen.
 - [ ] Memory-Mechanismen: Persistente Nodes done; Gating, Leaky Memory, eigener NodeType fehlen.
 
 ### 🔲 Noch nicht begonnen

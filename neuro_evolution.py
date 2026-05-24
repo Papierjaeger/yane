@@ -493,15 +493,11 @@ class NeuroEvolution:
         _csv_header = "iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections"
         _csv_path = self._log_run_dir / "fitness_history.csv"
 
-        lamarck = self._lamarck.steps > 0
         self._n_evaluations_done = 0
         stop_reason: str | None = None
         iterations = 0
         while True:
             genome = self._population.select_for_evaluation()
-
-            if lamarck:
-                self._lamarck_refine(genome, fitness_fn)  # refines weights in-place
 
             result = self._run_evaluations(genome, fitness_fn)
             fitness = self._finalize_fitness(result.fitness, result.elapsed_ms)

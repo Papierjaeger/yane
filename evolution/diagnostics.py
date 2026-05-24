@@ -184,7 +184,7 @@ def build_population_info(
     n_sub = population._total_submitted
     info["jump_rate"] = population._n_new_best / n_sub if n_sub > 0 else 0.0
 
-    fitnesses = [g.fitness for g in population._evaluated]
+    fitnesses = [g.fitness for g in population._evaluated if not math.isnan(g.fitness)]
     if len(fitnesses) >= 2:
         f_min, f_max = min(fitnesses), max(fitnesses)
         if f_max > f_min:

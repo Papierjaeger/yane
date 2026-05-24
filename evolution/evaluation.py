@@ -93,6 +93,20 @@ class EvaluationRunner:
            Early stopping aborts the generator when the running mean drops
            below the pool threshold.
         """
+        # Explicit Lamarck: refine weights in-place before the main evaluation.
+        # Runs outside the elapsed_ms window so efficiency-penalty sees only the
+        # actual eval time, not the hill-climbing overhead.
+        n_lamarck_steps = 0
+        if lamarck.steps > 0:
+            lamarck.refine(genome, fitness_fn, n_steps=lamarck.steps)
+            n_lamarck_steps = lamarck.steps
+            lamarck.n_applied += 1
+            lamarck.n_steps_total += lamarck.steps
+            sp = population.get_species_for_genome(genome)
+            if sp is not None:
+                sp.lamarck_n_applied += 1
+                sp.lamarck_n_steps_total += lamarck.steps
+
         start = time.perf_counter()
         raw: list[float] = []
         stopped_early = False
@@ -136,10 +150,9 @@ class EvaluationRunner:
 
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-        n_lamarck_steps = 0
-        # Adaptive Lamarck fires after the baseline is known, only when explicit
-        # mode is off (lamarck.steps == 0) and stagnation pressure is high.
         if lamarck.steps == 0:
+            # Adaptive Lamarck fires after the baseline is known, only when
+            # stagnation pressure is high.
             n_steps = lamarck.adaptive_steps(genome, fitness, population)
             if n_steps > 0:
                 fitness = lamarck.refine(
