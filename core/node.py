@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from enum import Enum
 
 from yane.evolution.mutation import Mutation
@@ -33,12 +34,17 @@ class Node:
         # property setter).  Random mutation of persist_value does NOT set this
         # flag, so leak_alpha is only evolved for deliberately persistent nodes.
         '_leak_alpha_mutable',
+        # Optional dynamic gate source: when set, gate = sigmoid(gate_node.value)
+        # overrides the static memory_gate parameter for this persistent node.
+        # None = use static memory_gate (default).  Set by Genome._mutate_gate_source().
+        'gate_node',
     )
 
     # Slot-level defaults for __setstate__ (handles genomes serialised before these slots existed).
     _SLOT_DEFAULTS: dict = {
         'innovation': -1, 'input_scale': 1.0, 'output_scale': 1.0,
         'leak_alpha': 1.0, 'memory_gate': 0.0, '_leak_alpha_mutable': False,
+        'gate_node': None,
     }
 
     def __init__(self, node_type: NodeType = NodeType.HIDDEN, innovation: int = -1) -> None:
@@ -63,6 +69,7 @@ class Node:
         self.leak_alpha: float = 1.0
         self.memory_gate: float = 0.0
         self._leak_alpha_mutable: bool = False
+        self.gate_node = None
         self.mutation_bias = Mutation()
         self.mutation_activation = Mutation()
         self.mutation_persist = Mutation()
@@ -150,7 +157,15 @@ class Node:
             # Persistent hidden nodes apply leaky decay; output nodes always full-retain.
             if self._persist_value:
                 retained = self.leak_alpha * activated
-                self.value = self.memory_gate * old_value + (1.0 - self.memory_gate) * retained
+                _gn = self.gate_node
+                if _gn is not None:
+                    try:
+                        gate = 1.0 / (1.0 + math.exp(-_gn.value))
+                    except OverflowError:
+                        gate = 0.0 if _gn.value < 0 else 1.0
+                else:
+                    gate = self.memory_gate
+                self.value = gate * old_value + (1.0 - gate) * retained
             else:
                 self.value = activated
         else:
@@ -170,7 +185,15 @@ class Node:
         if self._retain_value:
             if self._persist_value:
                 retained = self.leak_alpha * activated
-                self.value = self.memory_gate * old_value + (1.0 - self.memory_gate) * retained
+                _gn = self.gate_node
+                if _gn is not None:
+                    try:
+                        gate = 1.0 / (1.0 + math.exp(-_gn.value))
+                    except OverflowError:
+                        gate = 0.0 if _gn.value < 0 else 1.0
+                else:
+                    gate = self.memory_gate
+                self.value = gate * old_value + (1.0 - gate) * retained
             else:
                 self.value = activated
         else:
@@ -241,4 +264,5 @@ class Node:
         n.memory_gate = self.memory_gate
         n.mutation_leak_alpha = self.mutation_leak_alpha.copy()
         n.mutation_memory_gate = self.mutation_memory_gate.copy()
+        n.gate_node = self.gate_node  # shallow ref; genome.copy() remaps to the new genome's nodes
         return n

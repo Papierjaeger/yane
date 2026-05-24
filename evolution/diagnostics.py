@@ -94,6 +94,11 @@ def build_population_info(
         "sanitize_enabled":    sanitizer.enabled,
         "n_invalid_fitness":   sanitizer.n_invalid,
         "n_clipped_fitness":   sanitizer.n_clipped,
+        # Ablation flags
+        "ablation_novelty_enabled":            population._novelty_enabled,
+        "ablation_speciation_enabled":         population._speciation_enabled,
+        "ablation_crossover_enabled":          population._crossover_enabled,
+        "ablation_diversity_injection_enabled": population._diversity_injection_enabled,
         # Offspring counters
         "n_crossover":              population._n_crossover,
         "n_mutation_only":          population._n_mutation_only,

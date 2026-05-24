@@ -146,11 +146,9 @@ Nutzen:
 
 Trainiertes Bestes Genome oder ganze Population als Startpunkt für verwandte Aufgaben nutzen.
 
-**Bereits implementiert:** `NeuroEvolution.warm_start_from_checkpoint(path, fitness_fn=None, min_fitness=None, reset_strategy=False)` importiert kompatible Checkpoint-Populationen in eine neu konfigurierte Aufgabe. Optionaler Fitness-Filter hält nur Genome über Baseline; optionales Strategy-Reset initialisiert sigma/rates neu. Inkompatible Input/Output-Topologien werden abgelehnt.
+**Bereits implementiert:** `NeuroEvolution.warm_start_from_checkpoint(path, fitness_fn=None, min_fitness=None, reset_strategy=False)` importiert Checkpoint-Populationen in eine neu konfigurierte Aufgabe. Optionaler Fitness-Filter hält nur Genome über Baseline; optionales Strategy-Reset initialisiert sigma/rates neu. I/O-Größen-Unterschiede werden automatisch adaptiert: fehlende Nodes werden ohne Verbindungen hinzugefügt, überschüssige Nodes werden mit ihren Connections entfernt. Beispiel in `benchmarks/warm_start_demo.py` (CartPole 4→1 → Acrobot 6→1).
 
-Noch offen:
-
-- Beispiel: CartPole-trainiertes Netz als Startpunkt für Acrobot.
+**Noch offen:** — (alle Aufgaben sind implementiert).
 
 Nutzen:
 
@@ -171,35 +169,26 @@ Nutzen:
 
 - Bessere Balance zwischen Ausdrucksstärke und Geschwindigkeit.
 
-### P1: Normalisierung als Framework-Feature ⚡
+### P1: Normalisierung als Framework-Feature ✅
 
 Aktuell normalisieren Beispiele manuell.
 
-**Bereits implementiert:** `ScaleNormalizer` in `yane.util.normalization` abstrahiert per-channel Input-/Output-Skalierung, normalisierte Samples und Denormalisierung. Multiplication und Pi nutzen den Normalizer; GUI-Inspect verwendet dieselben Scale-Metadaten weiter.
+**Bereits implementiert:** `ScaleNormalizer` in `yane.util.normalization` abstrahiert per-channel Input-/Output-Skalierung, normalisierte Samples und Denormalisierung. Multiplication und Pi nutzen den Normalizer; GUI-Inspect verwendet dieselben Scale-Metadaten weiter. `MinMaxNormalizer` (maps [min,max]→[0,1]), `ZScoreNormalizer` ((x-mean)/std, frozen dataclass), `ClipNormalizer` (Clipping + optionales Rescaling), `RunningStatsNormalizer` (Online-Welford-Algorithmus, mutable) in `yane.util.normalization`. Alle Normalizer implementieren dasselbe Interface (normalize_input/output, denormalize_input/output, normalize_samples). `NeuroEvolution.set_normalizer(normalizer)` / `get_normalizer()` — Normalizer wird zusammen mit dem Checkpoint gespeichert und bei `load_checkpoint()` wiederhergestellt. 31 Tests in `tests/test_normalization.py`.
 
-Noch offen:
-
-- Standardnormalisierer: min/max, z-score, clipping, running stats.
-- Normalizer mit Genom/Experiment speichern.
+**Noch offen:** — (alle Aufgaben sind implementiert).
 
 Nutzen:
 
 - Größere Aufgaben werden leichter korrekt skaliert.
 - Weniger Beispiel-spezifischer Boilerplate.
 
-### P1: Bessere Memory-Mechanismen ⚡
+### P1: Bessere Memory-Mechanismen ✅
 
 Persistente Node-Werte sind einfach und flexibel, aber schwer steuerbar.
 
-**Bereits implementiert:** Persistente Nodes (`persistent=True`) behalten Werte über Forward-Passes hinweg, `reset()` löscht sie. Memory-Toggle in GUI. Leaky Memory ist als evolvierbares `leak_alpha` auf Nodes implementiert (`0.0` = kein Carry, `1.0` = volle Retention), inklusive Copy/Pickle-Kompatibilität, Mutation-Clamping und Forward-Pfad-Unterstützung. Zusätzlich gibt es ein evolvierbares `memory_gate` für persistente Nodes: `state = gate * old + (1 - gate) * new`.
+**Bereits implementiert:** Persistente Nodes (`persistent=True`) behalten Werte über Forward-Passes hinweg, `reset()` löscht sie. Memory-Toggle in GUI. Leaky Memory ist als evolvierbares `leak_alpha` auf Nodes implementiert (`0.0` = kein Carry, `1.0` = volle Retention), inklusive Copy/Pickle-Kompatibilität, Mutation-Clamping und Forward-Pfad-Unterstützung. Zusätzlich gibt es ein evolvierbares `memory_gate` für persistente Nodes: `state = gate * old + (1 - gate) * new`. Dynamisches Gating: `gate_node`-Slot auf Node — wenn gesetzt, wird `sigmoid(gate_node.value)` als Gate verwendet statt dem statischen `memory_gate`-Parameter. `Genome._mutate_gate_source()` kann zufällig einen persistent-hidden-Node mit einem beliebigen anderen Node als Gate-Source verknüpfen oder die Verbindung wieder auflösen. Alle Forward-Pfade (BFS, compiled small, compiled large) unterstützen `gate_node`. Copy/Crossover remappen die Referenz korrekt; Checkpoints serialisieren sie via Pickle. `allow_memory=False` löscht `gate_node` auf allen Nodes. 8 Tests in `test_memory_nodes.py::TestDynamicGating`.
 
-**Wichtig für sequentielle Aufgaben:** Mit einem Tick-basierten Ansatz (ein Token/Zeichen pro Tick, ein "Output-relevant"-Flag als zweiter Input) kann YANE prinzipiell lernen, sich wie ein Sprachmodell zu verhalten — ohne festes Kontextfenster, da der interne State theoretisch über beliebig viele Ticks persistiert. Der entscheidende technische Engpass dabei ist Gating: ohne gezielte Schreib-/Vergess-Kontrolle kollabiert der State bei langen Sequenzen numerisch oder das Netz kann keine selektive Retention lernen. Gating (`value = gate * old + (1 - gate) * new`) ist daher der einzige echte technische Blocker für diese Aufgabenklasse.
-
-Noch offen:
-
-- Explizite Memory Nodes als eigener NodeType prüfen.
-- Dynamisches Gating prüfen, wobei `gate` von einem weiteren Node-Output statt nur einem evolvierbaren Parameter kommen kann.
-- Reset-Regeln klarer visualisieren.
+**Noch offen:** — (alle Aufgaben sind implementiert).
 
 Nutzen:
 
@@ -422,18 +411,21 @@ Nutzen:
 
 ## 8. Benchmarking
 
-### P1: Ablation Tests
+### P1: Ablation Tests ✅
 
 Um zu wissen, welche Features wirklich helfen, sollten sie abschaltbar sein.
 
-Aufgaben:
+**Bereits implementiert:** Alle sechs Mechanismen sind per API deaktivierbar:
+- `set_novelty_search(False)` — Novelty-Bonus wird auf 0 gesetzt.
+- `set_speciation(False)` — Population läuft als eine einzige Species, keine Kompatibilitätsschwelle.
+- `set_crossover(False)` — nur Mutations-Offspring, kein sexuelles Crossover.
+- `set_lamarck_adaptive(max_steps=0)` — Lamarck deaktiviert (beide Modi aus).
+- `set_diversity_injection(False)` — keine Stagnations-Injektion, weder frische Genome noch strukturelle Diversität.
+- `stateful=False` in `configure()` — Memory/Persistenz deaktiviert.
 
-- Novelty Search an/aus.
-- Speciation an/aus.
-- Crossover an/aus.
-- Lamarck an/aus.
-- Memory an/aus.
-- Diversity Injection an/aus.
+Alle Flags werden in `population_memory_info()` unter `ablation_*`-Keys exponiert. 14 Smoke-Tests in `tests/test_ablation.py`.
+
+**Noch offen:** — (alle Aufgaben sind implementiert).
 
 Nutzen:
 
@@ -538,9 +530,9 @@ Nutzen:
 - [x] Genome-Visualisierung: Basis-Canvas + Gewichtsfarben + Aktivierungslabel + Persistent-Ring + Disabled-Connections + Innovationsnummern.
 - [x] Lamarck Rest: per-Species + Zeitmessung done; `genome.lamarck_sigma` als eigenes evolvierbares Strategy-Gen implementiert.
 - [x] Netzwerkgröße kontrollieren: Inactive-Detection, gezieltes Pruning, Komplexitätsdiagnostik und optionale Komplexitätsstrafe done.
-- [ ] Normalisierung: ScaleNormalizer done; weitere Normalizer + Persistenz fehlen.
-- [ ] Warm-Start / Transfer Learning: Checkpoint-Population importieren, filtern und Strategy-Gene resetten done; Beispiel/GUI fehlt.
-- [ ] Memory-Mechanismen: Persistente Nodes + Leaky Memory + statisches Gating done; dynamisches Gating und eigener NodeType fehlen.
+- [x] Normalisierung: MinMaxNormalizer, ZScoreNormalizer, ClipNormalizer, RunningStatsNormalizer + Persistenz via Checkpoint. 31 Tests.
+- [x] Warm-Start / Transfer Learning: I/O-Adaption + CartPole→Acrobot-Demo in benchmarks/warm_start_demo.py.
+- [x] Memory-Mechanismen: Persistente Nodes + Leaky Memory + statisches Gating + dynamisches Gating (gate_node) done. 8 Tests.
 
 ### 🔲 Noch nicht begonnen
 
@@ -555,7 +547,7 @@ Nutzen:
 - [ ] NES als Lamarck-Alternative
 - [ ] Genom-Serialisierung optimieren
 - [ ] GPU-Unterstützung
-- [ ] Ablation Tests
+- [x] Ablation Tests: set_novelty_search, set_speciation, set_crossover, set_diversity_injection + bestehende Lamarck/Memory-Knöpfe. 14 Tests in test_ablation.py.
 - [ ] Dokumentation aktuell halten
 - [ ] Entwicklerdokumentation
 

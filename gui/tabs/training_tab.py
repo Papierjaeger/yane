@@ -15,7 +15,7 @@ from PySide6.QtGui import QFont, QImage, QPixmap
 from yane.gui.canvas import FitnessChart, SpeciesChart
 from yane.gui.worker import TrainingWorker, EpisodeRunner
 from yane.gui.examples import load_examples
-from yane.gui._helpers import _label, _divider
+from yane.gui._helpers import _label, _divider, CollapsibleGroup
 
 class GymRenderWidget(QLabel):
     """Displays gymnasium render frames (rgb_array numpy arrays)."""
@@ -156,6 +156,39 @@ class TrainingTab(QWidget):
             "Ersetzt shared_fitness durch lineare Ränge vor der Selektion.\n"
             "Macht Selektion robust gegen Fitness-Ausreißer und Skalierungsunterschiede.\n"
             "Empfohlen bei Aufgaben mit sehr unterschiedlichen Fitness-Größenordnungen.")
+
+        # --- Ablation checkboxes (all default ON) ---
+        self.chk_novelty = QCheckBox("aktiv")
+        self.chk_novelty.setChecked(True)
+        self.chk_novelty.setToolTip(
+            "Novelty Search (Ablation).\n"
+            "Wenn aktiv: novel Genome bekommen einen Selektionsbonus (0.1–0.5).\n"
+            "Wenn deaktiviert: rein fitness-basierte Selektion, kein Neuheitsbonus.\n"
+            "Deaktivieren um den Beitrag von Novelty Search zu messen.")
+
+        self.chk_speciation = QCheckBox("aktiv")
+        self.chk_speciation.setChecked(True)
+        self.chk_speciation.setToolTip(
+            "Speciation (Ablation).\n"
+            "Wenn aktiv: NEAT-artige Species-Einteilung, Fitness-Sharing, Species-Budget.\n"
+            "Wenn deaktiviert: alle Genome in einer einzigen Species, kein Nischen-Schutz.\n"
+            "Deaktivieren um den Beitrag von Speciation zu messen.")
+
+        self.chk_crossover = QCheckBox("aktiv")
+        self.chk_crossover.setChecked(True)
+        self.chk_crossover.setToolTip(
+            "Crossover (Ablation).\n"
+            "Wenn aktiv: Offspring kann durch Crossover zweier Eltern entstehen.\n"
+            "Wenn deaktiviert: alle Offspring entstehen durch Mutation eines Elternteils.\n"
+            "Deaktivieren um den Beitrag von sexueller Reproduktion zu messen.")
+
+        self.chk_diversity_injection = QCheckBox("aktiv")
+        self.chk_diversity_injection.setChecked(True)
+        self.chk_diversity_injection.setToolTip(
+            "Diversity Injection (Ablation).\n"
+            "Wenn aktiv: bei Stagnation werden frische oder strukturell diverse Genome injiziert.\n"
+            "Wenn deaktiviert: kein automatischer Stagnations-Escape.\n"
+            "Deaktivieren um den Beitrag der Diversitätsinjektion zu messen.")
 
         self.dspin_interspecies = QDoubleSpinBox()
         self.dspin_interspecies.setRange(0.0, 0.2)
@@ -409,13 +442,24 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
 
-        # --- Advanced settings group ---
-        advance_grp = QGroupBox("Advanced")
-        advance_form = QFormLayout(advance_grp)
-        advance_form.setSpacing(3)
-        advance_form.setContentsMargins(0, 0, 0, 0)
-        advance_form.addRow("Fitness shaping:",   self.chk_fitness_shaping)
-        advance_form.addRow("Interspecies crossover:", self.dspin_interspecies)
+        # --- Advanced settings group (collapsed by default) ---
+        advance_grp = CollapsibleGroup("Advanced", collapsed=True)
+        advance_grp.addRow("Fitness shaping:",   self.chk_fitness_shaping)
+        ablation_row = QWidget()
+        ablation_lay = QHBoxLayout(ablation_row)
+        ablation_lay.setContentsMargins(0, 0, 0, 0)
+        ablation_lay.setSpacing(8)
+        for chk, lbl in (
+            (self.chk_novelty,            "Novelty"),
+            (self.chk_speciation,         "Speciation"),
+            (self.chk_crossover,          "Crossover"),
+            (self.chk_diversity_injection, "Diversity inj."),
+        ):
+            chk.setText(lbl)
+            ablation_lay.addWidget(chk)
+        ablation_lay.addStretch()
+        advance_grp.addRow("Ablation (off = disable):", ablation_row)
+        advance_grp.addRow("Interspecies crossover:", self.dspin_interspecies)
         converge_row = QWidget()
         converge_lay = QHBoxLayout(converge_row)
         converge_lay.setContentsMargins(0, 0, 0, 0)
@@ -423,8 +467,8 @@ class TrainingTab(QWidget):
         converge_lay.addWidget(self.dspin_convergence_spread)
         converge_lay.addWidget(QLabel("×"))
         converge_lay.addWidget(self.dspin_convergence_stagnation)
-        advance_form.addRow("Convergence stop (eps × stag):", converge_row)
-        advance_form.addRow("Early stop factor:",  self.dspin_early_stop)
+        advance_grp.addRow("Convergence stop (eps × stag):", converge_row)
+        advance_grp.addRow("Early stop factor:",  self.dspin_early_stop)
         eff_row = QWidget()
         eff_lay = QHBoxLayout(eff_row)
         eff_lay.setContentsMargins(0, 0, 0, 0)
@@ -432,7 +476,7 @@ class TrainingTab(QWidget):
         eff_lay.addWidget(self.spin_efficiency_max_ms)
         eff_lay.addWidget(QLabel("ms ×"))
         eff_lay.addWidget(self.dspin_efficiency_penalty)
-        advance_form.addRow("Efficiency penalty:", eff_row)
+        advance_grp.addRow("Efficiency penalty:", eff_row)
         elite_row = QWidget()
         elite_lay = QHBoxLayout(elite_row)
         elite_lay.setContentsMargins(0, 0, 0, 0)
@@ -441,7 +485,7 @@ class TrainingTab(QWidget):
         elite_lay.addWidget(QLabel("global /"))
         elite_lay.addWidget(self.spin_elite_species)
         elite_lay.addWidget(QLabel("per species"))
-        advance_form.addRow("Elitism:", elite_row)
+        advance_grp.addRow("Elitism:", elite_row)
         layout.addWidget(cfg)
         layout.addWidget(advance_grp)
 
@@ -692,6 +736,10 @@ class TrainingTab(QWidget):
             # --- Advanced settings ---
             if self.chk_fitness_shaping.isChecked():
                 self._yane.set_fitness_shaping(True)
+            self._yane.set_novelty_search(self.chk_novelty.isChecked())
+            self._yane.set_speciation(self.chk_speciation.isChecked())
+            self._yane.set_crossover(self.chk_crossover.isChecked())
+            self._yane.set_diversity_injection(self.chk_diversity_injection.isChecked())
             is_rate = self.dspin_interspecies.value()
             if is_rate > 0.0:
                 self._yane.set_interspecies_crossover(is_rate)

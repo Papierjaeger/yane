@@ -790,15 +790,51 @@ class TestWarmStartTransfer(unittest.TestCase):
         self.assertEqual(n, 3)
         self.assertEqual(dst._population.evaluated_count, 3)
 
-    def test_warm_start_rejects_incompatible_io(self):
+    def test_warm_start_adapts_more_inputs(self):
+        # 2-input checkpoint → 4-input task: 2 new input nodes are appended.
         from yane import NeuroEvolution
         tmp, path = self._checkpoint()
         self.addCleanup(tmp.cleanup)
 
         dst = NeuroEvolution(seed=1)
-        dst.configure(3, 1)
-        with self.assertRaises(ValueError):
-            dst.warm_start_from_checkpoint(path)
+        dst.configure(4, 1)
+        dst.set_population_size(5)
+        n = dst.warm_start_from_checkpoint(path)
+        self.assertEqual(n, 5)
+        for g in dst._population._unevaluated:
+            self.assertEqual(len(g.input_nodes), 4)
+            self.assertEqual(len(g.output_nodes), 1)
+
+    def test_warm_start_adapts_fewer_inputs(self):
+        # 2-input checkpoint → 1-input task: first input node kept, second dropped.
+        from yane import NeuroEvolution
+        tmp, path = self._checkpoint()
+        self.addCleanup(tmp.cleanup)
+
+        dst = NeuroEvolution(seed=1)
+        dst.configure(1, 1)
+        dst.set_population_size(5)
+        n = dst.warm_start_from_checkpoint(path)
+        self.assertEqual(n, 5)
+        for g in dst._population._unevaluated:
+            self.assertEqual(len(g.input_nodes), 1)
+            self.assertEqual(len(g.output_nodes), 1)
+
+    def test_warm_start_adapted_genome_is_forwardable(self):
+        # Adapted genomes must produce valid forward output (no crash/NaN).
+        from yane import NeuroEvolution
+        import math
+        tmp, path = self._checkpoint()
+        self.addCleanup(tmp.cleanup)
+
+        dst = NeuroEvolution(seed=1)
+        dst.configure(4, 1)
+        dst.set_population_size(5)
+        dst.warm_start_from_checkpoint(path)
+        for g in dst._population._unevaluated:
+            out = g.forward([0.1, 0.2, 0.3, 0.4])
+            self.assertEqual(len(out), 1)
+            self.assertFalse(math.isnan(out[0]))
 
 
 if __name__ == "__main__":

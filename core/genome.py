@@ -105,6 +105,11 @@ class Genome:
         self.lamarck_sigma: float = 1.0
         self.mutation_lamarck_sigma = Mutation()
 
+        # Gate-source mutation: rewire the gate_node reference on a random persistent
+        # hidden node.  Lower initial rate than structural mutations (rarer operation).
+        self.mutation_gate_source = Mutation()
+        self.mutation_gate_source.bool_rate = 0.05
+
         # Set by Population.submit(); initialised here so the attribute always exists.
         self.shared_fitness: float = 0.0
 
@@ -261,6 +266,18 @@ class Genome:
         ]
         self._reset_nodes = list(output_nodes)
 
+        # Pre-compute gate source indices for persistent nodes that have a gate_node.
+        # Keyed by ni (node index); value is gate_idx (index of the gate source node).
+        # Read at compile time so the hot loop avoids attribute lookups each step.
+        import math as _math
+        _exp = _math.exp
+        _gate_source: dict[int, int] = {}
+        for node in exec_order:
+            if node._persist_value and node.gate_node is not None:
+                gid = id(node.gate_node)
+                if gid in node_to_idx:
+                    _gate_source[node_to_idx[id(node)]] = node_to_idx[gid]
+
         def _forward(data: list[float]) -> list[float]:
             n_data = len(data)
             for idx in output_idx:
@@ -296,7 +313,16 @@ class Genome:
                 if node._retain_value:
                     if node._persist_value:
                         retained = node.leak_alpha * activated
-                        values[ni] = node.memory_gate * old_value + (1.0 - node.memory_gate) * retained
+                        _gi = _gate_source.get(ni, -1)
+                        if _gi >= 0:
+                            _gv = values[_gi]
+                            try:
+                                gate = 1.0 / (1.0 + _exp(-_gv))
+                            except OverflowError:
+                                gate = 0.0 if _gv < 0 else 1.0
+                        else:
+                            gate = node.memory_gate
+                        values[ni] = gate * old_value + (1.0 - gate) * retained
                     else:
                         values[ni] = activated
                 else:
@@ -318,7 +344,16 @@ class Genome:
                 if node._retain_value:
                     if node._persist_value:
                         retained = node.leak_alpha * activated
-                        values[ni] = node.memory_gate * old_value + (1.0 - node.memory_gate) * retained
+                        _gi = _gate_source.get(ni, -1)
+                        if _gi >= 0:
+                            _gv = values[_gi]
+                            try:
+                                gate = 1.0 / (1.0 + _exp(-_gv))
+                            except OverflowError:
+                                gate = 0.0 if _gv < 0 else 1.0
+                        else:
+                            gate = node.memory_gate
+                        values[ni] = gate * old_value + (1.0 - gate) * retained
                     else:
                         values[ni] = activated
                 else:
@@ -636,6 +671,9 @@ class Genome:
         if self.mutation_enable_connection.mutate_bool(False):
             smart_mutation.enable_connection(self)
             self._mutation_types_fired.append("enable")
+        if self.mutation_gate_source.mutate_bool(False):
+            self._mutate_gate_source()
+            self._mutation_types_fired.append("gate_source")
 
         sigma = self.sigma_global
         for node in self.nodes:
@@ -644,6 +682,7 @@ class Genome:
             # Tasks with allow_memory=False allow no persistent neurons at all.
             for node in self.nodes:
                 node.persist_value = False
+                node.gate_node = None  # dynamic gating requires memory
 
         for attr, mut_attr, lo, hi in _STRATEGY_MUTATION_SPECS:
             val = getattr(self, mut_attr).mutate_value(getattr(self, attr))
@@ -655,6 +694,25 @@ class Genome:
 
         for mut_attr in _MUTATION_GENES:
             getattr(self, mut_attr).mutate_rates()
+
+    def _mutate_gate_source(self) -> None:
+        """Randomly assign or clear gate_node on a persistent hidden node."""
+        persistent = [n for n in self.nodes
+                      if n.type == NodeType.HIDDEN and n._persist_value]
+        if not persistent:
+            return
+        target = random.choice(persistent)
+        # 40% clear, 60% assign; bias toward clearing when gate is already set
+        if target.gate_node is not None and random.random() < 0.4:
+            target.gate_node = None
+        else:
+            candidates = [n for n in self.nodes if n is not target]
+            if candidates:
+                target.gate_node = random.choice(candidates)
+        self.mutation_gate_source.mutate_rates()
+        # Force recompilation so compiled forward paths pick up the new gate source.
+        self._forward_dispatch = None
+        self._compiled_forward = None
 
     # -------------------------------------------------------------------------
     # Crossover
@@ -783,11 +841,19 @@ class Genome:
                 existing_keys.add(key)
                 conn_count += 1
 
+        # Remap gate_node references from fitter parent (self) to child nodes.
+        for old_node, new_node in node_map.items():
+            if old_node in self.nodes and old_node.gate_node is not None:
+                new_node.gate_node = node_map.get(old_node.gate_node)
+
         # Strategy genes: random from either parent
         for attr in _SCALAR_GENES:
             setattr(child, attr, _pick(getattr(self, attr), getattr(other, attr)))
         for attr in _MUTATION_GENES:
             setattr(child, attr, _pick(getattr(self, attr), getattr(other, attr)).copy())
+        child.mutation_gate_source = _pick(
+            self.mutation_gate_source, other.mutation_gate_source
+        ).copy()
 
         child._invalidate_topology()
         return child
@@ -813,6 +879,9 @@ class Genome:
             for conn in old_node.connections:
                 if conn.target in node_map:
                     new_node.connections.append(conn.copy(node_map))
+            # Remap gate_node reference to the corresponding node in the new genome.
+            if old_node.gate_node is not None:
+                new_node.gate_node = node_map.get(old_node.gate_node)
 
         genome.fitness = self.fitness
         genome.shared_fitness = self.shared_fitness
@@ -825,6 +894,7 @@ class Genome:
             setattr(genome, attr, getattr(self, attr))
         for attr in _MUTATION_GENES:
             setattr(genome, attr, getattr(self, attr).copy())
+        genome.mutation_gate_source = self.mutation_gate_source.copy()
 
         genome._connection_count = self._connection_count
         # Topology caches reference old Node objects — must recompute for the copy.
@@ -866,6 +936,10 @@ class Genome:
         self.__dict__.setdefault('_last_species_id', None)
         self.__dict__.setdefault('_species_stale', True)
         self.__dict__.setdefault('_values_arr', None)
+        if 'mutation_gate_source' not in state:
+            m = Mutation()
+            m.bool_rate = 0.05
+            self.mutation_gate_source = m
 
     # -------------------------------------------------------------------------
     # Diagnostics

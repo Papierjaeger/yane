@@ -93,6 +93,7 @@ class NeuroEvolution:
         self._on_stage_advance: Callable | None = None
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
+        self._normalizer = None
 
     @property
     def current_genome(self) -> Genome | None:
@@ -842,6 +843,55 @@ class NeuroEvolution:
         if self._population is not None:
             self._population._fitness_shaping = enabled
 
+    def set_novelty_search(self, enabled: bool) -> None:
+        """Enable or disable novelty search as a selection pressure.
+
+        When disabled, the novelty bonus is zeroed out so selection is driven
+        purely by fitness (and efficiency, if configured).  Useful for ablation
+        studies comparing fitness-only evolution against novelty-augmented runs.
+
+        Default: enabled.
+        """
+        if self._population is not None:
+            self._population._novelty_enabled = enabled
+
+    def set_speciation(self, enabled: bool) -> None:
+        """Enable or disable speciation.
+
+        When disabled, the population is treated as a single species — no
+        compatibility threshold, no species budget, no fitness sharing across
+        niches.  Useful for ablation studies comparing NEAT-style speciation
+        against a flat tournament selection baseline.
+
+        Default: enabled.
+        """
+        if self._population is not None:
+            self._population._speciation_enabled = enabled
+
+    def set_crossover(self, enabled: bool) -> None:
+        """Enable or disable sexual reproduction (crossover).
+
+        When disabled, every offspring is produced by copying and mutating a
+        single parent — equivalent to a mutation-only EA.  Useful for ablation
+        studies quantifying the benefit of NEAT-style crossover.
+
+        Default: enabled.
+        """
+        if self._population is not None:
+            self._population._crossover_enabled = enabled
+
+    def set_diversity_injection(self, enabled: bool) -> None:
+        """Enable or disable stagnation-triggered diversity injection.
+
+        When disabled, neither fresh-genome injection nor structural-diversity
+        injection fires, even under prolonged stagnation.  Useful for ablation
+        studies isolating the effect of the escape mechanism.
+
+        Default: enabled.
+        """
+        if self._population is not None:
+            self._population._diversity_injection_enabled = enabled
+
     def set_interspecies_crossover(self, rate: float) -> None:
         """Enable interspecies crossover at the given probability.
 
@@ -961,6 +1011,24 @@ class NeuroEvolution:
         """
         self._n_workers = max(0, n)
 
+    def set_normalizer(self, normalizer) -> None:
+        """Attach a normalizer to this experiment.
+
+        The normalizer is stored alongside the population in every
+        ``save_checkpoint()`` call and restored by ``load_checkpoint()``.
+        Any object that implements the normalizer interface from
+        ``yane.util.normalization`` is accepted (``ScaleNormalizer``,
+        ``MinMaxNormalizer``, ``ZScoreNormalizer``, ``ClipNormalizer``,
+        ``RunningStatsNormalizer``, or a custom class with the same API).
+
+        Pass ``None`` to detach the current normalizer.
+        """
+        self._normalizer = normalizer
+
+    def get_normalizer(self):
+        """Return the currently attached normalizer, or ``None`` if none is set."""
+        return self._normalizer
+
     # -------------------------------------------------------------------------
     # Checkpoints
     # -------------------------------------------------------------------------
@@ -985,6 +1053,7 @@ class NeuroEvolution:
             "config": self._config_dict(),
             "population": self._population,
             "tracker": self._tracker,
+            "normalizer": self._normalizer,
             "lamarck_n_applied":     self._lamarck.n_applied,
             "lamarck_n_steps_total": self._lamarck.n_steps_total,
             "lamarck_time_ms":       self._lamarck.time_ms,
@@ -1024,6 +1093,7 @@ class NeuroEvolution:
         self._sanitizer.n_clipped     = payload.get("n_clipped_fitness", 0)
         self._runner.n_early_stopped  = payload.get("n_early_stopped", 0)
         self._runner.early_stopping_n = payload.get("early_stopping_n", None)
+        self._normalizer              = payload.get("normalizer", None)
         # Restore cached config so _config_dict() + logs are accurate.
         self._n_inputs           = cfg.get("n_inputs", self._n_inputs)
         self._n_outputs          = cfg.get("n_outputs", self._n_outputs)
@@ -1044,10 +1114,18 @@ class NeuroEvolution:
         """Use genomes from a checkpoint as the current population.
 
         This is transfer learning rather than exact resume: call ``configure()``
-        for the new task first, then warm-start from a related checkpoint.  The
-        input/output counts must match.  If ``fitness_fn`` is provided, genomes
-        are evaluated on the new task immediately and only genomes meeting
-        ``min_fitness`` are kept; otherwise they are queued for re-evaluation.
+        for the new task first, then warm-start from a related checkpoint.
+
+        I/O size mismatches are handled automatically:
+        - Fewer checkpoint inputs than new task: extra input nodes are appended
+          (no connections initially — evolution adds them).
+        - More checkpoint inputs than new task: excess input nodes and all their
+          outgoing connections are dropped.
+        - Same rules apply to output nodes.
+
+        If ``fitness_fn`` is provided, genomes are evaluated on the new task
+        immediately and only genomes meeting ``min_fitness`` are kept; otherwise
+        they are queued for re-evaluation.
 
         Returns the number of imported genomes.
         """
@@ -1060,12 +1138,8 @@ class NeuroEvolution:
 
         kept: list[Genome] = []
         for genome in genomes:
-            if len(genome.input_nodes) != self._n_inputs or len(genome.output_nodes) != self._n_outputs:
-                raise ValueError(
-                    "Checkpoint topology is incompatible with current configure(): "
-                    f"{len(genome.input_nodes)}→{len(genome.output_nodes)} vs "
-                    f"{self._n_inputs}→{self._n_outputs}"
-                )
+            self._adapt_genome_topology(genome, self._n_inputs, self._n_outputs,
+                                        self._tracker, self._stateful)
             genome.max_nodes = self._max_nodes
             genome.max_connections = self._max_connections
             genome.allow_memory = self._stateful
@@ -1115,6 +1189,70 @@ class NeuroEvolution:
             setattr(genome, attr, getattr(default, attr))
         for attr in _MUTATION_GENES:
             setattr(genome, attr, getattr(default, attr).copy())
+
+    def _adapt_genome_topology(
+        self,
+        genome: Genome,
+        target_inputs: int,
+        target_outputs: int,
+        tracker,
+        stateful: bool,
+    ) -> None:
+        """Adapt a checkpoint genome's I/O to match the current task's shape.
+
+        Extra input/output nodes are appended (no connections — evolution
+        adds them).  Surplus nodes beyond the target count are stripped along
+        with all their outgoing (inputs) or incoming (outputs) connections.
+        """
+        from yane.core.node import NodeType as _NT
+        from yane.core.node import Node as _Node
+        from yane.util.activation import ActivationType as _AT
+
+        cur_in  = len(genome.input_nodes)
+        cur_out = len(genome.output_nodes)
+
+        # ── Inputs ──────────────────────────────────────────────────────────
+        if cur_in < target_inputs:
+            for i in range(cur_in, target_inputs):
+                node = _Node(_NT.INPUT, innovation=tracker.next())
+                node.input_index = i
+                node.activation = _AT.LINEAR
+                genome.nodes.append(node)
+                genome.input_nodes.append(node)
+        elif cur_in > target_inputs:
+            removed = set(genome.input_nodes[target_inputs:])
+            genome.input_nodes = genome.input_nodes[:target_inputs]
+            genome.nodes = [n for n in genome.nodes if n not in removed]
+            # Input nodes own their outgoing connections — removing the node
+            # removes all connections originating from it automatically.
+
+        # Fix input_index on all remaining input nodes (may have shifted).
+        for idx, node in enumerate(genome.input_nodes):
+            node.input_index = idx
+
+        # ── Outputs ──────────────────────────────────────────────────────────
+        if cur_out < target_outputs:
+            for _ in range(cur_out, target_outputs):
+                node = _Node(_NT.OUTPUT, innovation=tracker.next())
+                node.persist_value = stateful
+                genome.nodes.append(node)
+                genome.output_nodes.append(node)
+        elif cur_out > target_outputs:
+            removed = set(genome.output_nodes[target_outputs:])
+            genome.output_nodes = genome.output_nodes[:target_outputs]
+            genome.nodes = [n for n in genome.nodes if n not in removed]
+            # Remove connections that point to removed output nodes.
+            for node in genome.nodes:
+                node.connections = [c for c in node.connections
+                                    if c.target not in removed]
+
+        if cur_in != target_inputs or cur_out != target_outputs:
+            # Clear gate_node references that point to removed nodes.
+            live = set(genome.nodes)
+            for node in genome.nodes:
+                if node.gate_node is not None and node.gate_node not in live:
+                    node.gate_node = None
+            genome._invalidate_topology()
 
     # -------------------------------------------------------------------------
     # Manual loop (for complex multi-step evaluation)

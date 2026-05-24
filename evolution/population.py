@@ -156,6 +156,13 @@ class Population:
         # [-w_max, w_max] and [-b_max, b_max] after each mutation.
         self._weight_clip: tuple[float, float] | None = None
 
+        # Ablation flags — all default ON.  Set to False to disable the
+        # corresponding mechanism for controlled comparison runs.
+        self._novelty_enabled: bool = True
+        self._speciation_enabled: bool = True
+        self._crossover_enabled: bool = True
+        self._diversity_injection_enabled: bool = True
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -215,7 +222,21 @@ class Population:
         # _prune() (called below) handles removal from sp.members if the genome
         # turns out to be the worst and gets evicted right away.
         if genome._species_stale:
-            self._assign_one_genome(genome)
+            if self._speciation_enabled:
+                self._assign_one_genome(genome)
+            else:
+                # Ablation: keep exactly one species containing all evaluated genomes.
+                if not self._species:
+                    sp = Species(genome, spawn_count=self._spawn_count)
+                    self._species = [sp]
+                else:
+                    sp = self._species[0]
+                    if genome not in sp.members:
+                        sp.members.append(genome)
+                    if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
+                        sp._cached_best = genome
+                    genome._last_species_id = id(sp)
+                genome._species_stale = False
 
         _cc = genome.connection_count   # cache property once; avoids descriptor overhead in the two reads below
         topo = (len(genome.nodes), _cc)
@@ -342,7 +363,10 @@ class Population:
         Rises from 0.1 (no stagnation) to 0.5 (full stagnation) so novelty
         pressure increases exactly when fitness search is stuck. Requires no
         manual tuning — it adapts to the current training dynamics.
+        Returns 0.0 when novelty search is disabled via _novelty_enabled.
         """
+        if not self._novelty_enabled:
+            return 0.0
         stagnation_frac = self._stagnation_count / max(1, self.stagnation_threshold)
         return 0.1 + 0.4 * min(1.0, stagnation_frac)
 
@@ -992,7 +1016,21 @@ class Population:
         # causes unbounded species growth (no merging/threshold adjustment) which
         # in turn makes every genome a species-elite and breaks _prune().
         self._spawn_count += 1
-        self._assign_species()
+        if self._speciation_enabled:
+            self._assign_species()
+        else:
+            # Ablation: keep one species containing all evaluated genomes.
+            if not self._species:
+                sp = Species(self._evaluated[0], spawn_count=self._spawn_count)
+                sp.members = list(self._evaluated)
+                sp._cached_best = max(self._evaluated, key=_fitness_key)
+                for g in self._evaluated:
+                    g._last_species_id = id(sp)
+                self._species = [sp]
+            else:
+                self._species[0].members = list(self._evaluated)
+                if self._evaluated:
+                    self._species[0]._cached_best = max(self._evaluated, key=_fitness_key)
 
         # Safety net: if all species have gone extinct (e.g., all pruned),
         # rescue the population by creating a fresh species from the best genome.
@@ -1010,18 +1048,18 @@ class Population:
             self._apply_mutation_success_weights()
             self._apply_species_mutation_biases()
 
-        if self._since_last_injection >= self.stagnation_threshold:
-            self._inject_fresh_genome()
-            return
-
-        # Structural stagnation: if the topology of the best genome hasn't changed
-        # for 3× the population size, force structural exploration even when fitness
-        # keeps creeping up (e.g. via Lamarck weight tuning). Without this check,
-        # Lamarck causes infinite fitness drift while the structure never evolves.
-        if self._topology_stagnation_count >= 3 * self.max_size:
-            self._topology_stagnation_count = 0
-            self._inject_structural_diversity()
-            return
+        if self._diversity_injection_enabled:
+            if self._since_last_injection >= self.stagnation_threshold:
+                self._inject_fresh_genome()
+                return
+            # Structural stagnation: if the topology of the best genome hasn't changed
+            # for 3× the population size, force structural exploration even when fitness
+            # keeps creeping up (e.g. via Lamarck weight tuning). Without this check,
+            # Lamarck causes infinite fitness drift while the structure never evolves.
+            if self._topology_stagnation_count >= 3 * self.max_size:
+                self._topology_stagnation_count = 0
+                self._inject_structural_diversity()
+                return
         self._compute_shared_fitness()
         if self._fitness_shaping:
             self._apply_fitness_shaping()
@@ -1076,7 +1114,7 @@ class Population:
         # global best or species bests. Here, even elite parents produce mutated
         # children — otherwise a small population fills with unmutated clones and
         # exploration stalls (especially critical with the empty-connection start).
-        if random.random() < parent.crossover_prob and len(self._evaluated) >= 2:
+        if self._crossover_enabled and random.random() < parent.crossover_prob and len(self._evaluated) >= 2:
             # Interspecies crossover: with a small probability pick the second
             # parent from a *different* species to combine structural innovations.
             use_interspecies = (
