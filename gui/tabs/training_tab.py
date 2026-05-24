@@ -278,17 +278,24 @@ class TrainingTab(QWidget):
             "auch in kleinen Species. Default 1.")
 
         self.combo_lamarck_mode = QComboBox()
-        self.combo_lamarck_mode.addItems(["Adaptiv (Standard)", "Explizit", "Aus"])
+        self.combo_lamarck_mode.addItems([
+            "Adaptiv (Standard)", "Explizit", "Explizit NES", "Explizit SA", "Aus",
+        ])
         self.combo_lamarck_mode.setToolTip(
             "Lamarck-Modus:\n\n"
-            "Adaptiv (Standard) — läuft automatisch bei Stagnation.\n"
+            "Adaptiv (Standard) — Hill-Climbing läuft automatisch bei Stagnation.\n"
             "  Schrittanzahl steigt von 0 → max_steps proportional zum Stagnationsgrad.\n"
             "  Nur die besten 20 % der Population werden verfeinert.\n"
             "  Kein Setup nötig, empfohlen für die meisten Aufgaben.\n\n"
-            "Explizit — feste Schrittzahl vor jeder Fitnessbewertung.\n"
-            "  Schrittanzahl rechts wählen.\n"
-            "  Gut für Dataset-Aufgaben (XOR, Regression), wo jede Eval billig ist.\n"
-            "  Nicht empfohlen für Gym-Umgebungen (jeder Schritt = 1 Episode!).\n\n"
+            "Explizit — Hill-Climbing mit fester Schrittzahl vor jeder Eval.\n"
+            "  Gut für Dataset-Aufgaben (XOR, Regression), wo jede Eval billig ist.\n\n"
+            "Explizit NES — Natural Evolution Strategies statt Hill-Climbing.\n"
+            "  Schätzt einen Gradienten via k antithetischer Perturbationspaare\n"
+            "  und macht einen gerichteten Schritt. Kostet 2k+1 Evals — effizienter\n"
+            "  für große Gewichtsvektoren.\n\n"
+            "Explizit SA — Simulated Annealing mit geometrischer Abkühlung.\n"
+            "  Akzeptiert schlechtere Moves mit exp(Δf/T) — entkommen aus lokalen Minima.\n"
+            "  Gibt das beste Fitness über die gesamte Kette zurück.\n\n"
             "Aus — Lamarck komplett deaktiviert.")
 
         self.spin_lamarck = QSpinBox()
@@ -296,12 +303,11 @@ class TrainingTab(QWidget):
         self.spin_lamarck.setValue(5)
         self.spin_lamarck.setEnabled(False)
         self.spin_lamarck.setToolTip(
-            "Anzahl expliziter Hill-Climbing-Schritte pro Genome (nur im Modus 'Explizit').\n\n"
-            "Was passiert pro Schritt:\n"
-            "  1. Alle Gewichte + Biases mit Gauß-Rauschen perturbieren\n"
-            "  2. Fitness messen\n"
-            "  3. Besser → behalten,  Schlechter → zurücksetzen\n\n"
-            "Schrittgröße = sigma_global des Genoms.\n"
+            "Anzahl Verfeinerungsschritte pro Genome (für alle Explizit-Modi).\n\n"
+            "Hill-Climbing: 1 Eval pro Schritt.\n"
+            "NES: 2k+1 Evals für k Schritte (antithetische Paare + Gradient-Step).\n"
+            "SA: 1 Eval pro Schritt mit Temperatur-basierter Akzeptanz.\n\n"
+            "Schrittgröße = lamarck_sigma des Genoms.\n"
             "3–5 = empfohlen für Regression / Supervised Learning.")
 
         self.combo_lamarck_mode.currentIndexChanged.connect(self._on_lamarck_mode_changed)
@@ -676,6 +682,7 @@ class TrainingTab(QWidget):
         else:
             self.combo_lamarck_mode.setCurrentText("Adaptiv (Standard)")
             self.spin_lamarck.setEnabled(False)
+            self.spin_lamarck.setValue(5)
         self.dspin_target.setValue(ex.target_fitness)
         self.desc_label.setText(ex.description)
         # Default memory based on example type; user can override before training.
@@ -698,7 +705,7 @@ class TrainingTab(QWidget):
         self.example_changed.emit(ex)
 
     def _on_lamarck_mode_changed(self, index: int) -> None:
-        self.spin_lamarck.setEnabled(index == 1)  # only enabled for "Explizit"
+        self.spin_lamarck.setEnabled(index in (1, 2, 3))  # Explizit / NES / SA
 
     def _on_multi_eval_changed(self, value: int) -> None:
         enabled = value > 1
@@ -761,7 +768,11 @@ class TrainingTab(QWidget):
 
             lamarck_mode = self.combo_lamarck_mode.currentText()
             if lamarck_mode == "Explizit":
-                self._yane.set_lamarck(n_steps=self.spin_lamarck.value())
+                self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="hill_climbing")
+            elif lamarck_mode == "Explizit NES":
+                self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="nes")
+            elif lamarck_mode == "Explizit SA":
+                self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="sa")
             elif lamarck_mode == "Aus":
                 self._yane.set_lamarck_adaptive(max_steps=0)
             n_eval = self.spin_multi_eval.value()

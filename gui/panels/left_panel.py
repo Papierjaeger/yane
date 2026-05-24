@@ -166,6 +166,11 @@ class LeftPanel(QWidget):
             "Hoher Wert = Population verbessert sich noch schnell.\n"
             "Niedriger Wert = Optimierungsfortschritt verlangsamt sich.")
         pop.addRow("Jump rate:",         self.lbl_jump_rate)
+        self.lbl_pop_size_adjustments = _label("—", "mutRate")
+        self.lbl_pop_size_adjustments.setToolTip(
+            "Wie oft die Populationsgröße durch Adaptive Population Sizing angepasst wurde\n"
+            "(nur aktiv wenn set_adaptive_population() gesetzt ist).")
+        pop.addRow("Pop size adj.:",     self.lbl_pop_size_adjustments)
         self.fitness_hist = FitnessHistogram()
         self.fitness_hist.setToolTip(
             "Fitness-Verteilung der evaluierten Population.\n"
@@ -181,15 +186,19 @@ class LeftPanel(QWidget):
         self.lbl_lamarck_steps   = _label("—", "mutRate")
         self.lbl_lamarck_mode.setToolTip(
             "Aktueller Lamarck-Modus:\n"
-            "  adaptive — läuft automatisch bei Stagnation\n"
-            "  explicit — feste Schrittzahl vor jeder Eval\n"
-            "  off      — deaktiviert")
+            "  adaptive      — Hill-Climbing, automatisch bei Stagnation\n"
+            "  explicit      — Hill-Climbing, feste Schrittzahl vor jeder Eval\n"
+            "  nes_explicit  — NES (antithetische Paare), immer aktiv\n"
+            "  nes_adaptive  — NES, automatisch bei Stagnation\n"
+            "  sa_explicit   — Simulated Annealing, immer aktiv\n"
+            "  sa_adaptive   — Simulated Annealing, automatisch bei Stagnation\n"
+            "  off           — deaktiviert")
         self.lbl_lamarck_applied.setToolTip(
             "Anzahl der Genome, für die Lamarck-Verfeinerung durchgeführt wurde\n"
             "(kumulativ seit Trainingsstart).")
         self.lbl_lamarck_steps.setToolTip(
-            "Gesamtzahl der Hill-Climbing-Schritte (kumulativ).\n"
-            "Ein Schritt = eine Fitnessmessung zum Testen einer Gewichtsänderung.")
+            "Gesamtzahl der Verfeinerungsschritte (kumulativ).\n"
+            "Hill-Climbing: 1 Eval/Schritt.  NES: 2k+1 Evals/Schritt.  SA: 1 Eval/Schritt.")
         lamarck_grp.addRow("Mode:",        self.lbl_lamarck_mode)
         lamarck_grp.addRow("Applied:",     self.lbl_lamarck_applied)
         lamarck_grp.addRow("Steps total:", self.lbl_lamarck_steps)
@@ -217,6 +226,24 @@ class LeftPanel(QWidget):
             "beim Hill-Climbing ausfallen.")
         lamarck_grp.addRow("Best σ_lamarck:", self.lbl_lamarck_sigma)
         layout.addWidget(lamarck_grp)
+
+        # ── Sicherheitslimits ─────────────────────────────────────────────
+        safe_grp = _CollapsibleGroup("Sicherheitslimits", collapsed=True)
+        self.lbl_n_weight_clipped = _label("—", "mutRate")
+        self.lbl_n_bias_clipped   = _label("—", "mutRate")
+        self.lbl_n_output_sanitized = _label("—", "mutRate")
+        self.lbl_n_weight_clipped.setToolTip(
+            "Kumulative Anzahl der Gewichte, die durch Weight-Clipping beschnitten wurden\n"
+            "(nur aktiv wenn set_weight_clipping() gesetzt ist).")
+        self.lbl_n_bias_clipped.setToolTip(
+            "Kumulative Anzahl der Biases, die durch Weight-Clipping beschnitten wurden.")
+        self.lbl_n_output_sanitized.setToolTip(
+            "Kumulative Anzahl der NaN/Inf-Ausgaben, die durch Output-Sanitizing ersetzt wurden\n"
+            "(nur aktiv wenn set_output_sanitizing() gesetzt ist).")
+        safe_grp.addRow("W clipped:",       self.lbl_n_weight_clipped)
+        safe_grp.addRow("B clipped:",       self.lbl_n_bias_clipped)
+        safe_grp.addRow("Output sanitized:", self.lbl_n_output_sanitized)
+        layout.addWidget(safe_grp)
 
         # ── Curriculum ────────────────────────────────────────────────────
         cur_grp = _CollapsibleGroup("Curriculum", collapsed=False)
@@ -514,6 +541,18 @@ class LeftPanel(QWidget):
             self.lbl_jump_rate.setText(f"{jr:.4f}")
         else:
             self.lbl_jump_rate.setText("—")
+
+        # Adaptive population size adjustments
+        adj = mem.get("n_pop_size_adjustments")
+        if adj is not None and mem.get("adaptive_pop_enabled"):
+            self.lbl_pop_size_adjustments.setText(str(adj))
+        else:
+            self.lbl_pop_size_adjustments.setText("—")
+
+        # Safety limits (weight clipping + output sanitizing)
+        self.lbl_n_weight_clipped.setText(str(mem.get("n_weight_clipped", 0)))
+        self.lbl_n_bias_clipped.setText(str(mem.get("n_bias_clipped", 0)))
+        self.lbl_n_output_sanitized.setText(str(mem.get("n_output_sanitized", 0)))
 
         # Fitness histogram
         fh = mem.get("fitness_histogram")
