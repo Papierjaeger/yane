@@ -69,6 +69,9 @@ class ConfigureRequest(BaseModel):
     # Fitness
     fitness_shaping: bool | None = Field(None, description="Enable rank-based fitness shaping")
     interspecies_crossover_rate: float | None = Field(None, ge=0.0, le=1.0, description="Interspecies crossover probability")
+    interspecies_crossover_mode: str | None = Field(None, pattern=r"^(fixed|adaptive)$")
+    interspecies_crossover_min: float | None = Field(None, ge=0.0, le=1.0)
+    interspecies_crossover_max: float | None = Field(None, ge=0.0, le=1.0)
     speciation_metric: str | None = Field(None, pattern=r"^(topology|topology_no_disabled)$")
     # Resource limits
     max_process_gb: float | None = Field(None, gt=0.0, description="Hard RAM cap per process in GB")
@@ -113,7 +116,14 @@ def configure(req: ConfigureRequest) -> dict:
         state.set_early_stopping(req.early_stop_factor)
     if req.fitness_shaping is not None:
         state.set_fitness_shaping(req.fitness_shaping)
-    if req.interspecies_crossover_rate is not None:
+    if req.interspecies_crossover_mode == "adaptive":
+        state.set_adaptive_interspecies_crossover(
+            min_rate=req.interspecies_crossover_min if req.interspecies_crossover_min is not None else 0.0,
+            max_rate=req.interspecies_crossover_max if req.interspecies_crossover_max is not None else (
+                req.interspecies_crossover_rate if req.interspecies_crossover_rate is not None else 0.2
+            ),
+        )
+    elif req.interspecies_crossover_rate is not None:
         state.set_interspecies_crossover(req.interspecies_crossover_rate)
     if req.speciation_metric is not None:
         state.set_speciation_metric(req.speciation_metric)

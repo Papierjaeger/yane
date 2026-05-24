@@ -295,6 +295,27 @@ Verfügbare Modi:
 - `mode="nes"`: Natural Evolution Strategies mit antithetischen Perturbationen
 - `mode="cma_es"`: kleine volle-Kovarianz-CMA-ES über Gewichte und Biases
 
+Alle Modi können explizit oder adaptiv laufen:
+
+```python
+yane.set_lamarck_adaptive(mode="nes", max_steps=3)
+yane.set_lamarck_adaptive(mode="sa", max_steps=3)
+yane.set_lamarck_adaptive(mode="cma_es", max_steps=2)
+```
+
+Die GUI trennt dafür den Zeitplan (`Adaptiv`, `Explizit`, `Aus`) vom
+Optimierer (`Hill-Climbing`, `NES`, `SA`, `CMA-ES`).
+
+### Adaptive Interspecies-Crossover
+
+```python
+yane.set_adaptive_interspecies_crossover(min_rate=0.0, max_rate=0.2)
+```
+
+Im adaptiven Modus steigt die Live-Rate für species-übergreifenden Crossover
+bei globaler oder species-lokaler Stagnation. Diagnostics enthalten Modus,
+Basisrate, Live-Rate, Min/Max und den letzten Trigger.
+
 Für Vergleichsläufe gibt es:
 
 ```bash

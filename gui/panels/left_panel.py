@@ -330,6 +330,10 @@ class LeftPanel(QWidget):
         self.lbl_n_crossover  = _label("—", "mutRate")
         self.lbl_n_mutation   = _label("—", "mutRate")
         self.lbl_n_injection  = _label("—", "mutRate")
+        self.lbl_interspecies_rate = _label("—", "mutRate")
+        self.lbl_interspecies_rate.setToolTip(
+            "Live-Rate fuer Interspecies-Crossover. Im adaptiven Modus wird sie\n"
+            "aus Stagnation und Species-Druck abgeleitet.")
         self.lbl_n_crossover.setToolTip(
             "Anzahl Offspring, die durch Kreuzung zweier Elternteile entstanden sind.")
         self.lbl_n_mutation.setToolTip(
@@ -340,6 +344,7 @@ class LeftPanel(QWidget):
         off_grp.addRow("Crossover:", self.lbl_n_crossover)
         off_grp.addRow("Mutation:",  self.lbl_n_mutation)
         off_grp.addRow("Injection:", self.lbl_n_injection)
+        off_grp.addRow("Interspecies rate:", self.lbl_interspecies_rate)
         layout.addWidget(off_grp)
 
         # ── Structure mutations (best genome) ─────────────────────────────
@@ -638,6 +643,14 @@ class LeftPanel(QWidget):
         ):
             v = mem.get(key)
             lbl.setText(str(v) if v is not None else "—")
+        is_rate = mem.get("interspecies_crossover_current")
+        is_mode = mem.get("interspecies_crossover_mode")
+        is_reason = mem.get("interspecies_crossover_last_reason")
+        self.lbl_interspecies_rate.setText(
+            f"{is_rate:.3f} ({is_mode})" if is_rate is not None else "—"
+        )
+        if is_reason:
+            self.lbl_interspecies_rate.setToolTip(str(is_reason))
 
         # Curriculum stats
         cur_idx = mem.get("curriculum_stage_index")

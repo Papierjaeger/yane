@@ -69,6 +69,10 @@ class NeuroEvolution:
         self._adaptive_pop_min: int = 100
         self._adaptive_pop_max: int = 100
         self._adaptive_pop_rate: float = 0.05
+        self._interspecies_crossover_mode: str = "fixed"
+        self._interspecies_crossover_rate: float = 0.0
+        self._interspecies_crossover_min: float = 0.0
+        self._interspecies_crossover_max: float = 0.2
         self._n_workers: int = 1
         # Lamarckian refinement
         self._lamarck = LamarckRefiner()
@@ -210,6 +214,12 @@ class NeuroEvolution:
         self._population._adaptive_pop_min = self._adaptive_pop_min
         self._population._adaptive_pop_max = self._adaptive_pop_max
         self._population._adaptive_pop_rate = self._adaptive_pop_rate
+        self._population.configure_interspecies_crossover(
+            self._interspecies_crossover_rate,
+            mode=self._interspecies_crossover_mode,
+            min_rate=self._interspecies_crossover_min,
+            max_rate=self._interspecies_crossover_max,
+        )
         self._population._multi_objective_enabled = self._multi_objective_enabled
         self._population._multi_objective_maximize = self._multi_objective_maximize
         self._population._qd_enabled = self._qd_enabled
@@ -604,6 +614,21 @@ class NeuroEvolution:
             "n_workers": self._n_workers,
             "target_species": pop._target_species if pop else None,
             "compat_threshold": pop._compat_threshold if pop else None,
+            "interspecies_crossover_mode": (
+                pop._interspecies_crossover_mode if pop else self._interspecies_crossover_mode
+            ),
+            "interspecies_crossover_rate": (
+                pop._interspecies_crossover_rate if pop else self._interspecies_crossover_rate
+            ),
+            "interspecies_crossover_min": (
+                pop._interspecies_crossover_min if pop else self._interspecies_crossover_min
+            ),
+            "interspecies_crossover_max": (
+                pop._interspecies_crossover_max if pop else self._interspecies_crossover_max
+            ),
+            "interspecies_crossover_current": (
+                pop._interspecies_crossover_current if pop else self._interspecies_crossover_rate
+            ),
             "elite_count": self._elite_count,
             "species_elite_count": self._species_elite_count,
             # Stopping criteria
@@ -1066,8 +1091,38 @@ class NeuroEvolution:
             rate: Probability in [0.0, 1.0].
         """
         rate = max(0.0, min(1.0, rate))
+        self._interspecies_crossover_mode = "fixed"
+        self._interspecies_crossover_rate = rate
+        self._interspecies_crossover_min = 0.0
+        self._interspecies_crossover_max = max(rate, 0.2)
         if self._population is not None:
-            self._population._interspecies_crossover_rate = rate
+            self._population.configure_interspecies_crossover(rate, mode="fixed")
+
+    def set_adaptive_interspecies_crossover(
+        self,
+        min_rate: float = 0.0,
+        max_rate: float = 0.2,
+        enabled: bool = True,
+    ) -> None:
+        """Adapt cross-species crossover pressure from stagnation signals.
+
+        The live probability ramps from ``min_rate`` to ``max_rate`` as global
+        or per-species stagnation increases.  With fewer than two species the
+        live rate is forced to zero.
+        """
+        lo = max(0.0, min(1.0, min_rate))
+        hi = max(lo, min(1.0, max_rate))
+        self._interspecies_crossover_mode = "adaptive" if enabled else "fixed"
+        self._interspecies_crossover_rate = lo
+        self._interspecies_crossover_min = lo
+        self._interspecies_crossover_max = hi
+        if self._population is not None:
+            self._population.configure_interspecies_crossover(
+                lo,
+                mode=self._interspecies_crossover_mode,
+                min_rate=lo,
+                max_rate=hi,
+            )
 
     def set_spike_rate(self, rate: float) -> None:
         """Set the initial spike mutation rate for new connections.
@@ -1336,6 +1391,28 @@ class NeuroEvolution:
         self._stateful           = cfg.get("stateful", self._stateful)
         self._population_size    = cfg.get("population_size", self._population_size)
         self._seed               = cfg.get("seed", self._seed)
+        self._interspecies_crossover_mode = cfg.get(
+            "interspecies_crossover_mode",
+            getattr(self._population, "_interspecies_crossover_mode", self._interspecies_crossover_mode),
+        )
+        self._interspecies_crossover_rate = cfg.get(
+            "interspecies_crossover_rate",
+            getattr(self._population, "_interspecies_crossover_rate", self._interspecies_crossover_rate),
+        )
+        self._interspecies_crossover_min = cfg.get(
+            "interspecies_crossover_min",
+            getattr(self._population, "_interspecies_crossover_min", self._interspecies_crossover_min),
+        )
+        self._interspecies_crossover_max = cfg.get(
+            "interspecies_crossover_max",
+            getattr(self._population, "_interspecies_crossover_max", self._interspecies_crossover_max),
+        )
+        self._population.configure_interspecies_crossover(
+            self._interspecies_crossover_rate,
+            mode=self._interspecies_crossover_mode,
+            min_rate=self._interspecies_crossover_min,
+            max_rate=self._interspecies_crossover_max,
+        )
         self._multi_objective_enabled = cfg.get("multi_objective_enabled", self._multi_objective_enabled)
         weights = cfg.get("multi_objective_weights", self._multi_objective_weights)
         maximize = cfg.get("multi_objective_maximize", self._multi_objective_maximize)

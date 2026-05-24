@@ -1143,7 +1143,16 @@ Fitness-Shaping, Pareto-Shaping, Novelty und Effizienzscore aktualisiert.
 Species erhalten Rolling Spawn-Credits aus durchschnittlicher Shared Fitness,
 Stagnationsfaktor und Jugendbonus. Danach läuft das Parent-Tournament innerhalb
 der gewählten Species. Crossover verwendet bevorzugt Eltern derselben Species;
-Interspecies-Crossover ist nur mit konfigurierter Rate erlaubt.
+Interspecies-Crossover ist entweder mit fester Rate oder adaptiv erlaubt.
+
+Adaptive Interspecies-Crossover wird über
+`set_adaptive_interspecies_crossover(min_rate, max_rate)` aktiviert. Die
+Population berechnet vor Crossover-Events eine Live-Rate aus globaler
+Stagnation, maximaler Species-Stagnation und Species-Knappheit. Bei weniger als
+zwei Species wird die Live-Rate auf `0.0` gesetzt. Diagnostics enthalten:
+`interspecies_crossover_mode`, `interspecies_crossover_rate`,
+`interspecies_crossover_current`, `interspecies_crossover_min`,
+`interspecies_crossover_max` und `interspecies_crossover_last_reason`.
 
 ## 21. Worker-Pfade
 

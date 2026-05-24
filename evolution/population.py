@@ -147,6 +147,11 @@ class Population:
         # Interspecies crossover: probability that the second parent comes from
         # a *different* species.  0.0 = intraspecies only (default).
         self._interspecies_crossover_rate: float = 0.0
+        self._interspecies_crossover_mode: str = "fixed"
+        self._interspecies_crossover_min: float = 0.0
+        self._interspecies_crossover_max: float = 0.2
+        self._interspecies_crossover_current: float = 0.0
+        self._interspecies_crossover_last_reason: str = "fixed"
 
         # Best-genome topology history — one entry per fitness improvement.
         # Each entry: (total_submitted, n_nodes, n_connections, fitness)
@@ -193,6 +198,14 @@ class Population:
         self.__dict__.setdefault("_qd_descriptor_fn", None)
         self.__dict__.setdefault("_n_qd_updates", 0)
         self.__dict__.setdefault("_n_qd_injections", 0)
+        self.__dict__.setdefault("_interspecies_crossover_mode", "fixed")
+        self.__dict__.setdefault("_interspecies_crossover_min", 0.0)
+        self.__dict__.setdefault("_interspecies_crossover_max", 0.2)
+        self.__dict__.setdefault(
+            "_interspecies_crossover_current",
+            self.__dict__.get("_interspecies_crossover_rate", 0.0),
+        )
+        self.__dict__.setdefault("_interspecies_crossover_last_reason", "fixed")
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
@@ -327,6 +340,70 @@ class Population:
                     break
 
         self._prune()
+
+    def configure_interspecies_crossover(
+        self,
+        rate: float | None = None,
+        *,
+        mode: str = "fixed",
+        min_rate: float = 0.0,
+        max_rate: float = 0.2,
+    ) -> None:
+        """Configure fixed or adaptive cross-species crossover.
+
+        ``fixed`` preserves the old behaviour: ``rate`` is used directly.
+        ``adaptive`` derives the live rate from stagnation pressure and species
+        scarcity while keeping it inside ``[min_rate, max_rate]``.
+        """
+        if mode not in {"fixed", "adaptive"}:
+            raise ValueError("mode must be 'fixed' or 'adaptive'")
+        lo = max(0.0, min(1.0, float(min_rate)))
+        hi = max(lo, min(1.0, float(max_rate)))
+        fixed_rate = lo if rate is None else max(0.0, min(1.0, float(rate)))
+        self._interspecies_crossover_mode = mode
+        self._interspecies_crossover_min = lo
+        self._interspecies_crossover_max = hi
+        self._interspecies_crossover_rate = fixed_rate
+        self._interspecies_crossover_current = fixed_rate if mode == "fixed" else lo
+        self._interspecies_crossover_last_reason = "fixed" if mode == "fixed" else "adaptive:init"
+
+    def _adaptive_interspecies_rate(self) -> float:
+        if self._interspecies_crossover_mode != "adaptive":
+            self._interspecies_crossover_current = self._interspecies_crossover_rate
+            self._interspecies_crossover_last_reason = "fixed"
+            return self._interspecies_crossover_rate
+        if len(self._species) < 2:
+            self._interspecies_crossover_current = 0.0
+            self._interspecies_crossover_last_reason = "adaptive:single_species"
+            return 0.0
+
+        threshold = max(1, self.stagnation_threshold)
+        global_pressure = min(1.0, max(0.0, self._stagnation_count / threshold))
+        species_pressure = 0.0
+        if self._species:
+            species_pressure = max(
+                min(1.0, max(0.0, sp.stagnation_count / threshold))
+                for sp in self._species
+            )
+        scarcity_pressure = 0.0
+        if self._target_species > 0 and len(self._species) < self._target_species:
+            scarcity_pressure = 0.5 * (1.0 - len(self._species) / self._target_species)
+
+        pressure = max(global_pressure, species_pressure, scarcity_pressure)
+        lo = self._interspecies_crossover_min
+        hi = self._interspecies_crossover_max
+        rate = lo + (hi - lo) * pressure
+        self._interspecies_crossover_current = rate
+        if pressure <= 0.0:
+            reason = "adaptive:baseline"
+        elif pressure == global_pressure:
+            reason = "adaptive:global_stagnation"
+        elif pressure == species_pressure:
+            reason = "adaptive:species_stagnation"
+        else:
+            reason = "adaptive:species_scarcity"
+        self._interspecies_crossover_last_reason = reason
+        return rate
 
     def reset_stagnation(self) -> None:
         """Reset stagnation counters after a curriculum stage switch.
@@ -1220,10 +1297,11 @@ class Population:
         if self._crossover_enabled and random.random() < parent.crossover_prob and len(self._evaluated) >= 2:
             # Interspecies crossover: with a small probability pick the second
             # parent from a *different* species to combine structural innovations.
+            interspecies_rate = self._adaptive_interspecies_rate()
             use_interspecies = (
-                self._interspecies_crossover_rate > 0.0
+                interspecies_rate > 0.0
                 and len(self._species) >= 2
-                and random.random() < self._interspecies_crossover_rate
+                and random.random() < interspecies_rate
             )
             if use_interspecies:
                 # Find parent's species, then pick from any other species.

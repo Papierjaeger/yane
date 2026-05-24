@@ -85,8 +85,7 @@ class LamarckRefiner:
         self.sigma = float(sigma)
         if adaptive:
             self.steps = 0
-            if self.max_steps <= 0:
-                self.max_steps = k   # sensible default
+            self.max_steps = max(0, k)
         else:
             self.steps = max(1, k)
             self.max_steps = 0
@@ -118,8 +117,7 @@ class LamarckRefiner:
         self.sa_t0 = float(t0) if t0 is not None else None
         if adaptive:
             self.steps = 0
-            if self.max_steps <= 0:
-                self.max_steps = k
+            self.max_steps = max(0, k)
         else:
             self.steps = max(1, k)
             self.max_steps = 0
@@ -139,8 +137,7 @@ class LamarckRefiner:
         self.cma_population = max(2, int(population))
         if adaptive:
             self.steps = 0
-            if self.max_steps <= 0:
-                self.max_steps = k
+            self.max_steps = max(0, k)
         else:
             self.steps = max(1, k)
             self.max_steps = 0

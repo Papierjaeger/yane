@@ -222,6 +222,20 @@ class TrainingTab(QWidget):
             "0.05 = 5 % aller Crossovers sind species-übergreifend\n"
             "Hilft, lokale Optima aufzubrechen und Innovationen zu kombinieren.")
 
+        self.combo_interspecies_mode = QComboBox()
+        self.combo_interspecies_mode.addItems(["Fix", "Adaptiv"])
+        self.combo_interspecies_mode.setToolTip(
+            "Interspecies-Crossover-Zeitplan.\n"
+            "Fix nutzt die eingestellte Rate direkt.\n"
+            "Adaptiv erhöht die Live-Rate bei globaler oder Species-Stagnation.")
+        self.dspin_interspecies_max = QDoubleSpinBox()
+        self.dspin_interspecies_max.setRange(0.0, 0.5)
+        self.dspin_interspecies_max.setSingleStep(0.01)
+        self.dspin_interspecies_max.setValue(0.2)
+        self.dspin_interspecies_max.setDecimals(2)
+        self.dspin_interspecies_max.setToolTip(
+            "Maximale adaptive Interspecies-Crossover-Rate bei starker Stagnation.")
+
         self.dspin_convergence_spread = QDoubleSpinBox()
         self.dspin_convergence_spread.setRange(0.0, 1000.0)
         self.dspin_convergence_spread.setSingleStep(0.1)
@@ -296,29 +310,20 @@ class TrainingTab(QWidget):
             "die nie entfernt werden. Schützt strukturelle Innovationen\n"
             "auch in kleinen Species. Default 1.")
 
-        self.combo_lamarck_mode = QComboBox()
-        self.combo_lamarck_mode.addItems([
-            "Adaptiv (Standard)", "Explizit", "Explizit NES", "Explizit SA",
-            "Explizit CMA-ES", "Aus",
-        ])
-        self.combo_lamarck_mode.setToolTip(
-            "Lamarck-Modus:\n\n"
-            "Adaptiv (Standard) — Hill-Climbing läuft automatisch bei Stagnation.\n"
-            "  Schrittanzahl steigt von 0 → max_steps proportional zum Stagnationsgrad.\n"
-            "  Nur die besten 20 % der Population werden verfeinert.\n"
-            "  Kein Setup nötig, empfohlen für die meisten Aufgaben.\n\n"
-            "Explizit — Hill-Climbing mit fester Schrittzahl vor jeder Eval.\n"
-            "  Gut für Dataset-Aufgaben (XOR, Regression), wo jede Eval billig ist.\n\n"
-            "Explizit NES — Natural Evolution Strategies statt Hill-Climbing.\n"
-            "  Schätzt einen Gradienten via k antithetischer Perturbationspaare\n"
-            "  und macht einen gerichteten Schritt. Kostet 2k+1 Evals — effizienter\n"
-            "  für große Gewichtsvektoren.\n\n"
-            "Explizit SA — Simulated Annealing mit geometrischer Abkühlung.\n"
-            "  Akzeptiert schlechtere Moves mit exp(Δf/T) — entkommen aus lokalen Minima.\n"
-            "  Gibt das beste Fitness über die gesamte Kette zurück.\n\n"
-            "Explizit CMA-ES — volle-Kovarianz-Suche über Gewichte/Biases.\n"
-            "  Teurer, aber nützlich wenn lokale Gewichtskorrelationen wichtig sind.\n\n"
-            "Aus — Lamarck komplett deaktiviert.")
+        self.combo_lamarck_schedule = QComboBox()
+        self.combo_lamarck_schedule.addItems(["Adaptiv", "Explizit", "Aus"])
+        self.combo_lamarck_schedule.setToolTip(
+            "Lamarck-Zeitplan.\n"
+            "Adaptiv läuft nur bei Stagnation und nur für starke Genome.\n"
+            "Explizit läuft mit fester Schrittzahl vor jeder Evaluation.\n"
+            "Aus deaktiviert Lamarck vollständig.")
+
+        self.combo_lamarck_optimizer = QComboBox()
+        self.combo_lamarck_optimizer.addItems(["Hill-Climbing", "NES", "SA", "CMA-ES"])
+        self.combo_lamarck_optimizer.setToolTip(
+            "Lokaler Optimierer für Lamarck.\n"
+            "Der Optimierer ist unabhängig vom Zeitplan, also auch NES, SA und CMA-ES\n"
+            "können adaptiv bei Stagnation laufen.")
 
         self.spin_lamarck = QSpinBox()
         self.spin_lamarck.setRange(1, 20)
@@ -333,7 +338,7 @@ class TrainingTab(QWidget):
             "Schrittgröße = lamarck_sigma des Genoms.\n"
             "3–5 = empfohlen für Regression / Supervised Learning.")
 
-        self.combo_lamarck_mode.currentIndexChanged.connect(self._on_lamarck_mode_changed)
+        self.combo_lamarck_schedule.currentIndexChanged.connect(self._on_lamarck_mode_changed)
 
         self.spin_multi_eval = QSpinBox()
         self.spin_multi_eval.setRange(1, 50)
@@ -491,7 +496,8 @@ class TrainingTab(QWidget):
         lamarck_lay = QHBoxLayout(lamarck_row)
         lamarck_lay.setContentsMargins(0, 0, 0, 0)
         lamarck_lay.setSpacing(4)
-        lamarck_lay.addWidget(self.combo_lamarck_mode, stretch=1)
+        lamarck_lay.addWidget(self.combo_lamarck_schedule, stretch=1)
+        lamarck_lay.addWidget(self.combo_lamarck_optimizer, stretch=1)
         lamarck_lay.addWidget(self.spin_lamarck)
         cfg_form.addRow("Lamarck:",        lamarck_row)
         cfg_form.addRow("Multi-eval:",     self.spin_multi_eval)
@@ -535,7 +541,15 @@ class TrainingTab(QWidget):
             ablation_lay.addWidget(chk)
         ablation_lay.addStretch()
         advance_grp.addRow("Ablation (off = disable):", ablation_row)
-        advance_grp.addRow("Interspecies crossover:", self.dspin_interspecies)
+        interspecies_row = QWidget()
+        interspecies_lay = QHBoxLayout(interspecies_row)
+        interspecies_lay.setContentsMargins(0, 0, 0, 0)
+        interspecies_lay.setSpacing(4)
+        interspecies_lay.addWidget(self.combo_interspecies_mode)
+        interspecies_lay.addWidget(self.dspin_interspecies)
+        interspecies_lay.addWidget(QLabel("max"))
+        interspecies_lay.addWidget(self.dspin_interspecies_max)
+        advance_grp.addRow("Interspecies crossover:", interspecies_row)
         converge_row = QWidget()
         converge_lay = QHBoxLayout(converge_row)
         converge_lay.setContentsMargins(0, 0, 0, 0)
@@ -746,11 +760,13 @@ class TrainingTab(QWidget):
         self.spin_species.setValue(ex.default_target_species)
         self.chk_fitness_shaping.setChecked(ex.default_fitness_shaping)
         if ex.default_lamarck_steps > 0:
-            self.combo_lamarck_mode.setCurrentText("Explizit")
+            self.combo_lamarck_schedule.setCurrentText("Explizit")
+            self.combo_lamarck_optimizer.setCurrentText("Hill-Climbing")
             self.spin_lamarck.setValue(ex.default_lamarck_steps)
             self.spin_lamarck.setEnabled(True)
         else:
-            self.combo_lamarck_mode.setCurrentText("Adaptiv (Standard)")
+            self.combo_lamarck_schedule.setCurrentText("Adaptiv")
+            self.combo_lamarck_optimizer.setCurrentText("Hill-Climbing")
             self.spin_lamarck.setEnabled(False)
             self.spin_lamarck.setValue(5)
         self.dspin_target.setValue(ex.target_fitness)
@@ -775,7 +791,7 @@ class TrainingTab(QWidget):
         self.example_changed.emit(ex)
 
     def _on_lamarck_mode_changed(self, index: int) -> None:
-        self.spin_lamarck.setEnabled(index in (1, 2, 3, 4))  # Explizit / NES / SA / CMA-ES
+        self.spin_lamarck.setEnabled(self.combo_lamarck_schedule.currentText() == "Explizit")
 
     def _on_preset_changed(self, index: int) -> None:
         preset = self._preset_by_index.get(index)
@@ -875,9 +891,13 @@ class TrainingTab(QWidget):
             self._yane.set_speciation(self.chk_speciation.isChecked())
             self._yane.set_crossover(self.chk_crossover.isChecked())
             self._yane.set_diversity_injection(self.chk_diversity_injection.isChecked())
-            is_rate = self.dspin_interspecies.value()
-            if is_rate > 0.0:
-                self._yane.set_interspecies_crossover(is_rate)
+            if self.combo_interspecies_mode.currentText() == "Adaptiv":
+                self._yane.set_adaptive_interspecies_crossover(
+                    min_rate=self.dspin_interspecies.value(),
+                    max_rate=self.dspin_interspecies_max.value(),
+                )
+            else:
+                self._yane.set_interspecies_crossover(self.dspin_interspecies.value())
             conv_eps = self.dspin_convergence_spread.value()
             if conv_eps > 0.0:
                 self._yane.set_convergence_stop(
@@ -894,16 +914,22 @@ class TrainingTab(QWidget):
                 self.spin_elite_species.value(),
             )
 
-            lamarck_mode = self.combo_lamarck_mode.currentText()
-            if lamarck_mode == "Explizit":
-                self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="hill_climbing")
-            elif lamarck_mode == "Explizit NES":
-                self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="nes")
-            elif lamarck_mode == "Explizit SA":
-                self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="sa")
-            elif lamarck_mode == "Explizit CMA-ES":
-                self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="cma_es")
-            elif lamarck_mode == "Aus":
+            optimizer_map = {
+                "Hill-Climbing": "hill_climbing",
+                "NES": "nes",
+                "SA": "sa",
+                "CMA-ES": "cma_es",
+            }
+            lamarck_optimizer = optimizer_map[self.combo_lamarck_optimizer.currentText()]
+            lamarck_schedule = self.combo_lamarck_schedule.currentText()
+            if lamarck_schedule == "Explizit":
+                self._yane.set_lamarck(
+                    n_steps=self.spin_lamarck.value(),
+                    mode=lamarck_optimizer,
+                )
+            elif lamarck_schedule == "Adaptiv":
+                self._yane.set_lamarck_adaptive(mode=lamarck_optimizer)
+            elif lamarck_schedule == "Aus":
                 self._yane.set_lamarck_adaptive(max_steps=0)
             n_eval = self.spin_multi_eval.value()
             if n_eval > 1:

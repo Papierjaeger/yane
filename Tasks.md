@@ -44,7 +44,7 @@ Nutzen:
 - Adaptive Faehigkeiten werden ein Systemmerkmal statt einzelner Spezialfaelle.
 - Neue adaptive Features koennen spaeter konsistent angeschlossen werden.
 
-### P0 🔲 Lamarck-Modi adaptiv vereinheitlichen
+### P0 ⚡ Lamarck-Modi adaptiv vereinheitlichen
 
 In der GUI gibt es bereits `Adaptiv`, aber der Modus wirkt aktuell wie eine
 Lamarck-Hill-Climbing-Option. NES, SA und CMA-ES sollten ebenfalls klar als
@@ -52,8 +52,8 @@ adaptive Varianten steuerbar sein.
 
 Aufgaben:
 
-- Lamarck-Modell klaeren: Optimierer `Hill-Climb`, `NES`, `SA`, `CMA-ES`; Zeitplan `aus`, `explizit`, `adaptiv`.
-- Adaptive Varianten fuer NES, SA und CMA-ES implementieren oder vorhandene Pfade eindeutig anbinden.
+- ✅ Lamarck-Modell in der GUI klaeren: Optimierer `Hill-Climb`, `NES`, `SA`, `CMA-ES`; Zeitplan `aus`, `explizit`, `adaptiv`.
+- ✅ Adaptive Varianten fuer NES, SA und CMA-ES in der GUI eindeutig an vorhandene Core-Pfade anbinden.
 - Per-Species-Entscheidung erlauben: manche Species bekommen lokale Suche, andere nur Mutation.
 - Kostenbudget einfuehren: adaptive lokale Suche darf nicht unkontrolliert Evaluationen verbrennen.
 - Diagnostics erweitern: Modus, Optimierer, Trigger, Schritte, Kosten, Verbesserung pro Optimierer.
@@ -63,7 +63,7 @@ Nutzen:
 - Der Begriff `Adaptiv` ist nicht mehr nur an einen Lamarck-Spezialfall gekoppelt.
 - Nutzer sehen klar, welche lokale Suche wann und warum aktiv war.
 
-### P0 🔲 GUI fuer adaptive Features eindeutig machen
+### P0 ⚡ GUI fuer adaptive Features eindeutig machen
 
 Adaptive Optionen muessen in der GUI sichtbar, unterscheidbar und nachvollziehbar
 sein. Aktuell ist nicht immer klar, ob `Adaptiv` nur Lamarck betrifft oder ein
@@ -73,9 +73,9 @@ Aufgaben:
 
 - Eigene GUI-Sektion `Adaptive Control` bauen.
 - Fuer jedes adaptive Feature denselben UI-Aufbau verwenden: Modus, Min/Max, Budget, aktueller Wert, letzter Trigger.
-- Lamarck-GUI in zwei Controls splitten: `Optimierer` und `Zeitplan`.
-- Live-Anzeige fuer adaptive Entscheidungen ergaenzen: Warum wurde etwas erhoeht, gesenkt oder deaktiviert?
-- Tooltips und Labels so formulieren, dass `Adaptiv` nicht mit `Explizit` oder `Auto-Preset` verwechselt wird.
+- ✅ Lamarck-GUI in zwei Controls splitten: `Optimierer` und `Zeitplan`.
+- ⚡ Live-Anzeige fuer adaptive Entscheidungen ergaenzen: Interspecies-Crossover zeigt Live-Rate und letzten Trigger.
+- ⚡ Tooltips und Labels so formulieren, dass `Adaptiv` nicht mit `Explizit` oder `Auto-Preset` verwechselt wird.
 - Presets fuer adaptive Profile ergaenzen: konservativ, balanciert, aggressiv, analysefreundlich.
 
 Nutzen:
@@ -83,7 +83,7 @@ Nutzen:
 - YANE wird als adaptives System bedienbar, nicht als Sammlung versteckter Schalter.
 - GUI-Runs lassen sich besser erklaeren und debuggen.
 
-### P0 🔲 Interspecies-Crossover adaptiv machen
+### P0 ⚡ Interspecies-Crossover adaptiv machen
 
 Interspecies-Crossover ist aktuell als feste Rate steuerbar. Sinnvoller waere
 eine adaptive Rate, die bei Stagnation steigt und bei zu viel Instabilitaet oder
@@ -91,11 +91,11 @@ Diversity-Verlust wieder sinkt.
 
 Aufgaben:
 
-- Adaptive Interspecies-Policy implementieren: Basisrate, Min/Max, Ramp-up, Cooldown.
-- Trigger definieren: Species-Stagnation, globales Plateau, geringe Novelty, zu starke Species-Isolation.
+- ✅ Adaptive Interspecies-Policy implementieren: Basisrate, Min/Max und stagnationsbasierter Ramp-up.
+- ⚡ Trigger definieren: Species-Stagnation und globales Plateau sind implementiert; geringe Novelty und Species-Isolation fehlen noch.
 - Schutzregeln einbauen: Eliten bewahren, inkompatible Eltern meiden, Rate bei Fitness-Einbruch senken.
-- Diagnostics ergaenzen: aktuelle Rate, Cross-Species-Erfolg, Nachkommen-Fitness, verworfene Paarungen.
-- GUI-Control ergaenzen: `Aus`, `Fix`, `Adaptiv`; mit Live-Rate und letzter Entscheidung.
+- ⚡ Diagnostics ergaenzen: aktuelle Rate, Modus, Min/Max und letzter Trigger sind implementiert; Cross-Species-Erfolg, Nachkommen-Fitness und verworfene Paarungen fehlen noch.
+- ✅ GUI-Control ergaenzen: `Fix`, `Adaptiv`; mit Live-Rate und letzter Entscheidung.
 
 Nutzen:
 
@@ -346,78 +346,3 @@ Nutzen:
 6. **P1 Adaptive Benchmark- und Ablation-Suite**
 7. **P1 Stabilitaetslauf fuer GUI-Regression 2->2**
 
----
-
-## Abgeschlossene Capability-Gruppen
-
-### Fitness, Evaluation und Training ✅
-
-- Curriculum Learning mit Stage-Wechsel und Diagnostics.
-- Fitness-Landscape-Diagnostics: IQR, Histogramm, Plateau-Ratio, Jump-Rate.
-- Multi-eval mit mean/median/min und Sigma-Penalty.
-- Early-Stopping-Protokoll fuer Generator-Fitnessfunktionen.
-- Fitness-Shaping und zentrale Fitness-Sanitizing-Pipeline.
-- Multi-Objective-Fitness inklusive Pareto-Rang, Crowding-Distance und Vector-Aggregation.
-
-### Evolution und Suchstrategie ✅
-
-- Robuste Speciation mit Hard-Cap, dynamischer Ziel-Species und alternativer Metrik.
-- Species-budgetierte Reproduktion mit Spawn-Credits, Jugendbonus und Species-internem Tournament.
-- Adaptive Strukturmutation: weight-biased remove, Spike, Rewiring, Enable/Disable.
-- Mutation-Success-Tracking und per-Species-Mutation-Biases.
-- Adaptive Populationsgroesse.
-- Quality Diversity / MAP-Elites mit Archiv, Diagnostics, GUI-Control und Export.
-- Coevolution-Bausteine: Hall-of-Fame, competitive fitness, mixed opponents.
-- Async Evaluation Queue fuer lokale Future-basierte Batch-Auswertung.
-
-### Netzwerkmodell ✅
-
-- Aktive/inaktive Strukturdiagnostik und gezieltes Pruning.
-- Normalizer-Framework mit Scale/MinMax/ZScore/Clip/RunningStats.
-- Memory Nodes mit Leaky Memory, statischem und dynamischem Gating.
-- Modulare Subnetze erkennen und duplizieren.
-- Indirekte Kodierung / CPPN-artige Connection-Generierung.
-- Matrixexport, MatrixForwardCache, kompatible Batch-Auswertung und optionaler CuPy-Pfad.
-
-### Optimierung und Hybrid-Training ✅
-
-- Lamarckian Refinement adaptiv, explizit und per Species.
-- Evolvierbares `genome.lamarck_sigma`.
-- Lokale Optimierer: Hill-Climbing, Simulated Annealing, NES, CMA-ES.
-- Optionaler Backprop-Hook fuer kompatible feed-forward Genome.
-- Benchmark zum Vergleich von Lamarck-Modi.
-
-### Performance und Parallelisierung ✅
-
-- Einheitliche Evaluation-Pipeline fuer train/API/GUI.
-- GUI sequential, ThreadPool und Multiprocessing-Pfade.
-- Forward-Microbenchmarks.
-- Vektorisierter `forward_batch()`.
-- Schlankerer Pickle-State fuer Genome.
-- Serialization-/Matrixexport-Profiling-Skript.
-
-### Robustheit und Reproduzierbarkeit ✅
-
-- Seed-Handling fuer Python und NumPy.
-- Checkpoints mit Migration v1->v2 und JSON-Metadaten-Sidecar.
-- Warm-Start / Transfer Learning mit I/O-Adaption.
-- Weight-/Bias-Clipping und Output-Sanitizing.
-- ResourceGuard und Memory-Trim.
-- Strukturierte Logs mit Config, Fitness-History, Best-Genome und Crash-State.
-
-### GUI, API und Bedienbarkeit ✅
-
-- PySide6-GUI mit Training, Inspect, API-Server und Debug-Tab.
-- NetworkCanvas, WeightHistogram, FitnessChart, SpeciesChart, MutationRateChart.
-- ParetoScatter und MAP-Elites-Heatmap.
-- Advanced-Controls fuer Fitness-Shaping, Ablations, Lamarck-Modi, Multi-Objective, QD, Elitismus und mehr.
-- GUI-Smoke- und Screenshot-Tests.
-- FastAPI-Konfiguration, Population-Endpoints, Diagnostics, Best-Export, Checkpoint-Endpunkte.
-- Preset-System fuer GUI und API.
-
-### Benchmarking und Dokumentation ✅
-
-- Benchmark-Suite mit Gate-Modus und Markdown-Report.
-- Ablation-Schalter und Tests.
-- README und technische Dokumentation fuer aktuelle Architektur.
-- Entwicklerdokumentation: Genom-Lifecycle, Spawn-Zyklus, Worker-Pfade, Fitness-Konventionen.

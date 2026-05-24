@@ -36,7 +36,9 @@ class TestGUISmoke(unittest.TestCase):
         from yane.gui.tabs.training_tab import TrainingTab
 
         tab = TrainingTab()
-        self.assertGreaterEqual(tab.combo_lamarck_mode.findText("Explizit CMA-ES"), 0)
+        self.assertGreaterEqual(tab.combo_lamarck_schedule.findText("Adaptiv"), 0)
+        self.assertGreaterEqual(tab.combo_lamarck_optimizer.findText("CMA-ES"), 0)
+        self.assertGreaterEqual(tab.combo_interspecies_mode.findText("Adaptiv"), 0)
         self.assertTrue(hasattr(tab, "chk_multi_objective"))
         self.assertTrue(hasattr(tab, "chk_quality_diversity"))
         self.assertTrue(hasattr(tab, "preset_combo"))

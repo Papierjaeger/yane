@@ -113,6 +113,12 @@ def build_population_info(
         "n_mutation_only":          population._n_mutation_only,
         "n_diversity_injection":    population._n_diversity_injection,
         "n_interspecies_crossover": population._n_interspecies_crossover,
+        "interspecies_crossover_mode": population._interspecies_crossover_mode,
+        "interspecies_crossover_rate": population._interspecies_crossover_rate,
+        "interspecies_crossover_current": population._interspecies_crossover_current,
+        "interspecies_crossover_min": population._interspecies_crossover_min,
+        "interspecies_crossover_max": population._interspecies_crossover_max,
+        "interspecies_crossover_last_reason": population._interspecies_crossover_last_reason,
         "species_spawn_scores":     list(population._last_species_spawn_scores),
         "n_early_stopped":          n_early_stopped,
         # Multi-objective diagnostics
