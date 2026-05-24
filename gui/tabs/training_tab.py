@@ -624,6 +624,14 @@ class TrainingTab(QWidget):
         self.spin_conns.setValue(ex.max_connections)
         self.spin_pop.setValue(ex.default_population)
         self.spin_species.setValue(ex.default_target_species)
+        self.chk_fitness_shaping.setChecked(ex.default_fitness_shaping)
+        if ex.default_lamarck_steps > 0:
+            self.combo_lamarck_mode.setCurrentText("Explizit")
+            self.spin_lamarck.setValue(ex.default_lamarck_steps)
+            self.spin_lamarck.setEnabled(True)
+        else:
+            self.combo_lamarck_mode.setCurrentText("Adaptiv (Standard)")
+            self.spin_lamarck.setEnabled(False)
         self.dspin_target.setValue(ex.target_fitness)
         self.desc_label.setText(ex.description)
         # Default memory based on example type; user can override before training.
@@ -1074,5 +1082,4 @@ class TrainingTab(QWidget):
             self.ram_bar.setStyleSheet(
                 f"QProgressBar::chunk {{ background-color: {color}; border-radius: 3px; }}"
             )
-
 

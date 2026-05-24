@@ -15,7 +15,7 @@ from yane.examples.basic_multiplication import (
     make_eval as _mult_make_eval,
     N_INPUTS as _MULT_NI, N_OUTPUTS as _MULT_NO, TARGET_FITNESS as _MULT_FIT,
     TEST_CASES as _MULT_TEST_CASES,
-    dataset as _MULT_DATASET,
+    dataset as _MULT_DATASET, NORMALIZER as _MULT_NORMALIZER,
 )
 from yane.examples.simple_2_2_continuous import (
     make_eval as _reg22_make_eval,
@@ -31,6 +31,7 @@ from yane.examples.sequence_recall_PI import (
     make_eval as _pi_make_eval,
     N_INPUTS as _PI_NI, N_OUTPUTS as _PI_NO, TARGET_FITNESS as _PI_FIT,
     dataset as _PI_DATASET, DECIMAL_PLACES as _PI_DECIMAL_PLACES,
+    NORMALIZER as _PI_NORMALIZER,
     make_curriculum_eval as _pi_make_curriculum_eval,
     make_curriculum_targets as _pi_make_curriculum_targets,
     CURRICULUM_SPEC as _PI_CURRICULUM_SPEC,
@@ -602,6 +603,8 @@ class ExampleConfig:
         default_population: int = 100,
         default_target_species: int = 5,
         default_curriculum: bool = False,
+        default_fitness_shaping: bool = False,
+        default_lamarck_steps: int = 0,
     ) -> None:
         self.name = name
         self.description = description
@@ -630,6 +633,8 @@ class ExampleConfig:
         self.default_population = default_population
         self.default_target_species = default_target_species
         self.default_curriculum = default_curriculum
+        self.default_fitness_shaping = default_fitness_shaping
+        self.default_lamarck_steps = default_lamarck_steps
 
 
 def _pi_make_curriculum(
@@ -669,13 +674,16 @@ def load_examples() -> list[ExampleConfig]:
             description="Learn the XOR function (2 inputs, 1 output).",
             n_inputs=_XOR_NI, n_outputs=_XOR_NO,
             max_nodes=20, max_connections=50,
-            n_initial_hidden=2,
+            n_initial_hidden=4,
             make_eval=_xor_make_eval,
             target_fitness=_XOR_FIT,
             category="Dataset",
             supports_render=False,
             stateful=False,
             test_cases=_XOR_TEST_CASES,
+            default_target_species=2,
+            default_fitness_shaping=True,
+            default_lamarck_steps=2,
         ),
         ExampleConfig(
             name="Multiplication",
@@ -685,7 +693,7 @@ def load_examples() -> list[ExampleConfig]:
             ),
             n_inputs=_MULT_NI, n_outputs=_MULT_NO,
             max_nodes=30, max_connections=100,
-            n_initial_hidden=3,    # multiplication is non-linear; needs hidden layer
+            n_initial_hidden=4,    # multiplication is non-linear; needs hidden layer
             make_eval=_mult_make_eval,
             target_fitness=_MULT_FIT,
             category="Dataset",
@@ -693,8 +701,11 @@ def load_examples() -> list[ExampleConfig]:
             stateful=False,
             # Full multiplication table (100 entries) — user can scan all a*b combinations
             test_cases=[(s["input"], s["output"]) for s in _MULT_DATASET],
-            input_scale=[9.0, 9.0],
-            output_scale=[81.0],
+            input_scale=_MULT_NORMALIZER.input_scale_list,
+            output_scale=_MULT_NORMALIZER.output_scale_list,
+            default_population=150,
+            default_target_species=4,
+            default_lamarck_steps=2,
         ),
         ExampleConfig(
             name="Regression 2→2",
@@ -707,18 +718,25 @@ def load_examples() -> list[ExampleConfig]:
             category="Dataset",
             stateful=False,
             test_cases=_REG22_TEST_CASES,
+            default_target_species=2,
+            default_fitness_shaping=True,
+            default_lamarck_steps=8,
         ),
         ExampleConfig(
             name="Regression 3→3",
             description="Lernt eine kontinuierliche 3→3 Abbildung (8 Samples) — nichtlinear.",
             n_inputs=_REG33_NI, n_outputs=_REG33_NO,
             max_nodes=30, max_connections=120,
-            n_initial_hidden=9,    # 3 outputs × 3 hidden each — increase capacity for seed-robustness
+            n_initial_hidden=12,   # extra capacity for parallel non-linear outputs
             make_eval=_reg33_make_eval,
             target_fitness=_REG33_FIT,
             category="Dataset",
             stateful=False,
             test_cases=_REG33_TEST_CASES,
+            default_population=150,
+            default_target_species=4,
+            default_fitness_shaping=True,
+            default_lamarck_steps=5,
         ),
         ExampleConfig(
             name="Sequence: Pi-Ziffern",
@@ -732,11 +750,11 @@ def load_examples() -> list[ExampleConfig]:
             stateful=True,
             test_cases=[(s["input"], s["output"]) for s in _PI_DATASET[:_PI_DECIMAL_PLACES]],
             sequence_samples=[(s["input"], s["output"]) for s in _PI_DATASET[:_PI_DECIMAL_PLACES]],
-            input_scale=[9.0],
-            output_scale=[9.0],
+            input_scale=_PI_NORMALIZER.input_scale_list,
+            output_scale=_PI_NORMALIZER.output_scale_list,
             make_curriculum=_pi_make_curriculum,
-            default_population=200,
-            default_target_species=8,
+            default_population=100,
+            default_target_species=4,
             default_curriculum=True,
         ),
     ]
@@ -749,8 +767,8 @@ def load_examples() -> list[ExampleConfig]:
                 description="Balance a pole on a cart (4 inputs, 2 outputs).",
                 n_inputs=4, n_outputs=2,
                 max_nodes=30, max_connections=100,
-                make_eval=_make_discrete_action_eval("CartPole-v1", max_steps=100_000),
-                target_fitness=1000,
+                make_eval=_make_discrete_action_eval("CartPole-v1", max_steps=500),
+                target_fitness=500,
                 category="Classic Control",
                 supports_render=True,
             ),
@@ -864,10 +882,12 @@ def load_examples() -> list[ExampleConfig]:
                 ),
                 n_inputs=2, n_outputs=4,
                 max_nodes=20, max_connections=60,
+                n_initial_hidden=4,
                 make_eval=_make_frozenlake_eval(n_episodes=20),
                 target_fitness=0.8,
                 category="Toy Text",
                 supports_render=True,
+                default_target_species=3,
             ),
             ExampleConfig(
                 name="Taxi",
