@@ -5,12 +5,14 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Die bisherigen Roadmap-Phasen sind abgeschlossen.
+**Aktueller Stand:** Alle P0-Adaptive-Tasks und P1-Preset-System abgeschlossen. Teststand: `682 passed`.
 
-- Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging und Checkpoints sind implementiert.
-- Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates und GUI-Smoke-Tests sind implementiert.
-- Naechster Schwerpunkt: vorhandene Features adaptiv machen und in der GUI eindeutig sichtbar steuern.
-- Letzter kompletter Testlauf: `595 passed`.
+- Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging und Checkpoints: implementiert.
+- Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
+- AdaptiveController, OperatorScheduler, Lamarck-Budget, Interspecies-Trigger (Novelty/Isolation/Schutz): implementiert.
+- Adaptive Benchmark-Suite (`benchmarks/adaptive_suite.py`), GUI-Stability-Guard: implementiert.
+- Preset-Schema v2 mit `adaptive_policies`-Sektion, 4 adaptive Profilpresets, GUI-Round-Trip: implementiert.
+- Naechster Schwerpunkt: Release-Cleanup und API-Konsistenz, Pareto-Visualisierung polishen.
 
 ## Legende
 
@@ -23,121 +25,63 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ---
 
-## Offene Tasks: Adaptive YANE
+## Offene Tasks
 
-### P0 🔲 Adaptive Control Layer einfuehren
+### P1 ✅ Preset-System fuer adaptive Profile erweitern
 
-YANE hat viele starke Einzelfunktionen. Der naechste grosse Schritt ist eine
-gemeinsame adaptive Steuerung, die diese Funktionen anhand von Stagnation,
-Diversity, Fitness-Trend, Kosten und Species-Zustand automatisch dosiert.
-
-Aufgaben:
-
-- Zentrale `AdaptiveController`-Komponente entwerfen.
-- Einheitliche Signale definieren: Fitness-Trend, Plateau, Diversity, Species-Stagnation, Evaluation-Kosten, Best-Genome-Komplexitaet.
-- Gemeinsames Policy-Format fuer adaptive Features definieren: `off`, `fixed`, `adaptive`, `auto`.
-- Diagnostics fuer Policy-Entscheidungen sammeln: Grund, alte Rate, neue Rate, betroffene Species, Trigger-Signal.
-- API- und Checkpoint-Kompatibilitaet fuer adaptive Policy-State sichern.
-
-Nutzen:
-
-- Adaptive Faehigkeiten werden ein Systemmerkmal statt einzelner Spezialfaelle.
-- Neue adaptive Features koennen spaeter konsistent angeschlossen werden.
-
-### P0 ⚡ Lamarck-Modi adaptiv vereinheitlichen
-
-In der GUI gibt es bereits `Adaptiv`, aber der Modus wirkt aktuell wie eine
-Lamarck-Hill-Climbing-Option. NES, SA und CMA-ES sollten ebenfalls klar als
-adaptive Varianten steuerbar sein.
+Presets speichern aktuell nur Netzwerk-Hyperparameter. Adaptive Policies
+(`AdaptiveController`, `OperatorScheduler`, `LamarckBudget`, `InterspeciesMode`)
+sollten erstklassig in Presets mitgespeichert werden koennen.
 
 Aufgaben:
 
-- ✅ Lamarck-Modell in der GUI klaeren: Optimierer `Hill-Climb`, `NES`, `SA`, `CMA-ES`; Zeitplan `aus`, `explizit`, `adaptiv`.
-- ✅ Adaptive Varianten fuer NES, SA und CMA-ES in der GUI eindeutig an vorhandene Core-Pfade anbinden.
-- Per-Species-Entscheidung erlauben: manche Species bekommen lokale Suche, andere nur Mutation.
-- Kostenbudget einfuehren: adaptive lokale Suche darf nicht unkontrolliert Evaluationen verbrennen.
-- Diagnostics erweitern: Modus, Optimierer, Trigger, Schritte, Kosten, Verbesserung pro Optimierer.
+- Preset-Schema um Abschnitt `adaptive_policies` erweitern (Versionierung, Validierung). ✅
+- Adaptive-Preset-Profile als Dateien anlegen: konservativ, balanciert, aggressiv, analysefreundlich. ✅
+- GUI-Preset-Editor: Save/Overwrite speichert auch adaptive Einstellungen. ✅
+- Beim Laden eines Presets werden adaptive Widgets automatisch befuellt. ✅
+- Preset-Name und adaptive Policy-State in Logs und Checkpoints mitschreiben. ✅
 
 Nutzen:
 
-- Der Begriff `Adaptiv` ist nicht mehr nur an einen Lamarck-Spezialfall gekoppelt.
-- Nutzer sehen klar, welche lokale Suche wann und warum aktiv war.
+- Adaptive Experimente werden reproduzierbar und zwischen Nutzern austauschbar.
+- GUI-Konfiguration wird schneller und weniger fehleranfaellig.
 
-### P0 ⚡ GUI fuer adaptive Features eindeutig machen
+### P1 🔲 Release-Cleanup und API-Konsistenz
 
-Adaptive Optionen muessen in der GUI sichtbar, unterscheidbar und nachvollziehbar
-sein. Aktuell ist nicht immer klar, ob `Adaptiv` nur Lamarck betrifft oder ein
-allgemeines Automatikverhalten meint.
+Nach vielen schnellen Feature-Adds sollte die oeffentliche Oberflaeche
+geglaettet werden.
 
 Aufgaben:
 
-- Eigene GUI-Sektion `Adaptive Control` bauen.
-- Fuer jedes adaptive Feature denselben UI-Aufbau verwenden: Modus, Min/Max, Budget, aktueller Wert, letzter Trigger.
-- ✅ Lamarck-GUI in zwei Controls splitten: `Optimierer` und `Zeitplan`.
-- ⚡ Live-Anzeige fuer adaptive Entscheidungen ergaenzen: Interspecies-Crossover zeigt Live-Rate und letzten Trigger.
-- ⚡ Tooltips und Labels so formulieren, dass `Adaptiv` nicht mit `Explizit` oder `Auto-Preset` verwechselt wird.
-- Presets fuer adaptive Profile ergaenzen: konservativ, balanciert, aggressiv, analysefreundlich.
+- Public API auf Namenskonsistenz pruefen: `set_*`, `get_*`, Diagnostics-Keys.
+- Adaptive Parameter einheitlich benennen: `*_mode`, `*_policy`, `*_min`, `*_max`, `*_budget`.
+- README-Beispiele gegen aktuellen Code ausfuehren und aktualisieren.
+- Veraltete Kommentare und Docstrings entfernen oder aktualisieren.
+- Importpfade und `__all__` fuer neue Module (`adaptive_controller`, `operator_scheduler`) pruefen.
+- Minimalen Release-Abschnitt in README ergaenzen.
 
 Nutzen:
 
-- YANE wird als adaptives System bedienbar, nicht als Sammlung versteckter Schalter.
-- GUI-Runs lassen sich besser erklaeren und debuggen.
+- YANE wirkt nach aussen weniger wie ein Forschungsnotizbuch.
+- Neue Nutzer finden schneller den richtigen Einstieg.
 
-### P0 ⚡ Interspecies-Crossover adaptiv machen
+### P1 🔲 Pareto- und MAP-Elites-Visualisierung polishen
 
-Interspecies-Crossover ist aktuell als feste Rate steuerbar. Sinnvoller waere
-eine adaptive Rate, die bei Stagnation steigt und bei zu viel Instabilitaet oder
-Diversity-Verlust wieder sinkt.
+Basisplots existieren. Fuer echte Analyse fehlen noch Interaktion und
+Export aus der GUI.
 
 Aufgaben:
 
-- ✅ Adaptive Interspecies-Policy implementieren: Basisrate, Min/Max und stagnationsbasierter Ramp-up.
-- ⚡ Trigger definieren: Species-Stagnation und globales Plateau sind implementiert; geringe Novelty und Species-Isolation fehlen noch.
-- Schutzregeln einbauen: Eliten bewahren, inkompatible Eltern meiden, Rate bei Fitness-Einbruch senken.
-- ⚡ Diagnostics ergaenzen: aktuelle Rate, Modus, Min/Max und letzter Trigger sind implementiert; Cross-Species-Erfolg, Nachkommen-Fitness und verworfene Paarungen fehlen noch.
-- ✅ GUI-Control ergaenzen: `Fix`, `Adaptiv`; mit Live-Rate und letzter Entscheidung.
+- Hover/Tooltip fuer Pareto-Punkte und MAP-Elites-Zellen.
+- Export-Buttons fuer QD-Archiv (JSON/CSV) in der GUI.
+- Farbschema fuer Fitness/Complexity klarer trennen.
+- Pareto-Plotachsen beschriften und skalieren.
+- Optional: Klick auf Zelle/Punkt zeigt Genome im Inspect-Tab.
 
 Nutzen:
 
-- YANE kann genetische Inseln gezielt verbinden, ohne permanent Struktur zu verwischen.
-- Crossover wird vom Ablationsschalter zum aktiven Suchinstrument.
-
-### P0 🔲 Adaptive Operator-Scheduler fuer Mutation, QD und Pruning
-
-Viele Operatoren existieren bereits, aber ihre Aktivierung ist noch zu oft fest
-oder lokal verteilt. Ein Scheduler sollte entscheiden, wann welcher Operator mehr
-oder weniger Druck bekommt.
-
-Aufgaben:
-
-- Mutation-Operatoren adaptiv gewichten: Add-Node, Add-Connection, Rewire, Disable/Enable, Spike, Remove.
-- Novelty/QD-Druck adaptiv steuern: mehr Exploration bei Plateau, weniger bei Zielnaehe.
-- Pruning adaptiv dosieren: Komplexitaetsdruck erhoehen, wenn Fitness stagniert und Netzgroesse waechst.
-- Population Size und Species Target in dieselbe Policy-Sicht integrieren.
-- Operator-Erfolg pro Species und global tracken.
-
-Nutzen:
-
-- YANE reagiert besser auf unterschiedliche Phasen eines Laufs.
-- Mehr Exploration, wenn sie gebraucht wird; mehr Verdichtung, wenn Netzwerke ausufern.
-
-### P1 🔲 Adaptive Benchmark- und Ablation-Suite
-
-Adaptive Features brauchen Benchmarks, die nicht nur Endfitness messen, sondern
-auch Kosten, Stabilitaet und Entscheidungsqualitaet.
-
-Aufgaben:
-
-- Benchmark-Matrix bauen: fixed vs adaptive fuer Lamarck, Interspecies-Crossover, Mutation-Scheduler, QD-Druck.
-- Kostenmetriken aufnehmen: Evaluationen, Lamarck-Schritte, Wall-Time, Fitnessgewinn pro Zusatzkosten.
-- Ablations fuer jeden adaptiven Trigger ergaenzen.
-- Gates fuer adaptive Profile kalibrieren.
-- Markdown-Report um adaptive Decision-Summary erweitern.
-
-Nutzen:
-
-- Adaptive Features werden messbar statt nur plausibel.
-- Schlechte Automatik laesst sich schnell erkennen.
+- QD- und Multi-Objective-Laeufe werden besser interpretierbar.
+- GUI wird als Analysewerkzeug staerker.
 
 ### P1 🔲 Matrix-Forward automatisch im Training nutzen
 
@@ -156,43 +100,6 @@ Nutzen:
 
 - Groessere supervised Aufgaben werden realistischer.
 - GPU-/CuPy-Pfad bekommt einen praktischen Einstiegspunkt.
-
-### P1 🔲 Preset-System fuer adaptive Profile erweitern
-
-Presets existieren, aber sollten adaptive Policies als erstklassige Konfiguration
-speichern koennen.
-
-Aufgaben:
-
-- Preset-Schema mit Version, Validierung und `adaptive_policies` einfuehren.
-- Presets fuer konkrete Beispiele ergaenzen: XOR, Regression 2->2, CartPole, Acrobot.
-- Adaptive Profile speichern: konservativ, balanciert, aggressiv, stabilitaetsorientiert.
-- GUI-Preset-Editor verbessern: Name, Beschreibung, Save/Overwrite, adaptive Summary.
-- Preset-Name und adaptive Policy-State in Logs und Checkpoints mitschreiben.
-
-Nutzen:
-
-- Adaptive Experimente werden reproduzierbar.
-- GUI-Konfiguration wird schneller und weniger fehleranfaellig.
-
-### P1 🔲 Release-Cleanup und API-Konsistenz
-
-Nach vielen schnellen Feature-Adds sollte die oeffentliche Oberflaeche einmal
-geglättet werden.
-
-Aufgaben:
-
-- Public API auf Namenskonsistenz pruefen (`set_*`, `get_*`, Diagnostics-Keys).
-- Adaptive Parameter einheitlich benennen: `*_mode`, `*_policy`, `*_min`, `*_max`, `*_budget`.
-- README-Beispiele gegen aktuellen Code ausfuehren.
-- Veraltete Kommentare/Docstrings entfernen oder aktualisieren.
-- Importpfade und `__all__` fuer neue Module pruefen.
-- Minimalen Release-Abschnitt in README ergaenzen.
-
-Nutzen:
-
-- YANE wirkt nach aussen weniger wie ein Forschungsnotizbuch.
-- Neue Nutzer finden schneller den richtigen Einstieg.
 
 ### P1 🔲 Remote/Distributed Evaluation konkretisieren
 
@@ -223,30 +130,13 @@ Aufgaben:
 - JSON-Metadaten in GUI/API sichtbar machen.
 - Optional: getrennte Speicherung von Config, Tracker, Population, QD-Archiv.
 - Import-Warnungen fuer fehlende Descriptor-Callbacks in GUI anzeigen.
+- Checkpoint-State fuer `AdaptiveController` und `OperatorScheduler` pruefen und testen.
 - Dokumentieren, welche Teile Pickle bleiben und warum.
 
 Nutzen:
 
 - Alte Laeufe bleiben langfristig nutzbar.
 - Checkpoints werden besser debugbar.
-
-### P1 🔲 Pareto- und MAP-Elites-Visualisierung polishen
-
-Basisplots existieren. Fuer echte Analyse fehlen noch Interaktion und Export aus
-der GUI.
-
-Aufgaben:
-
-- Hover/Tooltip fuer Pareto-Punkte und MAP-Elites-Zellen.
-- Export-Buttons fuer QD-Archiv JSON/CSV in der GUI.
-- Farbschema fuer Fitness/Complexity klarer trennen.
-- Pareto-Plotachsen beschriften und skalieren.
-- Optional: Klick auf Zelle/Punkt zeigt Genome im Inspect-Tab.
-
-Nutzen:
-
-- QD- und Multi-Objective-Laeufe werden besser interpretierbar.
-- GUI wird als Analysewerkzeug staerker.
 
 ### P2 🔲 Evolvierbare Descriptor-Gewichte
 
@@ -260,11 +150,6 @@ Aufgaben:
 - Descriptor-Kombinationen per Ablation benchmarken.
 - Mechanismus gegen Descriptor-Collapse entwerfen.
 
-Nutzen:
-
-- Weniger manuelles Descriptor-Design.
-- Bessere Archive fuer unbekannte Aufgaben.
-
 ### P2 🔲 Meta-adaptive Policies evolvieren
 
 Wenn die handgebauten adaptiven Policies stabil sind, koennen ihre Parameter
@@ -276,11 +161,6 @@ Aufgaben:
 - Policy-Gene pro Species und global vergleichen.
 - Sicherheitsgrenzen fuer extreme Policies einbauen.
 - Meta-Ablation: feste Policy vs handadaptive Policy vs evolvierte Policy.
-
-Nutzen:
-
-- YANE lernt nicht nur Netzwerke, sondern auch bessere Suchstrategien.
-- Gute Auto-Konfiguration kann ueber Aufgaben hinweg uebertragen werden.
 
 ### P2 🔲 Modul-Crossover und Modulbibliothek
 
@@ -294,11 +174,6 @@ Aufgaben:
 - Mutationsoperator: Modul aus Bibliothek einfuegen.
 - Diagnostics: Modulhaeufigkeit und Wiederverwendungsrate.
 
-Nutzen:
-
-- Evolution kann gefundene Teilfunktionen besser wiederverwenden.
-- Skalierung auf komplexere Aufgaben koennte stabiler werden.
-
 ### P2 🔲 Evolvierbare CPPNs
 
 Indirekte Kodierung kann Verbindungen aus Koordinaten erzeugen, aber die
@@ -311,20 +186,72 @@ Aufgaben:
 - HyperNEAT-artige Substrate fuer Inputs/Outputs definieren.
 - Benchmark gegen direkte Kodierung auf regelmaessigen Aufgaben.
 
-Nutzen:
-
-- Bessere Skalierung bei grossen, geometrisch strukturierten Netzen.
-- Interessant fuer Bild- und Steuerungsaufgaben.
-
 ---
 
 ## Naechste empfohlene Reihenfolge
 
-1. **P0 Adaptive Control Layer einfuehren**
-2. **P0 Lamarck-Modi adaptiv vereinheitlichen**
-3. **P0 GUI fuer adaptive Features eindeutig machen**
-4. **P0 Interspecies-Crossover adaptiv machen**
-5. **P0 Adaptive Operator-Scheduler fuer Mutation, QD und Pruning**
-6. **P1 Adaptive Benchmark- und Ablation-Suite**
-7. **P1 Stabilitaetslauf fuer GUI-Regression 2->2**
+1. **P1 Preset-System fuer adaptive Profile erweitern** — direkt auf neuem Adaptive-Code aufbauend
+2. **P1 Release-Cleanup und API-Konsistenz** — API glaetten, README-Beispiele aktualisieren
+3. **P1 Pareto- und MAP-Elites-Visualisierung polishen** — GUI als Analysewerkzeug staerken
+4. **P1 Checkpoint-Format langfristig haerten** — insb. AdaptiveController/OperatorScheduler-State
+5. **P1 Matrix-Forward automatisch im Training nutzen** — Performance-Gewinn fuer Dataset-Tasks
+6. **P1 Remote/Distributed Evaluation** — groessere Infrastrukturarbeit
 
+---
+
+## Abgeschlossen
+
+### ✅ P0 Adaptive Control Layer einfuehren
+
+- `AdaptiveController` mit einheitlichen Signalen (Plateau, Fitness-Trend, Diversity, Species-Stagnation, Eval-Kosten, Komplexitaet).
+- Policy-Format `off` / `fixed` / `adaptive` / `auto` fuer alle Features.
+- `PolicyDecision`-Recorder fuer Diagnostics.
+- Integration in `neuro_evolution.py` und `diagnostics.py`.
+- API: `set_adaptive_control()`, `get_adaptive_controller()`.
+
+### ✅ P0 Lamarck-Modi adaptiv vereinheitlichen
+
+- Lamarck-Optimierer (Hill-Climb, NES, SA, CMA-ES) × Zeitplan (aus, explizit, adaptiv) in GUI klar getrennt.
+- Per-Species-Eligibility: `set_lamarck_per_species()`, `LamarckRefiner.set_eligible_species()`.
+- Kostenbudget: `set_lamarck_budget()`, `_consume_budget()`, `reset_generation_budget()`.
+- Diagnostics: Modus, `n_improved`, `budget_used`, `budget_exhausted_count`, `species_stats`.
+
+### ✅ P0 GUI fuer adaptive Features eindeutig machen
+
+- Eigene Sektion `Adaptive Control` (CollapsibleGroup) mit Live-Labels.
+- Vier Presets: Konservativ, Balanciert, Aggressiv, Analysefreundlich.
+- Crash-Guard um `_update_adaptive_labels` (try/except + log_warning).
+- 12 GUI-Smoke-Tests fuer Widgets, Labels und Preset-Interaktion.
+
+### ✅ P0 Interspecies-Crossover adaptiv machen
+
+- Adaptive Rate: Stagnations-, Novelty- und Isolation-Trigger, Schutzregel bei schlechter Erfolgsrate.
+- Diagnostics: aktuelle Rate, Modus, Min/Max, letzter Trigger, Crossover-Erfolgsrate, Nachkommen-Fitness.
+- GUI: Fix / Adaptiv mit Live-Rate und letztem Trigger.
+
+### ✅ P0 Adaptive Operator-Scheduler
+
+- `OperatorScheduler` mit globalen und per-Species-Gewichten fuer alle Mutations-Operatoren.
+- Adaptiver QD-Druck und Pruning-Druck.
+- `sync_from_population()`, `tick()`, `apply_to_genome()`, `get_diagnostics()`.
+- API: `set_operator_scheduler()`, `get_operator_scheduler()`.
+
+### ✅ P1 Adaptive Benchmark-Suite
+
+- `benchmarks/adaptive_suite.py`: 7 Konfigurationen (baseline → full_adaptive) auf XOR und CartPole.
+- Metriken: Loesung, Iterationen, Wall-Time, Best-Fitness, adaptive Diagnostics.
+
+### ✅ P1 Preset-System fuer adaptive Profile erweitern
+
+- `ExperimentPreset.adaptive_policies: dict` mit optionalem JSON-Abschnitt (Schema v2, rueckwaertskompatibel).
+- 4 Preset-Dateien in `presets/`: `adaptive_konservativ`, `adaptive_balanciert`, `adaptive_aggressiv`, `adaptive_analysefreundlich`.
+- `_current_adaptive_policies()` und `_apply_adaptive_policies(ap)` in `TrainingTab`.
+- `_save_current_preset()` persistiert adaptive Einstellungen, `_on_preset_changed()` befuellt adaptive Widgets.
+- 11 neue Tests in `test_presets.py`, 2 neue GUI-Smoke-Tests in `test_gui_smoke.py`.
+
+### ✅ P1 GUI-Stability-Analyse
+
+- Crash-State-Snapshot alle 100 Iterationen nach `_crash_state.json`.
+- `ResourceGuard` fuer System- und Prozess-RAM.
+- Crash-Guard in `_update_adaptive_labels`.
+- Tests: alle Crash-State-Keys im `population_memory_info()`-Dict vorhanden.

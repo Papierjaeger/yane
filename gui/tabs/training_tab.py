@@ -933,6 +933,8 @@ class TrainingTab(QWidget):
             self.dspin_mo_complexity.setValue(float(cfg["multi_objective_complexity_weight"]))
         if "diversity_injection" in cfg:
             self.chk_diversity_injection.setChecked(bool(cfg["diversity_injection"]))
+        if preset.adaptive_policies:
+            self._apply_adaptive_policies(preset.adaptive_policies)
 
     def _current_preset_config(self) -> dict:
         return {
@@ -950,11 +952,47 @@ class TrainingTab(QWidget):
             "diversity_injection": self.chk_diversity_injection.isChecked(),
         }
 
+    def _current_adaptive_policies(self) -> dict:
+        return {
+            "adaptive_controller": self.chk_adaptive_ctrl.isChecked(),
+            "operator_scheduler": self.chk_operator_scheduler.isChecked(),
+            "interspecies_mode": self.combo_interspecies_mode.currentText(),
+            "interspecies_min_rate": self.dspin_interspecies.value(),
+            "interspecies_max_rate": self.dspin_interspecies_max.value(),
+            "lamarck_schedule": self.combo_lamarck_schedule.currentText(),
+            "lamarck_optimizer": self.combo_lamarck_optimizer.currentText(),
+            "lamarck_budget": self.spin_lamarck_budget.value(),
+        }
+
+    def _apply_adaptive_policies(self, ap: dict) -> None:
+        """Apply an adaptive_policies dict to the adaptive control widgets."""
+        if "adaptive_controller" in ap:
+            self.chk_adaptive_ctrl.setChecked(bool(ap["adaptive_controller"]))
+        if "operator_scheduler" in ap:
+            self.chk_operator_scheduler.setChecked(bool(ap["operator_scheduler"]))
+        if "interspecies_mode" in ap:
+            self.combo_interspecies_mode.setCurrentText(str(ap["interspecies_mode"]))
+        if "interspecies_min_rate" in ap:
+            self.dspin_interspecies.setValue(float(ap["interspecies_min_rate"]))
+        if "interspecies_max_rate" in ap:
+            self.dspin_interspecies_max.setValue(float(ap["interspecies_max_rate"]))
+        if "lamarck_schedule" in ap:
+            self.combo_lamarck_schedule.setCurrentText(str(ap["lamarck_schedule"]))
+        if "lamarck_optimizer" in ap:
+            self.combo_lamarck_optimizer.setCurrentText(str(ap["lamarck_optimizer"]))
+        if "lamarck_budget" in ap:
+            self.spin_lamarck_budget.setValue(int(ap["lamarck_budget"]))
+
     def _save_current_preset(self) -> None:
         name, ok = QInputDialog.getText(self, "Save preset", "Preset name:")
         if not ok or not name.strip():
             return
-        path = save_preset(name.strip(), self._current_preset_config(), "Saved from GUI")
+        path = save_preset(
+            name.strip(),
+            self._current_preset_config(),
+            "Saved from GUI",
+            adaptive_policies=self._current_adaptive_policies(),
+        )
         preset = load_preset(path)
         idx = self.preset_combo.count()
         self._preset_by_index[idx] = preset

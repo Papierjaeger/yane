@@ -241,6 +241,37 @@ class TestGUIAdaptiveSection(unittest.TestCase):
         self.assertEqual(tab.lbl_plateau_ratio.text(), "0.77")
         tab.close()
 
+    # --- preset file adaptive_policies applied to widgets -------------------
+
+    def test_builtin_adaptive_preset_applies_to_widgets(self):
+        """Loading an adaptive profile preset via the main preset combo applies adaptive_policies."""
+        from yane.util.presets import PRESET_DIR, load_preset
+        from yane.gui.tabs.training_tab import TrainingTab
+
+        preset = load_preset("adaptive_analysefreundlich", preset_dir=PRESET_DIR)
+        tab = self._make_tab()
+        # Simulate loading via _apply_adaptive_policies directly
+        tab._apply_adaptive_policies(preset.adaptive_policies)
+        self.app.processEvents()
+        self.assertTrue(tab.chk_adaptive_ctrl.isChecked())
+        self.assertTrue(tab.chk_operator_scheduler.isChecked())
+        self.assertGreater(tab.spin_lamarck_budget.value(), 0)
+        self.assertEqual(tab.combo_interspecies_mode.currentText(), "Adaptiv")
+        tab.close()
+
+    def test_konservativ_preset_applies_disables_features(self):
+        from yane.util.presets import PRESET_DIR, load_preset
+
+        preset = load_preset("adaptive_konservativ", preset_dir=PRESET_DIR)
+        tab = self._make_tab()
+        tab.chk_adaptive_ctrl.setChecked(True)
+        tab.chk_operator_scheduler.setChecked(True)
+        tab._apply_adaptive_policies(preset.adaptive_policies)
+        self.app.processEvents()
+        self.assertFalse(tab.chk_adaptive_ctrl.isChecked())
+        self.assertFalse(tab.chk_operator_scheduler.isChecked())
+        tab.close()
+
 
 if __name__ == "__main__":
     unittest.main()

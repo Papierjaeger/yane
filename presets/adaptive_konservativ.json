@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "name": "Adaptiv: Konservativ",
+  "description": "Alle adaptiven Mechanismen deaktiviert. Stabile, reproduzierbare Laeufe ohne automatische Eingriffe.",
+  "config": {
+    "population_size": 100,
+    "target_species": 10
+  },
+  "adaptive_policies": {
+    "adaptive_controller": false,
+    "operator_scheduler": false,
+    "interspecies_mode": "Fix",
+    "interspecies_min_rate": 0.05,
+    "interspecies_max_rate": 0.2,
+    "lamarck_schedule": "Adaptiv",
+    "lamarck_optimizer": "Hill-Climbing",
+    "lamarck_budget": 0
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "name": "Adaptiv: Aggressiv",
+  "description": "Hohe Interspecies-Rate, Operator-Scheduler und Adaptive Control. Gut fuer schwierige oder stagnierende Probleme.",
+  "config": {
+    "population_size": 200,
+    "target_species": 12
+  },
+  "adaptive_policies": {
+    "adaptive_controller": true,
+    "operator_scheduler": true,
+    "interspecies_mode": "Adaptiv",
+    "interspecies_min_rate": 0.02,
+    "interspecies_max_rate": 0.3,
+    "lamarck_schedule": "Adaptiv",
+    "lamarck_optimizer": "NES",
+    "lamarck_budget": 0
+  }
+}

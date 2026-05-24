@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "name": "Adaptiv: Analysefreundlich",
+  "description": "Alle adaptiven Features aktiv, Lamarck-Budget begrenzt. Gut fuer reproduzierbare Experimente mit detaillierten Diagnostics.",
+  "config": {
+    "population_size": 150,
+    "target_species": 10
+  },
+  "adaptive_policies": {
+    "adaptive_controller": true,
+    "operator_scheduler": true,
+    "interspecies_mode": "Adaptiv",
+    "interspecies_min_rate": 0.01,
+    "interspecies_max_rate": 0.2,
+    "lamarck_schedule": "Adaptiv",
+    "lamarck_optimizer": "Hill-Climbing",
+    "lamarck_budget": 100
+  }
+}
