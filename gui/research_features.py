@@ -75,7 +75,10 @@ def make_gui_fitness_components(n_inputs: int) -> list[FitnessComponent]:
         values: list[float] = []
         for inp in probes:
             genome.reset()
-            values.extend(float(v) for v in genome.forward(inp))
+            # Clamp to [0, 1]: linear-activation genomes can produce extreme
+            # out-of-distribution outputs for these random probes, which would
+            # otherwise make output_span/centering scores explode.
+            values.extend(max(0.0, min(1.0, float(v))) for v in genome.forward(inp))
         return values
 
     def _output_span(genome):
