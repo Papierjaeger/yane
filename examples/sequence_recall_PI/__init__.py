@@ -8,6 +8,7 @@ import json
 import os
 
 from yane import NeuroEvolution
+from yane.util.normalization import ScaleNormalizer
 
 _here = os.path.dirname(__file__)
 
@@ -16,11 +17,9 @@ with open(os.path.join(_here, "dataset_PI.json")) as f:
 
 DECIMAL_PLACES = 10
 _SCALE         = 9.0
+NORMALIZER = ScaleNormalizer(input_scale=(_SCALE,), output_scale=(_SCALE,))
 
-dataset = [
-    {"input": [s["input"][0] / _SCALE], "output": [s["output"][0] / _SCALE]}
-    for s in _raw
-]
+dataset = NORMALIZER.normalize_samples(_raw)
 
 N_INPUTS       = 1
 N_OUTPUTS      = 1

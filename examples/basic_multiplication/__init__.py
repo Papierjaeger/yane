@@ -8,6 +8,7 @@ import json
 import os
 
 from yane import NeuroEvolution
+from yane.util.normalization import ScaleNormalizer
 
 _here = os.path.dirname(__file__)
 
@@ -16,14 +17,9 @@ with open(os.path.join(_here, "multiplication_table.json")) as f:
 
 _IN_MAX  = 9.0
 _OUT_MAX = 81.0
+NORMALIZER = ScaleNormalizer(input_scale=(_IN_MAX, _IN_MAX), output_scale=(_OUT_MAX,))
 
-dataset = [
-    {
-        "input":  [x / _IN_MAX  for x in s["input"]],
-        "output": [y / _OUT_MAX for y in s["output"]],
-    }
-    for s in _raw
-]
+dataset = NORMALIZER.normalize_samples(_raw)
 
 N_INPUTS       = 2
 N_OUTPUTS      = 1
@@ -31,7 +27,7 @@ TARGET_FITNESS = -5.0   # total |error| ≤ 5 across 100 normalised samples (avg
 
 # Normalised test cases: inputs a/9, b/9 → output a*b/81
 TEST_CASES = [
-    ([a / _IN_MAX, b / _IN_MAX], [a * b / _OUT_MAX])
+    (NORMALIZER.normalize_input([a, b]), NORMALIZER.normalize_output([a * b]))
     for a, b in [(0, 0), (2, 3), (5, 5), (7, 4), (9, 9), (1, 9)]
 ]
 
