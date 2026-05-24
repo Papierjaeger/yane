@@ -239,16 +239,16 @@ Nutzen:
 - Bessere Diagnose des Lamarck-Overheads.
 - Feinere Kontrolle der Schrittweite.
 
-### P1: Lokale Optimierer für Gewichte
+### P1: Lokale Optimierer für Gewichte ⚡
 
 Statt reinem Hill-Climbing könnten bessere lokale Verfahren helfen.
 
-Aufgaben:
+**Bereits implementiert:**
+- **Simulated Annealing** — `set_lamarck(mode='sa', cooling_rate=0.95)` / `set_lamarck_adaptive(mode='sa')`. Geometrische Abkühlung: T_k = T0 * cooling^k. Schlechtere Moves werden mit Wahrscheinlichkeit exp(Δf / T_k) akzeptiert. Gibt das Beste über die gesamte Kette zurück. `sa_cooling`, `sa_t0` in `_config_dict()`. 18 Tests in `tests/test_sa.py`.
+- **NES (Natural Evolution Strategies)** — `set_lamarck(mode='nes')` — implementiert seit vorherigem PR.
 
-- Simulated Annealing für Gewichte testen.
-- Evolution Strategies für Gewichte testen.
-- CMA-ES pro Topologie prüfen.
-- Optionaler numerischer Gradienten-Free Optimizer.
+**Noch offen:**
+- CMA-ES pro Topologie (volle Kovarianzmatrix — größerer Umbau, eigener PR).
 
 Nutzen:
 
@@ -535,7 +535,7 @@ Nutzen:
 - [x] Adaptive Populationsgröße
 - [ ] Modulare Subnetze
 - [ ] CPPN / Indirekte Kodierung
-- [ ] Lokale Optimierer (Simulated Annealing, CMA-ES)
+- [x] Lokale Optimierer: SA + NES (CMA-ES noch offen)
 - [ ] Backprop-Hybrid
 - [x] NES als Lamarck-Alternative
 - [ ] Genom-Serialisierung optimieren

@@ -98,7 +98,12 @@ class EvaluationRunner:
         # actual eval time, not the hill-climbing overhead.
         n_lamarck_steps = 0
         if lamarck.steps > 0:
-            refine_fn = lamarck.refine_nes if lamarck.nes_mode else lamarck.refine
+            if lamarck.nes_mode:
+                refine_fn = lamarck.refine_nes
+            elif lamarck.sa_mode:
+                refine_fn = lamarck.refine_sa
+            else:
+                refine_fn = lamarck.refine
             refine_fn(genome, fitness_fn, n_steps=lamarck.steps)
             n_lamarck_steps = lamarck.steps
             lamarck.n_applied += 1
@@ -156,7 +161,12 @@ class EvaluationRunner:
             # stagnation pressure is high.
             n_steps = lamarck.adaptive_steps(genome, fitness, population)
             if n_steps > 0:
-                refine_fn = lamarck.refine_nes if lamarck.nes_mode else lamarck.refine
+                if lamarck.nes_mode:
+                    refine_fn = lamarck.refine_nes
+                elif lamarck.sa_mode:
+                    refine_fn = lamarck.refine_sa
+                else:
+                    refine_fn = lamarck.refine
                 fitness = refine_fn(
                     genome, fitness_fn,
                     baseline_fitness=fitness,

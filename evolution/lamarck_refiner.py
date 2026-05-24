@@ -20,6 +20,10 @@ class LamarckRefiner:
         # NES mode — if True, refine_nes() replaces refine() everywhere.
         self.nes_mode: bool = False
         self.nes_lr: float = 0.01   # learning rate for gradient step
+        # SA (Simulated Annealing) mode — mutually exclusive with nes_mode.
+        self.sa_mode: bool = False
+        self.sa_cooling: float = 0.95   # geometric cooling factor per step
+        self.sa_t0: float | None = None  # initial temperature; None = use sigma
         # Cumulative counters
         self.n_applied: int = 0
         self.n_steps_total: int = 0
@@ -28,7 +32,12 @@ class LamarckRefiner:
 
     @property
     def mode(self) -> str:
-        prefix = "nes_" if self.nes_mode else ""
+        if self.nes_mode:
+            prefix = "nes_"
+        elif self.sa_mode:
+            prefix = "sa_"
+        else:
+            prefix = ""
         if self.steps > 0:
             return f"{prefix}explicit"
         if self.max_steps > 0:
@@ -65,12 +74,45 @@ class LamarckRefiner:
                            rather than applying to every genome.
         """
         self.nes_mode = True
+        self.sa_mode = False   # mutually exclusive
         self.nes_lr = float(learning_rate)
         self.sigma = float(sigma)
         if adaptive:
             self.steps = 0
             if self.max_steps <= 0:
                 self.max_steps = k   # sensible default
+        else:
+            self.steps = max(1, k)
+            self.max_steps = 0
+
+    def set_sa(
+        self,
+        k: int = 5,
+        sigma: float = 1.0,
+        cooling_rate: float = 0.95,
+        t0: float | None = None,
+        adaptive: bool = False,
+    ) -> None:
+        """Switch to Simulated Annealing mode.
+
+        Args:
+            k:            Steps per refinement call.
+            sigma:        Noise scale multiplier on genome.lamarck_sigma.
+            cooling_rate: Geometric cooling factor per step (0 < cooling < 1).
+                          Default 0.95 gives a gradual temperature decay.
+            t0:           Initial temperature.  None → use the effective sigma,
+                          which keeps perturbation and temperature on the same scale.
+            adaptive:     If True, use adaptive scheduling instead of always-on.
+        """
+        self.sa_mode = True
+        self.nes_mode = False   # mutually exclusive
+        self.sigma = float(sigma)
+        self.sa_cooling = max(0.0, min(1.0, float(cooling_rate)))
+        self.sa_t0 = float(t0) if t0 is not None else None
+        if adaptive:
+            self.steps = 0
+            if self.max_steps <= 0:
+                self.max_steps = k
         else:
             self.steps = max(1, k)
             self.max_steps = 0
@@ -213,6 +255,67 @@ class LamarckRefiner:
             for i, n in enumerate(nodes):
                 n.bias = orig_b[i]
             best_fitness = baseline
+
+        self.time_ms += (time.perf_counter() - t0) * 1000.0
+        return best_fitness
+
+    def refine_sa(
+        self,
+        genome: Genome,
+        fitness_fn: Callable[[Genome], float],
+        baseline_fitness: float | None = None,
+        n_steps: int | None = None,
+    ) -> float:
+        """Simulated Annealing over weights and biases; return best fitness seen.
+
+        Uses a geometric cooling schedule: T_k = T0 * cooling^k.  Worse moves
+        are accepted with probability exp(Δf / T_k).  The best fitness seen
+        across the chain is returned even if the walk ends at a worse point.
+
+        Args:
+            baseline_fitness: known fitness before SA.
+            n_steps: number of SA steps; defaults to self.steps.
+        """
+        import math
+        steps = self.steps if n_steps is None else n_steps
+        if steps <= 0:
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        conns = [c for node in genome.nodes for c in node.connections if c.enabled]
+        nodes = genome.nodes
+        if not conns and not nodes:
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        genome_sigma = getattr(genome, 'lamarck_sigma', genome.sigma_global)
+        sigma = genome_sigma * self.sigma
+        if not (0.0 < sigma < 1e6):
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        t0 = time.perf_counter()
+        current_fitness = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
+        best_fitness = current_fitness
+        T = self.sa_t0 if self.sa_t0 is not None else sigma
+        cooling = self.sa_cooling
+
+        for k in range(steps):
+            saved_w = [c.weight for c in conns]
+            saved_b = [n.bias   for n in nodes]
+            for c in conns:
+                c.weight += random.gauss(0.0, sigma)
+            for n in nodes:
+                n.bias += random.gauss(0.0, sigma)
+            new_fitness = fitness_fn(genome)
+            T_k = T * (cooling ** k)
+            delta = new_fitness - current_fitness
+            if delta > 0.0 or (T_k > 0.0 and random.random() < math.exp(delta / T_k)):
+                current_fitness = new_fitness
+                if new_fitness > best_fitness:
+                    best_fitness = new_fitness
+            else:
+                for c, w in zip(conns, saved_w):
+                    c.weight = w
+                for n, b in zip(nodes, saved_b):
+                    n.bias = b
 
         self.time_ms += (time.perf_counter() - t0) * 1000.0
         return best_fitness

@@ -413,6 +413,7 @@ class NeuroEvolution:
         sigma: float = 1.0,
         mode: str = "hill_climbing",
         learning_rate: float = 0.01,
+        cooling_rate: float = 0.95,
     ) -> None:
         """Explicit weight refinement before each genome evaluation.
 
@@ -422,23 +423,32 @@ class NeuroEvolution:
         ``mode='nes'``: Natural Evolution Strategies.  n_steps antithetic
         perturbation pairs are used to estimate a gradient, then one directed
         weight update is applied.  Costs ``2*n_steps + 1`` evaluations but
-        makes a single geographically directed step rather than n_steps random
-        attempts — more efficient for large weight vectors.
+        makes a single directed step rather than n_steps random attempts.
 
-        In both modes, n_steps = 0 re-enables adaptive scheduling.
+        ``mode='sa'``: Simulated Annealing.  n_steps perturbations with a
+        geometric cooling schedule; worse moves are accepted probabilistically.
+        Returns the best fitness seen across the chain.
+
+        In all modes, n_steps = 0 re-enables adaptive scheduling.
 
         Args:
             n_steps:       steps / perturbation pairs (default 5; 0 = adaptive).
             sigma:         multiplier on ``genome.lamarck_sigma`` (default 1.0).
-            mode:          ``'hill_climbing'`` or ``'nes'``.
+            mode:          ``'hill_climbing'``, ``'nes'``, or ``'sa'``.
             learning_rate: NES gradient step size (only used when mode='nes').
+            cooling_rate:  SA geometric cooling factor (only used when mode='sa').
         """
         if mode == "nes":
             self._lamarck.set_nes(
                 k=n_steps, sigma=sigma, learning_rate=learning_rate, adaptive=False
             )
+        elif mode == "sa":
+            self._lamarck.set_sa(
+                k=n_steps, sigma=sigma, cooling_rate=cooling_rate, adaptive=False
+            )
         else:
             self._lamarck.nes_mode = False
+            self._lamarck.sa_mode = False
             self._lamarck.set_explicit(n_steps, sigma)
 
     def set_lamarck_adaptive(
@@ -448,28 +458,35 @@ class NeuroEvolution:
         sigma: float = 1.0,
         mode: str = "hill_climbing",
         learning_rate: float = 0.01,
+        cooling_rate: float = 0.95,
     ) -> None:
-        """Configure adaptive Lamarckian / NES refinement.
+        """Configure adaptive Lamarckian refinement (fires during stagnation).
 
-        Fires automatically during stagnation.  Steps scale linearly from 0
-        (no stagnation) to max_steps (full stagnation); only genomes in the
-        top top_k fraction of the pool are refined.
+        Steps scale linearly from 0 (no stagnation) to max_steps (full
+        stagnation); only genomes in the top top_k fraction are refined.
 
         Args:
             max_steps:     maximum steps at full stagnation (default 3).
                            0 disables adaptive mode entirely.
             top_k:         fraction eligible for refinement (default 0.2).
             sigma:         multiplier on ``genome.lamarck_sigma`` (default 1.0).
-            mode:          ``'hill_climbing'`` (default) or ``'nes'``.
+            mode:          ``'hill_climbing'`` (default), ``'nes'``, or ``'sa'``.
             learning_rate: NES gradient step size (only used when mode='nes').
+            cooling_rate:  SA geometric cooling factor (only used when mode='sa').
         """
         if mode == "nes":
             self._lamarck.set_nes(
                 k=max_steps, sigma=sigma, learning_rate=learning_rate, adaptive=True
             )
             self._lamarck.top_k = max(0.0, min(1.0, top_k))
+        elif mode == "sa":
+            self._lamarck.set_sa(
+                k=max_steps, sigma=sigma, cooling_rate=cooling_rate, adaptive=True
+            )
+            self._lamarck.top_k = max(0.0, min(1.0, top_k))
         else:
             self._lamarck.nes_mode = False
+            self._lamarck.sa_mode = False
             self._lamarck.set_adaptive(max_steps, top_k, sigma)
 
     def set_curriculum(
@@ -562,6 +579,9 @@ class NeuroEvolution:
             "lamarck_sigma": self._lamarck.sigma,
             "lamarck_nes_mode": self._lamarck.nes_mode,
             "lamarck_nes_lr": self._lamarck.nes_lr,
+            "lamarck_sa_mode": self._lamarck.sa_mode,
+            "lamarck_sa_cooling": self._lamarck.sa_cooling,
+            "lamarck_sa_t0": self._lamarck.sa_t0,
             # Efficiency penalty
             "efficiency_penalty": (
                 {"max_ms": self._efficiency_penalty.max_ms,
