@@ -279,7 +279,8 @@ class TrainingTab(QWidget):
 
         self.combo_lamarck_mode = QComboBox()
         self.combo_lamarck_mode.addItems([
-            "Adaptiv (Standard)", "Explizit", "Explizit NES", "Explizit SA", "Aus",
+            "Adaptiv (Standard)", "Explizit", "Explizit NES", "Explizit SA",
+            "Explizit CMA-ES", "Aus",
         ])
         self.combo_lamarck_mode.setToolTip(
             "Lamarck-Modus:\n\n"
@@ -296,6 +297,8 @@ class TrainingTab(QWidget):
             "Explizit SA — Simulated Annealing mit geometrischer Abkühlung.\n"
             "  Akzeptiert schlechtere Moves mit exp(Δf/T) — entkommen aus lokalen Minima.\n"
             "  Gibt das beste Fitness über die gesamte Kette zurück.\n\n"
+            "Explizit CMA-ES — volle-Kovarianz-Suche über Gewichte/Biases.\n"
+            "  Teurer, aber nützlich wenn lokale Gewichtskorrelationen wichtig sind.\n\n"
             "Aus — Lamarck komplett deaktiviert.")
 
         self.spin_lamarck = QSpinBox()
@@ -307,6 +310,7 @@ class TrainingTab(QWidget):
             "Hill-Climbing: 1 Eval pro Schritt.\n"
             "NES: 2k+1 Evals für k Schritte (antithetische Paare + Gradient-Step).\n"
             "SA: 1 Eval pro Schritt mit Temperatur-basierter Akzeptanz.\n\n"
+            "CMA-ES: mehrere Kandidaten pro Schritt mit Kovarianz-Update.\n\n"
             "Schrittgröße = lamarck_sigma des Genoms.\n"
             "3–5 = empfohlen für Regression / Supervised Learning.")
 
@@ -349,6 +353,38 @@ class TrainingTab(QWidget):
         self.dspin_sigma_penalty.setEnabled(False)
 
         self.spin_multi_eval.valueChanged.connect(self._on_multi_eval_changed)
+
+        self.chk_multi_objective = QCheckBox("aktiv")
+        self.chk_multi_objective.setChecked(False)
+        self.chk_multi_objective.setToolTip(
+            "Multi-Objective Training für GUI-Beispiele.\n"
+            "Die Fitnessfunktion wird als Vektor (raw_fitness, complexity) bewertet.\n"
+            "Selektion nutzt Pareto-Rang + Crowding-Distance; Logs/Stop nutzen\n"
+            "raw_fitness - complexity_weight × complexity.")
+
+        self.dspin_mo_complexity = QDoubleSpinBox()
+        self.dspin_mo_complexity.setRange(0.0, 10.0)
+        self.dspin_mo_complexity.setSingleStep(0.001)
+        self.dspin_mo_complexity.setDecimals(4)
+        self.dspin_mo_complexity.setValue(0.01)
+        self.dspin_mo_complexity.setToolTip(
+            "Gewicht für das zweite Objective 'Komplexität'.\n"
+            "Die GUI nutzt connection_count als minimiertes Objective.\n"
+            "0.01 bedeutet: Skalarfitness = raw_fitness - 0.01 × connections.")
+
+        self.chk_quality_diversity = QCheckBox("aktiv")
+        self.chk_quality_diversity.setChecked(False)
+        self.chk_quality_diversity.setToolTip(
+            "Quality Diversity / MAP-Elites aktivieren.\n"
+            "Das Archiv speichert das beste Genom pro Descriptor-Zelle und nutzt\n"
+            "Archiv-Eliten bei Stagnation als zusätzliche Diversity-Injektion.")
+
+        self.combo_qd_descriptor = QComboBox()
+        self.combo_qd_descriptor.addItems(["Topology", "Behavior"])
+        self.combo_qd_descriptor.setToolTip(
+            "Descriptor für MAP-Elites:\n"
+            "Topology: (hidden_nodes, connections)\n"
+            "Behavior: Outputs auf festen Probeinputs")
 
         import multiprocessing as _mp
         _ncpu = _mp.cpu_count()
@@ -451,6 +487,21 @@ class TrainingTab(QWidget):
         # --- Advanced settings group (collapsed by default) ---
         advance_grp = CollapsibleGroup("Advanced", collapsed=True)
         advance_grp.addRow("Fitness shaping:",   self.chk_fitness_shaping)
+        mo_row = QWidget()
+        mo_lay = QHBoxLayout(mo_row)
+        mo_lay.setContentsMargins(0, 0, 0, 0)
+        mo_lay.setSpacing(4)
+        mo_lay.addWidget(self.chk_multi_objective)
+        mo_lay.addWidget(QLabel("complexity ×"))
+        mo_lay.addWidget(self.dspin_mo_complexity)
+        advance_grp.addRow("Multi-objective:", mo_row)
+        qd_row = QWidget()
+        qd_lay = QHBoxLayout(qd_row)
+        qd_lay.setContentsMargins(0, 0, 0, 0)
+        qd_lay.setSpacing(4)
+        qd_lay.addWidget(self.chk_quality_diversity)
+        qd_lay.addWidget(self.combo_qd_descriptor)
+        advance_grp.addRow("Quality diversity:", qd_row)
         ablation_row = QWidget()
         ablation_lay = QHBoxLayout(ablation_row)
         ablation_lay.setContentsMargins(0, 0, 0, 0)
@@ -705,7 +756,7 @@ class TrainingTab(QWidget):
         self.example_changed.emit(ex)
 
     def _on_lamarck_mode_changed(self, index: int) -> None:
-        self.spin_lamarck.setEnabled(index in (1, 2, 3))  # Explizit / NES / SA
+        self.spin_lamarck.setEnabled(index in (1, 2, 3, 4))  # Explizit / NES / SA / CMA-ES
 
     def _on_multi_eval_changed(self, value: int) -> None:
         enabled = value > 1
@@ -773,10 +824,18 @@ class TrainingTab(QWidget):
                 self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="nes")
             elif lamarck_mode == "Explizit SA":
                 self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="sa")
+            elif lamarck_mode == "Explizit CMA-ES":
+                self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode="cma_es")
             elif lamarck_mode == "Aus":
                 self._yane.set_lamarck_adaptive(max_steps=0)
             n_eval = self.spin_multi_eval.value()
-            if n_eval > 1:
+            if n_eval > 1 and self.chk_multi_objective.isChecked():
+                QMessageBox.warning(
+                    self,
+                    "Multi-objective",
+                    "Multi-eval is currently disabled for GUI multi-objective runs.",
+                )
+            elif n_eval > 1:
                 self._yane.set_multi_eval(
                     n=n_eval,
                     aggregation=self.combo_aggregation.currentText(),
@@ -795,6 +854,55 @@ class TrainingTab(QWidget):
                 make_eval_fn = functools.partial(ex.make_eval, normalize=False)
             else:
                 make_eval_fn = ex.make_eval
+
+            if self.chk_multi_objective.isChecked():
+                weight = self.dspin_mo_complexity.value()
+                self._yane.set_multi_objective(
+                    enabled=True,
+                    weights=(1.0, -weight),
+                    maximize=(True, False),
+                )
+                base_make_eval_fn = make_eval_fn
+
+                def _make_mo_eval(render_cb=None, _base=base_make_eval_fn):
+                    base_eval = _base(render_cb)
+
+                    def _eval(genome):
+                        raw = base_eval(genome)
+                        return (raw, float(genome.connection_count))
+
+                    return _eval
+
+                make_eval_fn = _make_mo_eval
+
+            if self.chk_quality_diversity.isChecked():
+                if self.combo_qd_descriptor.currentText() == "Behavior":
+                    from yane.evolution.quality_diversity import descriptor_from_outputs
+                    import random
+                    rng = random.Random(42)
+                    probes = [
+                        [rng.uniform(-1.0, 1.0) for _ in range(self.spin_inputs.value())]
+                        for _ in range(2)
+                    ]
+                    bins = tuple(8 for _ in range(max(1, self.spin_outputs.value() * len(probes))))
+                    ranges = tuple((-1.0, 1.0) for _ in bins)
+                    self._yane.set_quality_diversity(
+                        descriptor_from_outputs(probes),
+                        bins=bins,
+                        ranges=ranges,
+                        max_cells=500,
+                    )
+                else:
+                    self._yane.set_quality_diversity(
+                        descriptor_fn=lambda g: (
+                            float(max(0, len(g.nodes) - len(g.input_nodes) - len(g.output_nodes))),
+                            float(g.connection_count),
+                        ),
+                        bins=(12, 16),
+                        ranges=((0.0, float(max(1, self.spin_nodes.value() or 100))),
+                                (0.0, float(max(1, self.spin_conns.value() or 200)))),
+                        max_cells=500,
+                    )
 
             # Curriculum: build stages and register on yane before worker starts.
             if ex.make_curriculum is not None and self.chk_curriculum.isChecked():
@@ -1141,4 +1249,3 @@ class TrainingTab(QWidget):
             self.ram_bar.setStyleSheet(
                 f"QProgressBar::chunk {{ background-color: {color}; border-radius: 3px; }}"
             )
-

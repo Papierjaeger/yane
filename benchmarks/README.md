@@ -7,6 +7,19 @@ zukünftigen Änderungen, um Regressionen und Verbesserungen zu erkennen.
 
 `YYYY-MM-DD_<umgebung>[_notiz].md` — ein File pro Testsession.
 
+## Skripte
+
+```bash
+python -m yane.benchmarks.run_suite --fast
+python -m yane.benchmarks.forward_bench --sizes 10 50 200 1000
+python -m yane.benchmarks.compare_lamarck_modes --env Acrobot-v1 --modes hc nes sa cma_es
+```
+
+- `run_suite.py`: Standard-Suite über mehrere Seeds.
+- `forward_bench.py`: Microbenchmarks für `forward()`.
+- `compare_lamarck_modes.py`: Vergleich von Hill-Climbing, NES, SA und CMA-ES auf
+  Acrobot/LunarLander.
+
 ## Standardkonfiguration (sofern nicht anders angegeben)
 
 | Parameter | Wert |

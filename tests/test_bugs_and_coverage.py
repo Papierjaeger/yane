@@ -426,6 +426,32 @@ class TestGenomePickle(unittest.TestCase):
         self.assertAlmostEqual(out1[0], out2[0], places=10,
                                msg="Unpickled genome must produce same output after closure rebuild")
 
+    def test_pickle_strips_rebuildable_runtime_caches(self):
+        """IPC payloads should not carry topology/runtime caches."""
+        import pickle
+        yane = _make_yane(2, 1)
+        g = yane.next_genome()
+        from yane.core.connection import Connection as Conn
+        c1 = Conn(g.output_nodes[0]); c1.weight = 0.5
+        c2 = Conn(g.output_nodes[0]); c2.weight = -0.3
+        g.input_nodes[0].connections.append(c1)
+        g.input_nodes[1].connections.append(c2)
+        g._invalidate_topology()
+        g.forward([0.5, 0.5])
+        g._get_innov_cache()
+        g._triggered.add(g.input_nodes[0])
+
+        g2 = pickle.loads(pickle.dumps(g))
+
+        self.assertEqual(g2._triggered, set())
+        self.assertIsNone(g2._exec_order)
+        self.assertIsNone(g2._reset_nodes)
+        self.assertIsNone(g2._compiled_forward)
+        self.assertIsNone(g2._forward_dispatch)
+        self.assertIsNone(g2._innov_cache)
+        self.assertIsNone(g2._values_arr)
+        self.assertEqual(g.forward([0.2, 0.8]), g2.forward([0.2, 0.8]))
+
     def test_pickle_after_forward_cyclic(self):
         """Cyclic network uses _bfs_forward (bound method) — also must survive pickle."""
         import pickle

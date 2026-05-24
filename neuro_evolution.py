@@ -29,6 +29,8 @@ from yane.evolution.evaluation import (  # noqa: F401  (EvaluationResult re-expo
     EvaluationRunner,
     aggregate_fitnesses,
 )
+from yane.evolution.multi_objective import as_objectives
+from yane.evolution.quality_diversity import MAPElitesArchive
 from yane.util.resource_guard import ResourceGuard
 from yane.evolution.curriculum import Curriculum, CurriculumStage  # noqa: F401
 
@@ -101,6 +103,12 @@ class NeuroEvolution:
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
         self._normalizer = None
+        self._multi_objective_enabled: bool = False
+        self._multi_objective_weights: tuple[float, ...] | None = None
+        self._multi_objective_maximize: tuple[bool, ...] | None = None
+        self._qd_enabled: bool = False
+        self._qd_archive: MAPElitesArchive | None = None
+        self._qd_descriptor_fn = None
 
     @property
     def current_genome(self) -> Genome | None:
@@ -201,6 +209,17 @@ class NeuroEvolution:
         self._population._adaptive_pop_min = self._adaptive_pop_min
         self._population._adaptive_pop_max = self._adaptive_pop_max
         self._population._adaptive_pop_rate = self._adaptive_pop_rate
+        self._population._multi_objective_enabled = self._multi_objective_enabled
+        self._population._multi_objective_maximize = self._multi_objective_maximize
+        self._population._qd_enabled = self._qd_enabled
+        self._population._qd_archive = self._qd_archive
+        self._population._qd_descriptor_fn = self._qd_descriptor_fn
+        self._qd_enabled = getattr(self._population, "_qd_enabled", self._qd_enabled)
+        self._qd_archive = getattr(self._population, "_qd_archive", self._qd_archive)
+        self._qd_descriptor_fn = getattr(self._population, "_qd_descriptor_fn", self._qd_descriptor_fn)
+        self._population._qd_enabled = self._qd_enabled
+        self._population._qd_archive = self._qd_archive
+        self._population._qd_descriptor_fn = self._qd_descriptor_fn
 
     def set_seed(self, seed: int | None) -> None:
         """Set or clear the random seed.
@@ -414,6 +433,7 @@ class NeuroEvolution:
         mode: str = "hill_climbing",
         learning_rate: float = 0.01,
         cooling_rate: float = 0.95,
+        cma_population: int = 6,
     ) -> None:
         """Explicit weight refinement before each genome evaluation.
 
@@ -429,14 +449,17 @@ class NeuroEvolution:
         geometric cooling schedule; worse moves are accepted probabilistically.
         Returns the best fitness seen across the chain.
 
+        ``mode='cma_es'``: compact full-covariance CMA-ES over weights/biases.
+
         In all modes, n_steps = 0 re-enables adaptive scheduling.
 
         Args:
             n_steps:       steps / perturbation pairs (default 5; 0 = adaptive).
             sigma:         multiplier on ``genome.lamarck_sigma`` (default 1.0).
-            mode:          ``'hill_climbing'``, ``'nes'``, or ``'sa'``.
+            mode:          ``'hill_climbing'``, ``'nes'``, ``'sa'``, or ``'cma_es'``.
             learning_rate: NES gradient step size (only used when mode='nes').
             cooling_rate:  SA geometric cooling factor (only used when mode='sa').
+            cma_population: CMA-ES samples per step.
         """
         if mode == "nes":
             self._lamarck.set_nes(
@@ -446,9 +469,14 @@ class NeuroEvolution:
             self._lamarck.set_sa(
                 k=n_steps, sigma=sigma, cooling_rate=cooling_rate, adaptive=False
             )
+        elif mode == "cma_es":
+            self._lamarck.set_cma_es(
+                k=n_steps, sigma=sigma, population=cma_population, adaptive=False
+            )
         else:
             self._lamarck.nes_mode = False
             self._lamarck.sa_mode = False
+            self._lamarck.cma_mode = False
             self._lamarck.set_explicit(n_steps, sigma)
 
     def set_lamarck_adaptive(
@@ -459,6 +487,7 @@ class NeuroEvolution:
         mode: str = "hill_climbing",
         learning_rate: float = 0.01,
         cooling_rate: float = 0.95,
+        cma_population: int = 6,
     ) -> None:
         """Configure adaptive Lamarckian refinement (fires during stagnation).
 
@@ -470,7 +499,7 @@ class NeuroEvolution:
                            0 disables adaptive mode entirely.
             top_k:         fraction eligible for refinement (default 0.2).
             sigma:         multiplier on ``genome.lamarck_sigma`` (default 1.0).
-            mode:          ``'hill_climbing'`` (default), ``'nes'``, or ``'sa'``.
+            mode:          ``'hill_climbing'`` (default), ``'nes'``, ``'sa'``, or ``'cma_es'``.
             learning_rate: NES gradient step size (only used when mode='nes').
             cooling_rate:  SA geometric cooling factor (only used when mode='sa').
         """
@@ -484,9 +513,15 @@ class NeuroEvolution:
                 k=max_steps, sigma=sigma, cooling_rate=cooling_rate, adaptive=True
             )
             self._lamarck.top_k = max(0.0, min(1.0, top_k))
+        elif mode == "cma_es":
+            self._lamarck.set_cma_es(
+                k=max_steps, sigma=sigma, population=cma_population, adaptive=True
+            )
+            self._lamarck.top_k = max(0.0, min(1.0, top_k))
         else:
             self._lamarck.nes_mode = False
             self._lamarck.sa_mode = False
+            self._lamarck.cma_mode = False
             self._lamarck.set_adaptive(max_steps, top_k, sigma)
 
     def set_curriculum(
@@ -582,6 +617,8 @@ class NeuroEvolution:
             "lamarck_sa_mode": self._lamarck.sa_mode,
             "lamarck_sa_cooling": self._lamarck.sa_cooling,
             "lamarck_sa_t0": self._lamarck.sa_t0,
+            "lamarck_cma_mode": self._lamarck.cma_mode,
+            "lamarck_cma_population": self._lamarck.cma_population,
             # Efficiency penalty
             "efficiency_penalty": (
                 {"max_ms": self._efficiency_penalty.max_ms,
@@ -601,6 +638,14 @@ class NeuroEvolution:
             # Output sanitizing
             "output_sanitize": self._output_sanitize,
             "output_sanitize_fallback": self._output_fallback,
+            # Multi-objective
+            "multi_objective_enabled": self._multi_objective_enabled,
+            "multi_objective_weights": self._multi_objective_weights,
+            "multi_objective_maximize": self._multi_objective_maximize,
+            # Quality Diversity
+            "quality_diversity_enabled": self._qd_enabled,
+            "quality_diversity_bins": self._qd_archive.bins if self._qd_archive else None,
+            "quality_diversity_ranges": self._qd_archive.ranges if self._qd_archive else None,
         }
 
     # -------------------------------------------------------------------------
@@ -1158,6 +1203,53 @@ class NeuroEvolution:
         """Return the currently attached normalizer, or ``None`` if none is set."""
         return self._normalizer
 
+    def set_multi_objective(
+        self,
+        enabled: bool = True,
+        weights: list[float] | tuple[float, ...] | None = None,
+        maximize: list[bool] | tuple[bool, ...] | None = None,
+    ) -> None:
+        """Enable vector fitness with Pareto-shaped selection.
+
+        Fitness functions may return ``(objective_1, objective_2, ...)`` instead
+        of a scalar. The vector is stored on ``genome.objectives``. A weighted
+        scalar is still written to ``genome.fitness`` for existing stop criteria,
+        logging, and APIs, while parent selection can use Pareto rank and
+        crowding distance inside ``Population``.
+        """
+        self._multi_objective_enabled = enabled
+        self._multi_objective_weights = tuple(float(w) for w in weights) if weights is not None else None
+        self._multi_objective_maximize = tuple(bool(m) for m in maximize) if maximize is not None else None
+        if self._population is not None:
+            self._population._multi_objective_enabled = enabled
+            self._population._multi_objective_maximize = self._multi_objective_maximize
+
+    def set_quality_diversity(
+        self,
+        descriptor_fn,
+        bins: list[int] | tuple[int, ...],
+        ranges: list[tuple[float, float]] | tuple[tuple[float, float], ...],
+        enabled: bool = True,
+        max_cells: int | None = None,
+    ) -> None:
+        """Enable MAP-Elites archive updates during training.
+
+        ``descriptor_fn(genome)`` must return a fixed-length behavior descriptor.
+        The archive stores the best genome per descriptor cell and uses archived
+        elites as one source for diversity injection during stagnation.
+        """
+        self._qd_enabled = enabled
+        self._qd_descriptor_fn = descriptor_fn
+        self._qd_archive = MAPElitesArchive(bins=bins, ranges=ranges, max_cells=max_cells)
+        if self._population is not None:
+            self._population._qd_enabled = enabled
+            self._population._qd_archive = self._qd_archive
+            self._population._qd_descriptor_fn = descriptor_fn
+
+    def get_quality_diversity_archive(self) -> MAPElitesArchive | None:
+        """Return the MAP-Elites archive, or None when QD is disabled."""
+        return self._qd_archive
+
     # -------------------------------------------------------------------------
     # Checkpoints
     # -------------------------------------------------------------------------
@@ -1232,6 +1324,13 @@ class NeuroEvolution:
         self._stateful           = cfg.get("stateful", self._stateful)
         self._population_size    = cfg.get("population_size", self._population_size)
         self._seed               = cfg.get("seed", self._seed)
+        self._multi_objective_enabled = cfg.get("multi_objective_enabled", self._multi_objective_enabled)
+        weights = cfg.get("multi_objective_weights", self._multi_objective_weights)
+        maximize = cfg.get("multi_objective_maximize", self._multi_objective_maximize)
+        self._multi_objective_weights = tuple(weights) if weights is not None else None
+        self._multi_objective_maximize = tuple(maximize) if maximize is not None else None
+        self._population._multi_objective_enabled = self._multi_objective_enabled
+        self._population._multi_objective_maximize = self._multi_objective_maximize
 
     def warm_start_from_checkpoint(
         self,
@@ -1306,6 +1405,8 @@ class NeuroEvolution:
         self._population._adaptive_pop_min = self._adaptive_pop_min
         self._population._adaptive_pop_max = self._adaptive_pop_max
         self._population._adaptive_pop_rate = self._adaptive_pop_rate
+        self._population._multi_objective_enabled = self._multi_objective_enabled
+        self._population._multi_objective_maximize = self._multi_objective_maximize
         if fitness_fn is None:
             self._population._unevaluated = kept[:self._population_size]
             self._population._evaluated = []
@@ -1468,11 +1569,27 @@ class NeuroEvolution:
 
     def _finalize_fitness(
         self,
-        fitness: float,
+        fitness,
         elapsed_ms: float | None,
         genome: Genome | None = None,
     ) -> float:
         """Sanitize + efficiency penalty. Applied by every submission path."""
+        objectives = as_objectives(fitness) if self._multi_objective_enabled else None
+        if objectives is not None:
+            if self._multi_objective_weights is not None:
+                if len(self._multi_objective_weights) != len(objectives):
+                    raise ValueError(
+                        "multi-objective weights must match objective count "
+                        f"({len(self._multi_objective_weights)} != {len(objectives)})"
+                    )
+                scalar = sum(w * v for w, v in zip(self._multi_objective_weights, objectives))
+            else:
+                scalar = sum(objectives)
+            if genome is not None:
+                genome.objectives = tuple(self._sanitizer.apply(v) for v in objectives)
+            fitness = scalar
+        elif genome is not None:
+            genome.objectives = None
         fitness = self._sanitizer.apply(fitness)
         if self._efficiency_penalty is not None and elapsed_ms is not None:
             fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)

@@ -24,6 +24,9 @@ class LamarckRefiner:
         self.sa_mode: bool = False
         self.sa_cooling: float = 0.95   # geometric cooling factor per step
         self.sa_t0: float | None = None  # initial temperature; None = use sigma
+        # CMA-ES mode — small full-covariance local optimizer.
+        self.cma_mode: bool = False
+        self.cma_population: int = 6
         # Cumulative counters
         self.n_applied: int = 0
         self.n_steps_total: int = 0
@@ -36,6 +39,8 @@ class LamarckRefiner:
             prefix = "nes_"
         elif self.sa_mode:
             prefix = "sa_"
+        elif self.cma_mode:
+            prefix = "cma_es_"
         else:
             prefix = ""
         if self.steps > 0:
@@ -75,6 +80,7 @@ class LamarckRefiner:
         """
         self.nes_mode = True
         self.sa_mode = False   # mutually exclusive
+        self.cma_mode = False
         self.nes_lr = float(learning_rate)
         self.sigma = float(sigma)
         if adaptive:
@@ -106,9 +112,31 @@ class LamarckRefiner:
         """
         self.sa_mode = True
         self.nes_mode = False   # mutually exclusive
+        self.cma_mode = False
         self.sigma = float(sigma)
         self.sa_cooling = max(0.0, min(1.0, float(cooling_rate)))
         self.sa_t0 = float(t0) if t0 is not None else None
+        if adaptive:
+            self.steps = 0
+            if self.max_steps <= 0:
+                self.max_steps = k
+        else:
+            self.steps = max(1, k)
+            self.max_steps = 0
+
+    def set_cma_es(
+        self,
+        k: int = 3,
+        sigma: float = 1.0,
+        population: int = 6,
+        adaptive: bool = False,
+    ) -> None:
+        """Switch to a compact full-covariance CMA-ES refinement mode."""
+        self.cma_mode = True
+        self.nes_mode = False
+        self.sa_mode = False
+        self.sigma = float(sigma)
+        self.cma_population = max(2, int(population))
         if adaptive:
             self.steps = 0
             if self.max_steps <= 0:
@@ -169,6 +197,75 @@ class LamarckRefiner:
                     c.weight = w
                 for n, b in zip(nodes, saved_biases):
                     n.bias = b
+
+        self.time_ms += (time.perf_counter() - t0) * 1000.0
+        return best_fitness
+
+    def refine_cma_es(
+        self,
+        genome: Genome,
+        fitness_fn: Callable[[Genome], float],
+        baseline_fitness: float | None = None,
+        n_steps: int | None = None,
+    ) -> float:
+        """Small full-covariance CMA-ES update over weights and biases."""
+        import numpy as np
+        steps = self.steps if n_steps is None else n_steps
+        if steps <= 0:
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        conns = [c for node in genome.nodes for c in node.connections if c.enabled]
+        nodes = genome.nodes
+        params = conns + nodes
+        if not params:
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        genome_sigma = getattr(genome, 'lamarck_sigma', genome.sigma_global)
+        sigma = genome_sigma * self.sigma
+        if not (0.0 < sigma < 1e6):
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        t0 = time.perf_counter()
+        orig_w = [c.weight for c in conns]
+        orig_b = [n.bias for n in nodes]
+        mean = np.array(orig_w + orig_b, dtype=np.float64)
+        dim = len(mean)
+        cov = np.eye(dim, dtype=np.float64) * (sigma ** 2)
+        lam = max(self.cma_population, 2 * dim)
+        mu = max(1, lam // 2)
+        best_fitness = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
+        best_vec = mean.copy()
+
+        def write(vec) -> None:
+            for c, value in zip(conns, vec[:len(conns)]):
+                c.weight = float(value)
+            for n, value in zip(nodes, vec[len(conns):]):
+                n.bias = float(value)
+
+        for _ in range(steps):
+            candidates = np.random.multivariate_normal(mean, cov, size=lam)
+            scored = []
+            for vec in candidates:
+                write(vec)
+                scored.append((fitness_fn(genome), vec))
+            scored.sort(key=lambda item: item[0], reverse=True)
+            if scored[0][0] > best_fitness:
+                best_fitness = scored[0][0]
+                best_vec = scored[0][1].copy()
+            elites = np.array([vec for _fit, vec in scored[:mu]], dtype=np.float64)
+            mean = elites.mean(axis=0)
+            centered = elites - mean
+            if len(centered) > 1:
+                cov = (centered.T @ centered) / (len(centered) - 1)
+                cov += np.eye(dim) * 1e-9
+
+        if best_fitness > (baseline_fitness if baseline_fitness is not None else float("-inf")):
+            write(best_vec)
+        else:
+            for c, w in zip(conns, orig_w):
+                c.weight = w
+            for n, b in zip(nodes, orig_b):
+                n.bias = b
 
         self.time_ms += (time.perf_counter() - t0) * 1000.0
         return best_fitness

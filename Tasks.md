@@ -40,16 +40,13 @@ Nutzen:
 - Sieht man sofort, ob die Population kollabiert (alle gleich gut), exploriert (breite Verteilung) oder stagniert.
 - Hilft beim Tuning von Populationsgröße, Elitismus und Novelty-Gewicht.
 
-### P2: Multi-Objective Optimization
+### P2: Multi-Objective Optimization ✅
 
 Aktuell wird Fitness als einzelner Zahlenwert optimiert.
 
-Aufgaben:
+**Bereits implementiert:** `NeuroEvolution.set_multi_objective(enabled=True, weights=None, maximize=None)` erlaubt Fitness-Vektoren. Objective-Vektoren werden auf `genome.objectives` gespeichert; eine gewichtete Skalarfitness bleibt für Logs, Stop-Kriterien und bestehende APIs erhalten. `evolution/multi_objective.py` enthält Pareto-Dominanz, Non-Dominated Sorting, Crowding-Distance und Pareto-Scores. `Population` kann Shared Fitness per Pareto-Rang + Crowding formen. Diagnostics enthalten Multi-Objective-Status. Tests in `tests/test_multi_objective.py`.
 
-- Fitness als Vektor erlauben, z. B. Leistung, Geschwindigkeit, Größe, Stabilität.
-- Pareto-Selektion implementieren.
-- NSGA-II-artige Auswahl prüfen.
-- GUI-Darstellung für Pareto-Front.
+**GUI:** Advanced-Control für GUI-Multi-Objective ist vorhanden. Die GUI wickelt Beispiel-Fitness als `(raw_fitness, connection_count)` ein, nutzt Pareto-Selektion und zeigt den Status im LeftPanel. Eine echte Pareto-Front-Plot-Ansicht wäre nur noch Visual Polish.
 
 Nutzen:
 
@@ -95,32 +92,26 @@ Nutzen:
 - Näher an klassischem NEAT.
 - Besserer Schutz neuer Strukturinnovationen.
 
-### P2: Quality Diversity / MAP-Elites
+### P2: Quality Diversity / MAP-Elites ✅
 
 YANE hat bereits Novelty Search. Der nächste Schritt wäre Quality Diversity.
 
-Aufgaben:
+**Bereits implementiert:** `evolution/quality_diversity.py` mit `MAPElitesArchive`, Zell-Binning, Coverage, bestes Genom pro Zelle und Sampling archivierter Eliten. `NeuroEvolution.set_quality_diversity(descriptor_fn, bins, ranges, enabled=True, max_cells=None)` aktiviert QD. `Population.submit()` aktualisiert das Archiv; bei Stagnation können Archiv-Eliten mutiert und injiziert werden. Diagnostics: Coverage, Zellzahl, Updates, QD-Injektionen. Tests in `tests/test_quality_diversity.py`.
 
-- Behavior Descriptor API öffnen.
-- Archiv nach Verhaltensdimensionen aufbauen.
-- Pro Zelle bestes Genom behalten.
-- Neue Kandidaten aus verschiedenen Archivbereichen erzeugen.
+**GUI:** Advanced-Control für Quality Diversity ist vorhanden (Topology- oder Behavior-Descriptor). LeftPanel zeigt Enabled, Cells, Coverage, Updates und QD-Injections. Eine Heatmap wäre nur noch Visual Polish.
 
 Nutzen:
 
 - Evolution sammelt viele verschiedene brauchbare Lösungen.
 - Sehr nützlich für Aufgaben mit sparse rewards.
 
-### P2: Coevolution
+### P2: Coevolution ✅
 
 Einige Aufgaben können durch Gegenspieler oder Aufgabenvariation stärker werden.
 
-Aufgaben:
+**Bereits implementiert:** `evolution/coevolution.py` mit `HallOfFame(max_size)`, `competitive_fitness(genome, opponents, match_fn, aggregation)` und `mixed_opponents(current_population, hall_of_fame, ...)`. Der Hall-of-Fame speichert starke historische Gegner als Kopien und reduziert zyklisches Vergessen. Tests in `tests/test_coevolution.py`.
 
-- Interface für Population gegen Population entwerfen.
-- Kompetitive Fitness unterstützen.
-- Hall-of-Fame-Gegner speichern.
-- Rock-Paper-Scissors-Zyklen durch Archiv vermeiden.
+**Noch offen:** Direkte GUI/API-Orchestrierung für zwei gleichzeitig trainierende Populationen wäre ein eigener Bedienbarkeitsausbau.
 
 Nutzen:
 
@@ -139,7 +130,7 @@ Nutzen:
 - Weniger Evaluierungen in konvergierten Phasen, mehr Vielfalt in Explorationsphasen.
 - Bessere Ressourcennutzung bei langen Runs.
 
-### P2: Warm-Start und Transfer Learning ⚡
+### P2: Warm-Start und Transfer Learning ✅
 
 Trainiertes Bestes Genome oder ganze Population als Startpunkt für verwandte Aufgaben nutzen.
 
@@ -193,31 +184,26 @@ Nutzen:
 - Stabilere rekurrente Dynamik.
 - Ermöglicht LLM-artiges Verhalten über Tick-basierte sequentielle Verarbeitung.
 
-### P2: Modulare Subnetze
+### P2: Modulare Subnetze ✅
 
 Für große Aufgaben können Module hilfreich sein.
 
-Aufgaben:
+**Bereits implementiert:** `evolution/modularity.py` erkennt Hidden-Node-Komponenten (`hidden_modules`) und dupliziert Module (`duplicate_module`) inklusive interner Connections, eingehender/ausgehender Modul-Connections und neuer Innovationsnummern. Tests in `tests/test_modularity.py`.
 
-- Gruppen von Nodes als Modul markieren.
-- Mutation zum Duplizieren ganzer Module.
-- Modul-Crossover erforschen.
-- Wiederverwendbare Substrukturen speichern.
+**Noch offen:** Modul-Crossover und persistente Modulbibliothek bleiben mögliche Forschungs-Upgrades.
 
 Nutzen:
 
 - Skalierung auf komplexere Aufgaben.
 - Evolution kann bereits gefundene Teilfunktionen wiederverwenden.
 
-### P2: Indirekte Kodierung / CPPN
+### P2: Indirekte Kodierung / CPPN ✅
 
 Direkte Kodierung jeder Connection skaliert schlecht für sehr große Netze.
 
-Aufgaben:
+**Bereits implementiert:** `evolution/indirect_encoding.py` mit `layered_coordinates(genome)`, `radial_cppn_weight(...)` und `generate_connections_from_coordinates(...)`. Verbindungen können HyperNEAT-artig aus Quell-/Zielkoordinaten und Distanz erzeugt werden. Tests in `tests/test_indirect_encoding.py`.
 
-- Indirekte Kodierung für Gewichtsmuster erforschen.
-- CPPN/HyperNEAT-artige Verbindungsgenerierung prüfen.
-- Koordinaten für Input/Output/Hidden Nodes definieren.
+**Noch offen:** Evolvierbare CPPN-Genome als eigene Population wären ein größerer Forschungszweig.
 
 Nutzen:
 
@@ -239,31 +225,28 @@ Nutzen:
 - Bessere Diagnose des Lamarck-Overheads.
 - Feinere Kontrolle der Schrittweite.
 
-### P1: Lokale Optimierer für Gewichte ⚡
+### P1: Lokale Optimierer für Gewichte ✅
 
 Statt reinem Hill-Climbing könnten bessere lokale Verfahren helfen.
 
 **Bereits implementiert:**
 - **Simulated Annealing** — `set_lamarck(mode='sa', cooling_rate=0.95)` / `set_lamarck_adaptive(mode='sa')`. Geometrische Abkühlung: T_k = T0 * cooling^k. Schlechtere Moves werden mit Wahrscheinlichkeit exp(Δf / T_k) akzeptiert. Gibt das Beste über die gesamte Kette zurück. `sa_cooling`, `sa_t0` in `_config_dict()`. 18 Tests in `tests/test_sa.py`.
 - **NES (Natural Evolution Strategies)** — `set_lamarck(mode='nes')` — implementiert seit vorherigem PR.
+- **CMA-ES** — `set_lamarck(mode='cma_es', cma_population=...)` / `set_lamarck_adaptive(mode='cma_es')`. Kleine volle-Kovarianz-Variante über Gewichte und Biases einer festen Topologie. Config-Diagnostics enthalten CMA-Modus und Population. Tests in `tests/test_cma_es.py`.
 
-**Noch offen:**
-- CMA-ES pro Topologie (volle Kovarianzmatrix — größerer Umbau, eigener PR).
+**Noch offen:** — (alle geplanten lokalen Optimierer sind implementiert).
 
 Nutzen:
 
 - Topologie wird evolutionär gesucht, Gewichte werden effizienter verfeinert.
 
-### P2: Backprop-Hybrid für differenzierbare Teile
+### P2: Backprop-Hybrid für differenzierbare Teile ✅
 
 Wenn ein Netz azyklisch und differenzierbar ist, könnte Backprop optional helfen.
 
-Aufgaben:
+**Bereits implementiert:** `evolution/matrix_export.py` exportiert kompatible azyklische Genome als Matrixform. `evolution/backprop.py` enthält `backprop_finetune_linear_outputs(...)` als optionalen PyTorch-Hook für kurzes Finetuning und schreibt Gewichte zurück ins Genom. PyTorch ist keine harte Abhängigkeit; ohne Installation wird ein klarer `ImportError` ausgelöst. Tests für Matrixexport in `tests/test_matrix_export.py`.
 
-- Export nach PyTorch für kompatible Topologien prüfen.
-- Aktivierungen mit Gradienten-Mapping definieren.
-- Kurzes Gradient-Finetuning für Top-Genome.
-- Ergebnis zurück in Genome schreiben.
+**Noch offen:** Breitere Aktivierungs-/Loss-Abdeckung und GUI-Konfiguration wären separate Ausbauschritte.
 
 Nutzen:
 
@@ -276,7 +259,7 @@ Hill-Climbing ändert Gewichte zufällig und hält die bessere Variante. NES sch
 
 **Bereits implementiert:** `LamarckRefiner.refine_nes()` mit antithetischen Perturbationen (2k+1 Evals pro Schritt, Varianzreduktion durch ± Paare). Gradient-Normalisierung: `theta += lr * grad / (k * sigma)`. Accept/Revert-Mechanismus analog zu Hill-Climbing. `set_lamarck(mode='nes', learning_rate=...)` und `set_lamarck_adaptive(mode='nes')` in `NeuroEvolution`. `mode`-Property: `"nes_explicit"` / `"nes_adaptive"`. In Diagnostics und Config-Dict. 16 Tests in `tests/test_nes.py`.
 
-**Noch offen:** Benchmark: NES vs. Hill-Climbing auf Acrobot / LunarLander (separates Benchmark-Skript).
+**Noch offen:** — Benchmark-Skript ist implementiert: `benchmarks/compare_lamarck_modes.py` vergleicht HC/NES/SA/CMA-ES auf Acrobot oder LunarLander.
 
 Nutzen:
 
@@ -325,31 +308,26 @@ Nutzen:
 - Viel schneller für Regression/Klassifikation.
 - Wichtig für MNIST-artige Aufgaben.
 
-### P1: Genom-Serialisierung optimieren
+### P1: Genom-Serialisierung optimieren ✅
 
 Größere Populationen und Multiprocessing leiden unter Pickle-Kosten.
 
-Aufgaben:
+**Bereits implementiert:** Genome-Pickle-State entfernt jetzt rebuildbare Runtime-/Topology-Caches (`_triggered`, `_exec_order`, `_reset_nodes`, `_compiled_forward`, `_forward_dispatch`, `_innov_cache`, `_values_arr`) vor IPC/Checkpoint-Payloads. Connections strippen weiterhin NumPy-Weight-Arrays. Matrixexport bietet aktive, kompakte DAG-Repräsentation für kompatible Netze. Tests in `TestGenomePickle`.
 
-- Kompaktere Serialisierung für Genome entwickeln.
-- Nur aktive Struktur serialisieren.
-- Optional shared immutable topology für verwandte Genome prüfen.
-- Profiling für Multiprocessing-IPC.
+**Noch offen:** Shared immutable topology für verwandte Genome bleibt eine mögliche spätere Speicheroptimierung.
 
 Nutzen:
 
 - Schnellere Parallelisierung.
 - Weniger RAM-Druck.
 
-### P2: GPU-Unterstützung für kompatible Netze
+### P2: GPU-Unterstützung für kompatible Netze ✅
 
 Nicht jedes evolvierte Netz passt gut auf GPU, aber Batch-Auswertung schon.
 
-Aufgaben:
+**Bereits implementiert:** `evolution/matrix_export.py` exportiert feed-forward-kompatible Genome als `MatrixGenome`. `forward_matrix()` läuft mit NumPy-kompatiblen Array-Modulen; `forward_matrix_gpu()` nutzt CuPy, wenn installiert, und bleibt ansonsten optional. Tests in `tests/test_matrix_export.py`.
 
-- Feed-forward-Genome in Matrixform exportieren.
-- Batch-Auswertung auf NumPy/CuPy/PyTorch testen.
-- GPU nur für große Batches aktivieren.
+**Noch offen:** Automatische GPU-Auswahl nach Batchgröße ist bewusst noch nicht im Standard-Forward-Pfad aktiv.
 
 Nutzen:
 
@@ -376,7 +354,7 @@ Nutzen:
 
 **Bereits in der GUI konfigurierbar:** Multi-eval, Aggregation, Sigma-Penalty, Lamarck-Modus/-Steps, Worker-Anzahl, Target-Species, Memory-Toggle, Population-Size, Max-Nodes/Connections, Target-Fitness, Checkpoint Save/Load, Normalization-Toggle, Fitness-Shaping-Toggle, Interspecies-Crossover-Rate, Convergence-Stop (eps + stagnation), Early-Stopping-Factor, Effizienzstrafe (max_ms + penalty), Elitismus (global + per species).
 
-**Noch offen:** — (alle geplanten GUI-Einstellungen sind jetzt exponiert).
+**Noch offen:** — (alle geplanten GUI-Einstellungen sind jetzt exponiert; neue Controls für Multi-Objective, Quality Diversity und CMA-ES sind ergänzt).
 
 Nutzen:
 
@@ -426,29 +404,23 @@ Nutzen:
 
 ## 9. Dokumentation
 
-### P0: Dokumentation aktuell halten
+### P0: Dokumentation aktuell halten ✅
 
 Die technische Dokumentation sollte mit neuen Features mitwachsen.
 
-Aufgaben:
+**Bereits implementiert:** README und technische Dokumentation beschreiben Multi-Objective, Quality Diversity, Coevolution, modulare Subnetze, CPPN/indirekte Kodierung, Matrix/GPU/Backprop-Export, CMA-ES und Benchmarks. Technische Doku enthält Architekturdiagramm, Genom-Lifecycle, Spawn-Zyklus, Worker-Pfade, Fitness-Konventionen und Glossar.
 
-- Jede neue Framework-Funktion in README und technischer Doku eintragen.
-- Beispiele für empfohlene Einstellungen geben.
-- Architekturdiagramm ergänzen.
-- Glossar für NEAT/YANE-Begriffe anlegen.
+**Noch offen:** — (Dokumentation ist auf den aktuellen Stand gebracht).
 
 Nutzen:
 
 - YANE bleibt verstehbar, auch wenn es komplexer wird.
 
-### P1: Entwicklerdokumentation für interne APIs
+### P1: Entwicklerdokumentation für interne APIs ✅
 
-Aufgaben:
+**Bereits implementiert:** `TECHNISCHE_DOKUMENTATION.md` enthält dedizierte Abschnitte zu Genom-Lifecycle, Population-Spawn-Zyklus, Worker-Pfaden und Fitness-Konventionen.
 
-- Lifecycle eines Genoms dokumentieren.
-- Population-Spawn-Zyklus dokumentieren.
-- Worker-Pfade dokumentieren.
-- Konventionen für Fitnessfunktionen festhalten.
+**Noch offen:** — (geplante Entwicklerdokumentation ist ergänzt).
 
 Nutzen:
 
@@ -460,8 +432,8 @@ Nutzen:
 
 | Phase | Fokus | Enthaltene Tasks (offen) |
 |---|---|---|
-| **Phase 3** · Skalierung | Species-Budget-Reproduktion, Batch-Forward, Serialisierung, Worker-Pipeline | P1: Serialisierung |
-| **Phase 4** · Schwierige Aufgaben | Curriculum, Multi-Objective, MAP-Elites, Memory/Gating, Hybrid-Optimierung | P1: Memory (Rest); P2: Multi-Obj, QD, NES, Backprop |
+| **Phase 3** · Skalierung | Species-Budget-Reproduktion, Batch-Forward, Serialisierung, Worker-Pipeline | — |
+| **Phase 4** · Schwierige Aufgaben | Curriculum, Multi-Objective, MAP-Elites, Memory/Gating, Hybrid-Optimierung | — |
 
 > Phase 1 und 2 sind vollständig abgeschlossen. Species-Budget-Reproduktion wurde bewusst von Phase 2 auf Phase 3 verschoben (erfordert Umbau von steady-state zu generationsbasiertem Spawn-Modell).
 
@@ -515,7 +487,7 @@ Nutzen:
 - [x] Curriculum Learning: set_curriculum(stages, on_stage_advance), automatischer Stufenwechsel, Population behalten, curriculum_complete-Stopp, 24 Tests.
 - [x] Species-Budget-Reproduktion: Rolling Spawn-Credits, Jugend-Mindestbudget, Stagnationsreduktion, species-internes Tournament/Crossover.
 
-### ⚡ Teilweise implementiert (Rest siehe Task-Detail oben)
+### ✅ Früher teilweise, jetzt abgeschlossen
 
 - [x] Fitness-Landscape Diagnostics: IQR + Histogramm + Plateau-Ratio + Sprungrate done.
 - [x] Speciation robuster: Dynamische Ziel-Species, alternative Metrik, kleine Species geschützt, Stammbaum.
@@ -527,22 +499,198 @@ Nutzen:
 - [x] Warm-Start / Transfer Learning: I/O-Adaption + CartPole→Acrobot-Demo in benchmarks/warm_start_demo.py.
 - [x] Memory-Mechanismen: Persistente Nodes + Leaky Memory + statisches Gating + dynamisches Gating (gate_node) done. 8 Tests.
 
-### 🔲 Noch nicht begonnen
+### ✅ Neu abgeschlossen
 
-- [ ] Multi-Objective Optimization
-- [ ] Quality Diversity / MAP-Elites
-- [ ] Coevolution
+- [x] Multi-Objective Optimization
+- [x] Quality Diversity / MAP-Elites
+- [x] Coevolution
 - [x] Adaptive Populationsgröße
-- [ ] Modulare Subnetze
-- [ ] CPPN / Indirekte Kodierung
-- [x] Lokale Optimierer: SA + NES (CMA-ES noch offen)
-- [ ] Backprop-Hybrid
+- [x] Modulare Subnetze
+- [x] CPPN / Indirekte Kodierung
+- [x] Lokale Optimierer: SA + NES + CMA-ES
+- [x] Backprop-Hybrid
 - [x] NES als Lamarck-Alternative
-- [ ] Genom-Serialisierung optimieren
-- [ ] GPU-Unterstützung
+- [x] Genom-Serialisierung optimieren
+- [x] GPU-Unterstützung
 - [x] Ablation Tests: set_novelty_search, set_speciation, set_crossover, set_diversity_injection + bestehende Lamarck/Memory-Knöpfe. 14 Tests in test_ablation.py.
-- [ ] Dokumentation aktuell halten
-- [ ] Entwicklerdokumentation
+- [x] Dokumentation aktuell halten
+- [x] Entwicklerdokumentation
+
+---
+
+## Nächste Ausbaustufe
+
+Die alte Taskliste ist abgeschlossen. Diese neue Liste sammelt die nächsten
+Hebel, um YANE weiter robuster, schneller und experimentell stärker zu machen.
+
+### P0: GUI-Snapshot-Tests und Headless Smoke-Suite
+
+Die GUI ist inzwischen ein echtes Experimentierwerkzeug. Sie braucht eigene
+Regressionstests, damit neue Controls und Diagnostics nicht unbemerkt brechen.
+
+Aufgaben:
+
+- Headless Qt-Smoke-Test für `TrainingTab`, `LeftPanel`, `InspectTab` und `MainWindow`.
+- Screenshot-/Layout-Checks für Desktop- und kleine Viewport-Größen.
+- Automatischer Test, dass alle Advanced-Controls in `_config_dict()` oder Diagnostics sichtbar werden.
+- Start/Stop/Pause/Checkpoint-Save/Load als GUI-Workflow testen.
+
+Nutzen:
+
+- Weniger Risiko bei GUI-Ausbau.
+- Schnelleres Erkennen von kaputten Controls, fehlenden Labels oder Layout-Regressionen.
+
+### P0: Benchmark-Gates für Kernaufgaben
+
+Viele Features sind implementiert; jetzt braucht YANE klare Performance- und
+Qualitäts-Grenzwerte, damit Verbesserungen messbar bleiben.
+
+Aufgaben:
+
+- `benchmarks/run_suite.py` um Gate-Modus erweitern (`--gate baseline.json`).
+- Kleine Pflicht-Gates für XOR, Regression 2→2, Multiplication und CartPole definieren.
+- Zeit-, Erfolgsraten- und Best-Fitness-Grenzen separat prüfen.
+- Ergebnisvergleich als Markdown-Report ausgeben.
+
+Nutzen:
+
+- Verhindert unbemerkte Trainingsregressionen.
+- Macht Optimierungen objektiver.
+
+### P1: Multi-Objective Aggregation vollständig machen
+
+Multi-Objective ist implementiert, aber Multi-eval in der GUI ist dafür bewusst
+deaktiviert. Der nächste saubere Schritt ist eine echte Aggregation für
+Objective-Vektoren.
+
+Aufgaben:
+
+- `aggregate_fitnesses()` für Vektoren erweitern.
+- Mean/median/min pro Objective unterstützen.
+- Sigma-Penalty pro Objective oder nur auf Skalarfitness definieren.
+- GUI-Multi-eval wieder für Multi-Objective freigeben.
+
+Nutzen:
+
+- Multi-Objective wird auch für stochastische Gym-Umgebungen praktisch.
+- Weniger Spezialfälle in GUI und Runner.
+
+### P1: Pareto- und MAP-Elites-Visualisierung
+
+Die Daten sind vorhanden, aber die GUI zeigt bisher nur kompakte Textdiagnostik.
+
+Aufgaben:
+
+- Pareto-Scatterplot für zwei Objectives.
+- MAP-Elites-Heatmap für zweidimensionale Archive.
+- Tooltip pro Archivzelle: Fitness, Descriptor, Node-/Connection-Zahl.
+- Export des Archivs als JSON/CSV.
+
+Nutzen:
+
+- Man sieht Trade-offs und Diversity sofort.
+- Besonders nützlich für QD-Experimente und Complexity-vs-Performance-Runs.
+
+### P1: Experiment-Presets und Config-Profile
+
+Viele Einstellungen sind inzwischen mächtig, aber schwer per Hand reproduzierbar.
+
+Aufgaben:
+
+- Preset-Dateien für GUI und API (`presets/*.json`) einführen.
+- Presets für `fast dataset`, `robust gym`, `quality diversity`, `multi-objective compact`.
+- GUI: Preset-Dropdown und Save-current-as-preset.
+- Logs speichern den Preset-Namen zusätzlich zur vollständigen Config.
+
+Nutzen:
+
+- Bessere Reproduzierbarkeit.
+- Schnellere Experimente ohne manuelles Nachklicken.
+
+### P1: Checkpoint-Kompatibilität und Migrationen
+
+Checkpoints sind Pickle-basiert und wachsen mit vielen neuen Feldern. Das sollte
+aktiver versioniert werden.
+
+Aufgaben:
+
+- Explizite Checkpoint-Migrationsfunktionen pro Version.
+- Kompatibilitätstest mit kleinen Fixture-Checkpoints.
+- Optional: sicheres JSON/MsgPack-Metadatenformat neben Pickle-Payload.
+- Warnung, wenn QD-Descriptor-Callbacks nach Load neu gesetzt werden müssen.
+
+Nutzen:
+
+- Alte Experimente bleiben ladbar.
+- Weniger Überraschungen nach größeren Refactors.
+
+### P1: Profiling-Suite für Multiprocessing und Serialisierung
+
+Die Pickle-Payloads sind schlanker, aber die tatsächlichen Kosten sollten als
+Benchmark sichtbar werden.
+
+Aufgaben:
+
+- Benchmark für Genome-Pickle-Größe und Pickle-Zeit nach Topologiegröße.
+- IPC-Benchmark für GUI-Multiprocessing-Batches.
+- Vergleich: normales Genome-Pickle vs. Matrixexport für kompatible DAGs.
+- Report in `benchmarks/results/`.
+
+Nutzen:
+
+- Klare Grundlage für weitere Performance-Arbeit.
+- Hilft bei großen Populationen und teuren Environments.
+
+### P2: Async/Distributed Evaluation
+
+Aktuell ist Parallelisierung lokal. Für größere Aufgaben wäre asynchrone oder
+verteilte Evaluation ein großer Hebel.
+
+Aufgaben:
+
+- Evaluation-Queue mit Futures/Tasks abstrahieren.
+- Async-Submit unterstützen, ohne Population-Konsistenz zu verlieren.
+- Optionaler Remote-Worker-Prozess per HTTP/WebSocket.
+- Timeouts und Retry-Policy pro Genome.
+
+Nutzen:
+
+- Bessere Ressourcennutzung bei langsamen Simulationen.
+- Grundlage für Multi-Machine-Experimente.
+
+### P2: Evolvierbare Descriptor- und Fitness-Komponenten
+
+QD und Multi-Objective nutzen aktuell vom Nutzer definierte Descriptors und
+Objectives. Der nächste Forschungshebel wäre, Teile davon adaptiv zu machen.
+
+Aufgaben:
+
+- Descriptor-Registry mit wiederverwendbaren Bausteinen.
+- Automatische Descriptor-Auswahl aus Topologie-, Verhalten- und Timing-Features.
+- Fitness-Komponenten als benannte Metriken mit Gewichtshistorie speichern.
+- Ablation/Benchmark: statischer vs. adaptiver Descriptor.
+
+Nutzen:
+
+- Weniger manuelles Design für neue Aufgaben.
+- Bessere Archive für unbekannte Suchräume.
+
+### P2: Compiled Matrix-Forward für kompatible Subpopulationen
+
+`MatrixGenome` existiert, ist aber noch nicht automatisch im normalen
+Trainingspfad aktiv.
+
+Aufgaben:
+
+- Feed-forward-kompatible Genome automatisch erkennen.
+- Matrixexport cachen und invalidieren.
+- Batch-Evaluation über Matrixform für ganze kompatible Gruppen.
+- Optional CuPy/PyTorch nur bei großen Batches aktivieren.
+
+Nutzen:
+
+- Größere supervised Aufgaben werden schneller.
+- GPU-Support wird praktisch statt nur API-Baustein.
 
 ---
 

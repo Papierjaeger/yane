@@ -171,6 +171,11 @@ class LeftPanel(QWidget):
             "Wie oft die Populationsgröße durch Adaptive Population Sizing angepasst wurde\n"
             "(nur aktiv wenn set_adaptive_population() gesetzt ist).")
         pop.addRow("Pop size adj.:",     self.lbl_pop_size_adjustments)
+        self.lbl_multi_objective = _label("—", "mutRate")
+        self.lbl_multi_objective.setToolTip(
+            "Multi-Objective-Status. Wenn aktiv, nutzt die Selektion Pareto-Rang\n"
+            "und Crowding-Distance statt nur einer skalarisierten Fitness.")
+        pop.addRow("Multi-objective:", self.lbl_multi_objective)
         self.fitness_hist = FitnessHistogram()
         self.fitness_hist.setToolTip(
             "Fitness-Verteilung der evaluierten Population.\n"
@@ -192,6 +197,7 @@ class LeftPanel(QWidget):
             "  nes_adaptive  — NES, automatisch bei Stagnation\n"
             "  sa_explicit   — Simulated Annealing, immer aktiv\n"
             "  sa_adaptive   — Simulated Annealing, automatisch bei Stagnation\n"
+            "  cma_es_explicit/adaptive — volle-Kovarianz-CMA-ES\n"
             "  off           — deaktiviert")
         self.lbl_lamarck_applied.setToolTip(
             "Anzahl der Genome, für die Lamarck-Verfeinerung durchgeführt wurde\n"
@@ -244,6 +250,25 @@ class LeftPanel(QWidget):
         safe_grp.addRow("B clipped:",       self.lbl_n_bias_clipped)
         safe_grp.addRow("Output sanitized:", self.lbl_n_output_sanitized)
         layout.addWidget(safe_grp)
+
+        # ── Quality Diversity ─────────────────────────────────────────────
+        qd_grp = _CollapsibleGroup("Quality Diversity", collapsed=True)
+        self.lbl_qd_enabled = _label("—", "statValue")
+        self.lbl_qd_cells = _label("—", "mutRate")
+        self.lbl_qd_coverage = _label("—", "mutRate")
+        self.lbl_qd_updates = _label("—", "mutRate")
+        self.lbl_qd_injections = _label("—", "mutRate")
+        self.lbl_qd_enabled.setToolTip("Status des MAP-Elites-Archivs.")
+        self.lbl_qd_cells.setToolTip("Anzahl belegter Archivzellen.")
+        self.lbl_qd_coverage.setToolTip("Anteil belegter Zellen relativ zum Descriptor-Gitter.")
+        self.lbl_qd_updates.setToolTip("Wie oft ein Archiv-Cell-Elite neu gesetzt oder ersetzt wurde.")
+        self.lbl_qd_injections.setToolTip("Wie oft ein Archiv-Elite als Diversity-Injektion genutzt wurde.")
+        qd_grp.addRow("Enabled:", self.lbl_qd_enabled)
+        qd_grp.addRow("Cells:", self.lbl_qd_cells)
+        qd_grp.addRow("Coverage:", self.lbl_qd_coverage)
+        qd_grp.addRow("Updates:", self.lbl_qd_updates)
+        qd_grp.addRow("Injections:", self.lbl_qd_injections)
+        layout.addWidget(qd_grp)
 
         # ── Curriculum ────────────────────────────────────────────────────
         cur_grp = _CollapsibleGroup("Curriculum", collapsed=False)
@@ -548,11 +573,31 @@ class LeftPanel(QWidget):
             self.lbl_pop_size_adjustments.setText(str(adj))
         else:
             self.lbl_pop_size_adjustments.setText("—")
+        if mem.get("multi_objective_enabled"):
+            maximize = mem.get("multi_objective_maximize")
+            self.lbl_multi_objective.setText(f"on {maximize}" if maximize else "on")
+        else:
+            self.lbl_multi_objective.setText("—")
 
         # Safety limits (weight clipping + output sanitizing)
         self.lbl_n_weight_clipped.setText(str(mem.get("n_weight_clipped", 0)))
         self.lbl_n_bias_clipped.setText(str(mem.get("n_bias_clipped", 0)))
         self.lbl_n_output_sanitized.setText(str(mem.get("n_output_sanitized", 0)))
+
+        # Quality Diversity
+        if mem.get("quality_diversity_enabled"):
+            self.lbl_qd_enabled.setText("on")
+            self.lbl_qd_cells.setText(str(mem.get("quality_diversity_cells", 0)))
+            cov = mem.get("quality_diversity_coverage", 0.0)
+            self.lbl_qd_coverage.setText(f"{cov:.4f}")
+            self.lbl_qd_updates.setText(str(mem.get("n_quality_diversity_updates", 0)))
+            self.lbl_qd_injections.setText(str(mem.get("n_quality_diversity_injections", 0)))
+        else:
+            self.lbl_qd_enabled.setText("—")
+            self.lbl_qd_cells.setText("—")
+            self.lbl_qd_coverage.setText("—")
+            self.lbl_qd_updates.setText("—")
+            self.lbl_qd_injections.setText("—")
 
         # Fitness histogram
         fh = mem.get("fitness_histogram")
@@ -701,4 +746,3 @@ class LeftPanel(QWidget):
 # ---------------------------------------------------------------------------
 # Gym render widget
 # ---------------------------------------------------------------------------
-

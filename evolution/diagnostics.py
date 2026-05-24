@@ -115,6 +115,19 @@ def build_population_info(
         "n_interspecies_crossover": population._n_interspecies_crossover,
         "species_spawn_scores":     list(population._last_species_spawn_scores),
         "n_early_stopped":          n_early_stopped,
+        # Multi-objective diagnostics
+        "multi_objective_enabled":  getattr(population, "_multi_objective_enabled", False),
+        "multi_objective_maximize": getattr(population, "_multi_objective_maximize", None),
+        # Quality Diversity diagnostics
+        "quality_diversity_enabled": getattr(population, "_qd_enabled", False),
+        "quality_diversity_cells": (
+            len(population._qd_archive.cells) if getattr(population, "_qd_archive", None) else 0
+        ),
+        "quality_diversity_coverage": (
+            population._qd_archive.coverage if getattr(population, "_qd_archive", None) else 0.0
+        ),
+        "n_quality_diversity_updates": getattr(population, "_n_qd_updates", 0),
+        "n_quality_diversity_injections": getattr(population, "_n_qd_injections", 0),
         # Mutation success tracking
         "mutation_success": dict(population._mutation_success),
         "mutation_total":   dict(population._mutation_total),

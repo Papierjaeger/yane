@@ -944,13 +944,15 @@ uvicorn yane.api.server:app --reload
 
 Der Server hält eine globale `NeuroEvolution`-Instanz.
 
-Aktuelle Setup-Route:
+Setup-Route:
 
 ```http
-POST /configure?n_inputs=2&n_outputs=1
+POST /configure
 ```
 
-Diese Route setzt nur Input- und Outputanzahl. Erweiterte Optionen wie `max_nodes`, `n_initial_hidden` oder `stateful` sind in der aktuellen API-Route nicht als Parameter freigelegt.
+Unterstützte Konfigurationsfelder sind unter anderem `n_inputs`, `n_outputs`,
+`max_nodes`, `max_connections`, `n_initial_hidden`, `stateful`,
+`population_size`, `target_species`, Lamarck-Parameter und `seed`.
 
 Trainingsablauf per HTTP:
 
@@ -960,7 +962,208 @@ Trainingsablauf per HTTP:
 4. `POST /population/fitness`
 5. Wiederholen
 
-## 15. Grenzen und Hinweise
+Zusätzlich verfügbar sind Status-/Diagnose-Endpunkte (`GET /population/status`,
+`GET /population/best`, `GET /population/diagnostics`), Best-Genome-Export
+(`GET /population/best/export`) und Checkpoint-Speicherung
+(`POST /checkpoint/save`, `POST /checkpoint/load`).
+
+## 15. Architekturdiagramm
+
+```text
+Fitness-Funktion / GUI / API
+          |
+          v
+NeuroEvolution
+  - Konfiguration, Stoppkriterien, Logging
+  - EvaluationRunner, LamarckRefiner, Sanitizer
+          |
+          v
+Population
+  - evaluated / unevaluated Pools
+  - Species, Novelty, Pareto-Shaping, Elternauswahl
+  - Spawn, Mutation, Crossover, Pruning
+          |
+          v
+Genome
+  - Nodes + Connections
+  - forward(), forward_batch(), tick()
+  - Strategie-Gene und Runtime-Caches
+```
+
+## 16. Multi-Objective Optimization
+
+Multi-Objective wird über `NeuroEvolution.set_multi_objective()` aktiviert.
+Eine Fitnessfunktion darf dann statt eines Skalars einen Vektor liefern:
+
+```python
+yane.set_multi_objective(weights=(1.0, -0.01), maximize=(True, False))
+
+def evaluate(genome):
+    return (task_score(genome), genome.connection_count)
+```
+
+Der Vektor wird als `genome.objectives` gespeichert. Für bestehende APIs,
+Logs und Stop-Kriterien wird zusätzlich eine skalare Fitness berechnet:
+
+- mit `weights`: gewichtete Summe
+- ohne `weights`: Summe der Objectives
+
+Die Population kann die Selektion mit Pareto-Rang und Crowding-Distance formen.
+Dadurch bleiben unterschiedliche Trade-off-Lösungen länger im Rennen, statt
+dass eine einzelne handgebaute Fitnessformel alle Ziele vermischen muss.
+
+## 17. Quality Diversity / MAP-Elites
+
+Quality Diversity wird über `NeuroEvolution.set_quality_diversity()` aktiviert:
+
+```python
+yane.set_quality_diversity(
+    descriptor_fn=lambda genome: (genome.connection_count,),
+    bins=(20,),
+    ranges=((0.0, 200.0),),
+)
+```
+
+`descriptor_fn` erzeugt einen festen Behavior Descriptor. `MAPElitesArchive`
+diskretisiert diesen Descriptor in Zellen und speichert pro Zelle eine Kopie des
+besten Genoms. `Population.submit()` aktualisiert das Archiv nach jeder
+Bewertung. Wenn die Population stagniert, darf `_inject_fresh_genome()` eine
+Archiv-Elite kopieren, mutieren und als neuen Kandidaten einspeisen.
+
+Diagnostics:
+
+- `quality_diversity_enabled`
+- `quality_diversity_cells`
+- `quality_diversity_coverage`
+- `n_quality_diversity_updates`
+- `n_quality_diversity_injections`
+
+Descriptor-Callbacks werden nicht in Checkpoints gepickelt, weil sie häufig
+Closures sind. Das Archiv selbst bleibt erhalten; nach `load_checkpoint()` kann
+der Callback erneut per `set_quality_diversity()` gesetzt werden.
+
+## 18. Weitere Forschungsbausteine
+
+### 18.1 Coevolution
+
+`evolution/coevolution.py` enthält:
+
+- `HallOfFame(max_size)`: speichert starke historische Gegner als Genomkopien
+- `competitive_fitness(genome, opponents, match_fn, aggregation)`: bewertet ein
+  Genom gegen mehrere Gegner
+- `mixed_opponents(current_population, hall_of_fame, ...)`: mischt aktuelle und
+  historische Gegner, um zyklisches Vergessen zu reduzieren
+
+Damit lassen sich Population-gegen-Population-Experimente aufbauen, ohne den
+Standard-Trainingspfad zu verändern.
+
+### 18.2 Modulare Subnetze
+
+`evolution/modularity.py` erkennt Hidden-Node-Komponenten per
+`hidden_modules(genome)` und kann ein Modul mit `duplicate_module(genome,
+tracker)` duplizieren. Dabei werden Hidden Nodes, interne Connections,
+Eingänge ins Modul und Ausgänge aus dem Modul kopiert und mit neuen
+Innovationsnummern versehen.
+
+### 18.3 Indirekte Kodierung / CPPN
+
+`evolution/indirect_encoding.py` bietet einen einfachen HyperNEAT-artigen
+Einstieg:
+
+- `layered_coordinates(genome)` weist Input/Hidden/Output-Nodes 2D-Koordinaten zu.
+- `generate_connections_from_coordinates(...)` erzeugt Connections aus einer
+  CPPN-artigen Gewichtsfunktion über Quell-/Zielkoordinaten und Distanz.
+
+### 18.4 Matrix-, GPU- und Backprop-Export
+
+`evolution/matrix_export.py` exportiert kompatible azyklische Genome ohne
+persistente Hidden Nodes als `MatrixGenome` mit Adjazenzmatrix, Biasvektor,
+Aktivierungen und Input/Output-Indizes. `forward_matrix()` läuft mit NumPy-API,
+`forward_matrix_gpu()` nutzt CuPy, wenn installiert.
+
+`evolution/backprop.py` enthält einen optionalen PyTorch-Hook
+`backprop_finetune_linear_outputs(...)`. PyTorch ist keine harte Abhängigkeit;
+ohne Installation wird ein klarer `ImportError` geworfen.
+
+### 18.5 CMA-ES als Lamarck-Modus
+
+`set_lamarck(mode="cma_es", cma_population=...)` und
+`set_lamarck_adaptive(mode="cma_es", ...)` aktivieren eine kompakte
+volle-Kovarianz-CMA-ES-Variante für die Gewichte und Biases einer festen
+Topologie. Der Modus ist absichtlich lokal gehalten: Topologie bleibt
+evolutionär, Parameter werden lamarckianisch verfeinert.
+
+## 19. Genom-Lifecycle
+
+Ein Genom durchläuft typischerweise diese Zustände:
+
+1. `Population.select_for_evaluation()` gibt ein unbewertetes Genom zurück.
+2. Die Fitnessfunktion ruft `forward()`, `forward_batch()` oder `tick()`.
+3. `NeuroEvolution._finalize_fitness()` sanitizt Fitness, wendet optionale
+   Effizienz-/Komplexitätsstrafen an und speichert Objective-Vektoren.
+4. `Population.submit()` verschiebt das Genom in `_evaluated`, berechnet
+   Verhalten/Novelty, weist Species zu und aktualisiert Stagnationszähler.
+5. Wenn neue Kandidaten gebraucht werden, erzeugt `_spawn_offspring()` Kopien,
+   Crossover-Kinder oder Diversity-Injektionen.
+6. `Genome.mutate()` verändert Struktur, Gewichte, Aktivierungen, Memory-Gates
+   und Strategie-Gene; danach werden Topologie-Caches invalidiert.
+7. `_prune()` entfernt schlechte Genome, schützt aber globale und Species-Eliten.
+
+## 20. Population-Spawn-Zyklus
+
+Der Spawn-Zyklus ist steady-state: Es wird nicht zwingend eine ganze Generation
+auf einmal ersetzt. Wenn `_unevaluated` leer ist, erzeugt die Population einen
+neuen Kandidaten. Vor der Elternwahl werden Shared Fitness, optionales
+Fitness-Shaping, Pareto-Shaping, Novelty und Effizienzscore aktualisiert.
+
+Species erhalten Rolling Spawn-Credits aus durchschnittlicher Shared Fitness,
+Stagnationsfaktor und Jugendbonus. Danach läuft das Parent-Tournament innerhalb
+der gewählten Species. Crossover verwendet bevorzugt Eltern derselben Species;
+Interspecies-Crossover ist nur mit konfigurierter Rate erlaubt.
+
+## 21. Worker-Pfade
+
+Alle automatischen Trainingspfade laufen durch dieselbe Evaluierungslogik:
+
+- `train()` sequenziell über `EvaluationRunner.run()`
+- GUI sequenziell über `train()` mit Iterationscallback
+- GUI ThreadPool über `_run_evaluations()`
+- GUI Multiprocessing über `_mp_evaluate()` plus `submit_fitness_batch()`
+
+Für Multiprocessing werden Genome per Pickle über IPC verschickt. Rebuildbare
+Runtime-Caches (`_compiled_forward`, `_forward_dispatch`, `_exec_order`,
+`_reset_nodes`, `_innov_cache`, NumPy-Wertebuffer) werden im Pickle-State
+entfernt und im Worker beim ersten `forward()` neu aufgebaut.
+
+## 22. Fitness-Konventionen
+
+- Höhere Fitness ist immer besser.
+- Fehlerbasierte Beispiele nutzen häufig negative Fehler, bei denen `0` optimal ist.
+- Fitnessfunktionen sollten `genome.reset()` am Episodenstart oder vor
+  unabhängigen Samples aufrufen.
+- NaN/Inf sollten vermieden werden; zusätzlich kann
+  `set_fitness_sanitizing()` defensiv absichern.
+- Für stochastische Aufgaben empfiehlt sich `set_multi_eval()` mit `median`
+  oder `mean` plus optionaler Sigma-Strafe.
+- Für Trade-offs empfiehlt sich `set_multi_objective()` statt einer schwer
+  wartbaren Mischformel.
+
+## 23. Glossar
+
+- **Genom**: ein evolvierbares neuronales Netz inklusive Strategieparameter.
+- **Node**: Neuron mit Aktivierung, Bias, optionalem Memory und ausgehenden Connections.
+- **Connection**: gerichtete gewichtete Verbindung zu einem Ziel-Node.
+- **Innovation Number**: historische ID für NEAT-kompatiblen Crossover.
+- **Species**: Gruppe ähnlicher Topologien, die intern konkurrieren.
+- **Shared Fitness**: Fitness nach Species-Sharing, damit große Species nicht dominieren.
+- **Novelty**: Bonus für ungewöhnliches Verhalten auf festen Probeinputs.
+- **Lamarckian Refinement**: lokale Gewichtsoptimierung, deren Ergebnis vererbt wird.
+- **Pareto-Front**: Menge nicht-dominierter Lösungen bei mehreren Zielen.
+- **Crowding-Distance**: NSGA-II-Tie-Breaker, der dünn besetzte Frontbereiche schützt.
+- **MAP-Elites**: Quality-Diversity-Archiv mit der besten Lösung pro Verhaltenszelle.
+- **CPPN**: Netzwerk/Funktion, die Gewichte aus geometrischen Koordinaten erzeugt.
+
+## 24. Grenzen und Hinweise
 
 - YANE ist stochastisch. Gleiche Einstellungen können je nach Seed unterschiedlich schnell konvergieren.
 - Große Aufgaben wie MNIST oder pixelbasierte Kontrolle sind deutlich schwerer als die kleinen Dataset-Beispiele.
@@ -969,9 +1172,9 @@ Trainingsablauf per HTTP:
 - Für Sequenzen und Episoden sollte `genome.reset()` nur am Episodenstart aufgerufen werden.
 - Normalisierung ist oft entscheidend, weil Aktivierungsfunktionen und Mutationsschrittweiten sonst in ungünstigen Skalen arbeiten.
 
-## 16. Weitere öffentliche API-Methoden
+## 25. Weitere öffentliche API-Methoden
 
-### 16.1 Populationsgröße und Species
+### 25.1 Populationsgröße und Species
 
 ```python
 yane.set_population_size(n)   # Standard: 100
@@ -980,7 +1183,7 @@ yane.set_target_species(n)    # Standard: 5
 
 `set_population_size(n)` legt die maximale Anzahl von Genomen in der Population fest. Kleinere Populationen trainieren schneller, finden aber öfter lokale Optima. `set_target_species(n)` setzt die Zielanzahl der Species; der Kompatibilitätsschwellwert wird automatisch angepasst. Höhere Werte erhalten mehr strukturelle Diversität.
 
-### 16.2 Batch-Evaluation
+### 25.2 Batch-Evaluation
 
 ```python
 genomes = yane.next_genome_batch(n=4)
@@ -990,7 +1193,7 @@ yane.submit_fitness_batch(results)
 
 Für manuelle Parallelisierung: `next_genome_batch(n)` gibt `n` unbewertete Genome zurück (spawnt bei Bedarf Nachkommen). `submit_fitness_batch(results)` reicht Fitnesswerte für eine Liste von `(Genom, Fitness)`-Paaren ein. Optional sind auch `(Genom, Fitness, Bewertungszeit_ms)`-Tupel möglich, damit die automatische Effizienzbewertung in eigenen Batch-Loops greift. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
 
-### 16.3 Speicherverwaltung
+### 25.3 Speicherverwaltung
 
 ```python
 yane.trim_memory()
@@ -998,7 +1201,7 @@ yane.trim_memory()
 
 Gibt freigegebene Heap-Seiten explizit ans Betriebssystem zurück (ruft `malloc_trim` auf Linux auf). Nützlich nach langen Trainingsläufen oder nach `set_resource_limits(max_process_gb=...)`.
 
-## 17. Testabdeckung
+## 26. Testabdeckung
 
 Die Tests decken unter anderem ab:
 
@@ -1010,6 +1213,8 @@ Die Tests decken unter anderem ab:
 - Innovation Tracking
 - Population, Pruning und Resource-Stabilität
 - Novelty und Ensemble
+- Multi-Objective/Pareto-Helfer
+- Checkpoints, Normalisierung, Curriculum und Batch-Forward
 
 Ausführen:
 

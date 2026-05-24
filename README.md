@@ -42,6 +42,7 @@ Die GUI bietet:
 - Inspect-Tab zum Prüfen des besten Genoms auf bekannten Testfällen
 - `Run Best` für renderbare Gymnasium-Beispiele
 - API-Server-Tab zum Starten der HTTP-Schnittstelle
+- Advanced-Controls für Lamarck-Modi inkl. CMA-ES, Multi-Objective und Quality Diversity
 
 ### Beispiel per Skript trainieren
 
@@ -219,6 +220,52 @@ Für stochastische Umgebungen, in denen eine einzelne Episode zu verrauscht ist.
 - Kosten: `n` Fitnessfunktionsaufrufe pro Genom statt 1
 - Wirkt automatisch in `train()` und allen GUI-Worker-Pfaden; der manuelle Loop (`next_genome` / `submit_fitness`) ist nicht betroffen
 
+### Multi-Objective Fitness
+
+```python
+yane.set_multi_objective(
+    enabled=True,
+    weights=(1.0, -0.01),       # scalar fallback for logs/stopping
+    maximize=(True, False),     # objective 1 hoch, objective 2 niedrig
+)
+
+def evaluate(genome):
+    score = run_task(genome)
+    size = genome.connection_count
+    return (score, size)
+```
+
+Fitnessfunktionen dürfen dann einen Vektor zurückgeben. YANE speichert ihn als
+`genome.objectives`, nutzt eine gewichtete Skalarfitness für bestehende APIs und
+formt die Elternauswahl per Pareto-Rang plus Crowding-Distance. So müssen
+Trade-offs wie Leistung, Geschwindigkeit, Netzwerkgröße oder Stabilität nicht
+mehr in eine einzige fragile Formel gepresst werden.
+
+### Quality Diversity / MAP-Elites
+
+```python
+yane.set_quality_diversity(
+    descriptor_fn=lambda genome: (genome.connection_count,),
+    bins=(20,),
+    ranges=((0.0, 200.0),),
+)
+```
+
+Das MAP-Elites-Archiv speichert pro Verhaltenszelle das beste bekannte Genom.
+Bei Stagnation kann YANE archivierte Eliten als Ausgangspunkt für neue
+Diversitätsinjektionen verwenden. `population_memory_info()` enthält Coverage,
+Zellanzahl, Archiv-Updates und QD-Injektionen.
+
+### Experimentelle Bausteine
+
+Für größere Forschungsaufgaben gibt es zusätzliche Module:
+
+- `yane.evolution.coevolution`: Hall-of-Fame und kompetitive Fitness-Helfer
+- `yane.evolution.modularity`: Hidden-Module erkennen und duplizieren
+- `yane.evolution.indirect_encoding`: CPPN/HyperNEAT-artige Connection-Generierung
+- `yane.evolution.matrix_export`: Matrixexport für NumPy/CuPy-kompatible DAGs
+- `yane.evolution.backprop`: optionaler PyTorch-Finetuning-Hook
+
 ### Lamarckian Refinement
 
 ```python
@@ -226,6 +273,19 @@ yane.set_lamarck(n_steps=5, sigma=1.0)
 ```
 
 Vor jeder Fitnessbewertung werden Gewichte und Biases mit `n_steps` lokalen Hill-Climb-Schritten verfeinert. Verbesserte Gewichte werden direkt ins Genom übernommen und weitervererbt. Kosten: `n_steps + 1` zusätzliche Fitnessfunktionsaufrufe pro Genom.
+
+Verfügbare Modi:
+
+- `mode="hill_climbing"`: zufällige lokale Gewichtsschritte, behält Verbesserungen
+- `mode="sa"`: Simulated Annealing mit geometrischer Abkühlung
+- `mode="nes"`: Natural Evolution Strategies mit antithetischen Perturbationen
+- `mode="cma_es"`: kleine volle-Kovarianz-CMA-ES über Gewichte und Biases
+
+Für Vergleichsläufe gibt es:
+
+```bash
+python -m yane.benchmarks.compare_lamarck_modes --env Acrobot-v1 --modes hc nes sa
+```
 
 ### Batch-API
 

@@ -18,6 +18,8 @@ from yane.evolution.compatibility import (  # noqa: F401 (re-exported for tests/
     compatibility as _compatibility,
     _COMPAT_NUMPY_THRESHOLD,
 )
+from yane.evolution.multi_objective import pareto_scores
+from yane.evolution.quality_diversity import MAPElitesArchive
 
 # Module-level key functions — C-level attrgetter is ~2× faster than a Python
 # lambda for attribute access in max()/min()/sorted() calls.
@@ -139,6 +141,8 @@ class Population:
         # Fitness shaping: when enabled, shared_fitness values are replaced by
         # rank-normalised scores in [1/N, 1] before tournament selection.
         self._fitness_shaping: bool = False
+        self._multi_objective_enabled: bool = False
+        self._multi_objective_maximize: tuple[bool, ...] | None = None
 
         # Interspecies crossover: probability that the second parent comes from
         # a *different* species.  0.0 = intraspecies only (default).
@@ -171,6 +175,32 @@ class Population:
         self._speciation_enabled: bool = True
         self._crossover_enabled: bool = True
         self._diversity_injection_enabled: bool = True
+
+        # Quality Diversity / MAP-Elites archive. Descriptor function is
+        # user-supplied via NeuroEvolution.set_quality_diversity().
+        self._qd_enabled: bool = False
+        self._qd_archive: MAPElitesArchive | None = None
+        self._qd_descriptor_fn = None
+        self._n_qd_updates: int = 0
+        self._n_qd_injections: int = 0
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self.__dict__.setdefault("_multi_objective_enabled", False)
+        self.__dict__.setdefault("_multi_objective_maximize", None)
+        self.__dict__.setdefault("_qd_enabled", False)
+        self.__dict__.setdefault("_qd_archive", None)
+        self.__dict__.setdefault("_qd_descriptor_fn", None)
+        self.__dict__.setdefault("_n_qd_updates", 0)
+        self.__dict__.setdefault("_n_qd_injections", 0)
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        # User-supplied descriptor callbacks are often closures and may not be
+        # picklable. The archive itself is persisted; callers can reattach the
+        # descriptor via NeuroEvolution.set_quality_diversity() after loading.
+        state["_qd_descriptor_fn"] = None
+        return state
 
     # ------------------------------------------------------------------
     # Public API
@@ -226,6 +256,11 @@ class Population:
             arr = np.nan_to_num(arr, nan=0.0, posinf=1e6, neginf=-1e6)
             self._behaviors[id(genome)] = arr
         self._novelty_evals_since_recompute += 1
+
+        if self._qd_enabled and self._qd_archive is not None and self._qd_descriptor_fn is not None:
+            descriptor = self._qd_descriptor_fn(genome)
+            if self._qd_archive.add(descriptor, genome, fitness):
+                self._n_qd_updates += 1
 
         # Assign to species immediately while fitness and topology are fresh.
         # _prune() (called below) handles removal from sp.members if the genome
@@ -752,6 +787,17 @@ class Population:
             genome.shared_fitness = rank / n
         self._min_shared_fitness = 1.0 / n
 
+    def _apply_pareto_shaping(self) -> None:
+        """Replace shared_fitness with Pareto-rank + crowding scores."""
+        evaluated = [g for g in self._evaluated if getattr(g, "objectives", None) is not None]
+        if len(evaluated) < 2:
+            return
+        objectives = [g.objectives for g in evaluated]
+        scores = pareto_scores(objectives, self._multi_objective_maximize)
+        for genome, score in zip(evaluated, scores):
+            genome.shared_fitness = score
+        self._min_shared_fitness = min(scores) if scores else self._min_shared_fitness
+
     # ------------------------------------------------------------------
     # Offspring spawning
     # ------------------------------------------------------------------
@@ -864,6 +910,19 @@ class Population:
         3 - Heavily mutated template (structural + weight exploration)
         """
         from yane.evolution import smart_mutation
+        if self._qd_enabled and self._qd_archive is not None and self._qd_archive.cells:
+            base = self._qd_archive.sample_elite()
+            if base is not None:
+                for _ in range(random.randint(1, 4)):
+                    base.mutate(self._tracker)
+                base.fitness = 0.0
+                base.shared_fitness = 0.0
+                self._unevaluated.append(base)
+                self._n_diversity_injection += 1
+                self._n_qd_injections += 1
+                self._since_last_injection = 0
+                return
+
         strategy = random.randint(0, 3)
 
         if strategy == 0 and self._evaluated:
@@ -1103,6 +1162,8 @@ class Population:
                 self._inject_structural_diversity()
                 return
         self._compute_shared_fitness()
+        if self._multi_objective_enabled:
+            self._apply_pareto_shaping()
         if self._fitness_shaping:
             self._apply_fitness_shaping()
         self._compute_efficiency_scores()

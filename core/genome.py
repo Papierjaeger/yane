@@ -37,6 +37,7 @@ def _pick(a, b):
 class Genome:
     def __init__(self) -> None:
         self.fitness: float = 0.0
+        self.objectives: tuple[float, ...] | None = None
         self.eval_time_ms: float | None = None
         self.efficiency_score: float = 1.0
         self.selection_score: float = 0.0
@@ -907,6 +908,7 @@ class Genome:
                 new_node.gate_node = node_map.get(old_node.gate_node)
 
         genome.fitness = self.fitness
+        genome.objectives = self.objectives
         genome.shared_fitness = self.shared_fitness
         genome.eval_time_ms = self.eval_time_ms
         genome.efficiency_score = self.efficiency_score
@@ -946,8 +948,12 @@ class Genome:
         which IS pickled correctly.
         """
         state = self.__dict__.copy()
+        state['_triggered'] = set()
+        state['_exec_order'] = None
+        state['_reset_nodes'] = None
         state['_compiled_forward'] = None
         state['_forward_dispatch'] = None
+        state['_innov_cache'] = None
         state['_values_arr'] = None   # numpy buffer; rebuilt on first forward() in subprocess
         return state
 
@@ -959,6 +965,7 @@ class Genome:
         # Drop the obsolete attribute if it leaked in.
         self.__dict__.pop('allow_output_memory', None)
         # Backward compat: old pickles won't have these attributes.
+        self.__dict__.setdefault('objectives', None)
         self.__dict__.setdefault('_last_species_id', None)
         self.__dict__.setdefault('_species_stale', True)
         self.__dict__.setdefault('_values_arr', None)

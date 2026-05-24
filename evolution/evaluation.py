@@ -102,6 +102,8 @@ class EvaluationRunner:
                 refine_fn = lamarck.refine_nes
             elif lamarck.sa_mode:
                 refine_fn = lamarck.refine_sa
+            elif lamarck.cma_mode:
+                refine_fn = lamarck.refine_cma_es
             else:
                 refine_fn = lamarck.refine
             refine_fn(genome, fitness_fn, n_steps=lamarck.steps)
@@ -165,6 +167,8 @@ class EvaluationRunner:
                     refine_fn = lamarck.refine_nes
                 elif lamarck.sa_mode:
                     refine_fn = lamarck.refine_sa
+                elif lamarck.cma_mode:
+                    refine_fn = lamarck.refine_cma_es
                 else:
                     refine_fn = lamarck.refine
                 fitness = refine_fn(
