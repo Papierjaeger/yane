@@ -42,6 +42,9 @@ def build_population_info(
     infos = [g.memory_info() for g in all_genomes]
     total_nodes = sum(i["nodes"] for i in infos)
     total_connections = sum(i["connections"] for i in infos)
+    total_active_connections = sum(i.get("active_connections", 0) for i in infos)
+    total_inactive_connections = sum(i.get("inactive_connections", 0) for i in infos)
+    total_inactive_hidden = sum(i.get("inactive_hidden_nodes", 0) for i in infos)
     max_nodes = max(i["nodes"] for i in infos)
     max_connections = max(i["connections"] for i in infos)
 
@@ -53,6 +56,9 @@ def build_population_info(
         "total_connections": total_connections,
         "avg_nodes_per_genome": total_nodes / len(all_genomes),
         "avg_connections_per_genome": total_connections / len(all_genomes),
+        "avg_active_connections_per_genome": total_active_connections / len(all_genomes),
+        "avg_inactive_connections_per_genome": total_inactive_connections / len(all_genomes),
+        "avg_inactive_hidden_nodes_per_genome": total_inactive_hidden / len(all_genomes),
         "largest_genome_nodes": max_nodes,
         "largest_genome_connections": max_connections,
         "species_count":           population.species_count,
@@ -93,6 +99,7 @@ def build_population_info(
         "n_mutation_only":          population._n_mutation_only,
         "n_diversity_injection":    population._n_diversity_injection,
         "n_interspecies_crossover": population._n_interspecies_crossover,
+        "species_spawn_scores":     list(population._last_species_spawn_scores),
         "n_early_stopped":          n_early_stopped,
         # Mutation success tracking
         "mutation_success": dict(population._mutation_success),

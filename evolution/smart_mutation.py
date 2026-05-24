@@ -52,12 +52,20 @@ def remove_node(genome, tracker=None) -> None:
 
     For each A→N→B pair, a bypass connection A→B is created with probability
     genome.bypass_connection_prob. Bypass weight = w_AN * w_NB.
+    Structurally inactive hidden nodes are removed first because they cannot
+    influence any output.
     """
     hidden = [n for n in genome.nodes if n.type == NodeType.HIDDEN]
     if not hidden:
         return
 
-    node_to_remove = random.choice(hidden)
+    active_info = genome.active_structure_info()
+    if active_info["inactive_hidden_nodes"] > 0:
+        active_nodes = _active_nodes(genome)
+        inactive_hidden = [n for n in hidden if n not in active_nodes]
+        node_to_remove = random.choice(inactive_hidden)
+    else:
+        node_to_remove = random.choice(hidden)
 
     incoming = [(node, conn) for node, conn in genome.all_connections()
                 if conn.target is node_to_remove]
@@ -128,6 +136,7 @@ def remove_connection(genome, tracker=None) -> None:
     Soft-min sampling: probability ∝ 1 / (|weight| + ε) so structurally
     less important connections (small weights) are removed more often.
     Only enabled connections are candidates — disabled ones are left intact.
+    Enabled connections that are not on any input→output path are pruned first.
     """
     candidates = [(node, i, conn)
                   for node in genome.nodes
@@ -135,10 +144,57 @@ def remove_connection(genome, tracker=None) -> None:
                   if conn.enabled]
     if not candidates:
         return
+    if genome.active_structure_info()["inactive_enabled_connections"] > 0:
+        active_nodes = _active_nodes(genome)
+        inactive = [
+            (node, idx, conn)
+            for node, idx, conn in candidates
+            if node not in active_nodes or conn.target not in active_nodes
+        ]
+        if inactive:
+            node, idx, _ = random.choice(inactive)
+            node.connections.pop(idx)
+            genome._invalidate_topology()
+            return
     probs = [1.0 / (abs(c[2].weight) + 1e-6) for c in candidates]
     node, idx, _ = random.choices(candidates, weights=probs, k=1)[0]
     node.connections.pop(idx)
     genome._invalidate_topology()
+
+
+def _active_nodes(genome) -> set[Node]:
+    """Return nodes on enabled input->output paths."""
+    enabled_edges = [
+        (src, conn.target)
+        for src in genome.nodes
+        for conn in src.connections
+        if conn.enabled
+    ]
+    forward: dict[Node, list[Node]] = {}
+    reverse: dict[Node, list[Node]] = {}
+    for src, tgt in enabled_edges:
+        forward.setdefault(src, []).append(tgt)
+        reverse.setdefault(tgt, []).append(src)
+
+    reachable: set[Node] = set()
+    stack = list(genome.input_nodes)
+    while stack:
+        node = stack.pop()
+        if node in reachable:
+            continue
+        reachable.add(node)
+        stack.extend(forward.get(node, ()))
+
+    can_reach_output: set[Node] = set()
+    stack = list(genome.output_nodes)
+    while stack:
+        node = stack.pop()
+        if node in can_reach_output:
+            continue
+        can_reach_output.add(node)
+        stack.extend(reverse.get(node, ()))
+
+    return reachable & can_reach_output
 
 
 def rewire_connection(genome, tracker=None) -> None:

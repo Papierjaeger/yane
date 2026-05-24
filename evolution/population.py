@@ -126,6 +126,9 @@ class Population:
         self._n_mutation_only: int = 0
         self._n_diversity_injection: int = 0
         self._n_interspecies_crossover: int = 0
+        self._species_spawn_credit: dict[int, float] = {}
+        self._species_offspring_total: dict[int, int] = {}
+        self._last_species_spawn_scores: list[dict[str, float | int]] = []
 
         # Mutation success tracking — per-type counters for adaptive weighting.
         # _mutation_success[type] = count where mutation type improved fitness
@@ -888,40 +891,96 @@ class Population:
                 smart_mutation.add_connection(g, self._tracker)
             self._unevaluated.append(g)
 
-    def _select_parent_species(self) -> Species | None:
-        """Pick which species contributes the next offspring.
+    def _species_spawn_scores(self) -> list[tuple[Species, float]]:
+        """Return positive spawn scores for active species.
 
-        Score per species = avg_shared_fitness (shifted ≥ 0)
-                           × stagnation_factor   (0.1–1.0)
-                           × youth_bonus         (1.0–2.0 for new species)
+        Score per species = avg_shared_fitness (shifted >= 0)
+                           * stagnation_factor (0.1-1.0)
+                           * youth_bonus       (1.0-2.0 for new species)
 
-        Every species gets at least a tiny floor weight so no species is ever
-        completely shut out — premature loss of structural variants would otherwise
-        defeat the purpose of speciation.
+        A floor derived from the active species count acts as a minimum budget:
+        weak species shrink, but they do not disappear from reproduction solely
+        because one current champion species is much fitter.
         """
         active = [sp for sp in self._species if sp.members]
         if not active:
-            return None
-        if len(active) == 1:
-            return active[0]
-
-        scores: list[float] = []
-        for sp in active:
-            avg_fit = sp.avg_shared_fitness()
-            shifted = max(0.0, avg_fit - self._min_shared_fitness + 1e-6)
+            return []
+        avg_fits = [sp.avg_shared_fitness() for sp in active]
+        min_avg = min(avg_fits)
+        max_avg = max(avg_fits)
+        span = max_avg - min_avg
+        raw_scores: list[tuple[Species, float]] = []
+        result: list[tuple[Species, float]] = []
+        for sp, avg_fit in zip(active, avg_fits):
+            quality = 1.0 if span <= 1e-12 else max(0.0, (avg_fit - min_avg) / span)
             stag_factor = max(0.1, 1.0 - sp.stagnation_count / max(1, self.stagnation_threshold))
             age = self._spawn_count - sp.created_at_spawn
             youth_bonus = 1.0 + max(0.0, 1.0 - age / max(1, self._min_species_age))
-            scores.append(max(1e-6, shifted * stag_factor * youth_bonus))
+            raw_scores.append((sp, quality * stag_factor * youth_bonus))
+        max_raw = max(score for _sp, score in raw_scores)
+        floor = max(1e-6, 0.05 * max_raw / len(active))
+        for sp, score in raw_scores:
+            result.append((sp, max(floor, score)))
+        return result
 
-        total = sum(scores)
-        r = random.random() * total
-        acc = 0.0
-        for sp, score in zip(active, scores):
-            acc += score
-            if r <= acc:
-                return sp
-        return active[-1]
+    def _select_parent_species(self) -> Species | None:
+        """Pick which species contributes the next offspring.
+
+        Uses weighted fair queuing rather than independent roulette picks.  Each
+        call adds the species' normalized spawn share to a rolling credit bucket;
+        the species with the largest credit spawns and spends one credit.  This
+        gives good species proportionally more offspring while guaranteeing that
+        low-score and young protected species receive their minimum budget over
+        time.
+        """
+        scored = self._species_spawn_scores()
+        if not scored:
+            return None
+        if len(scored) == 1:
+            sp = scored[0][0]
+            self._species_offspring_total[id(sp)] = self._species_offspring_total.get(id(sp), 0) + 1
+            return sp
+
+        active_ids = {id(sp) for sp, _score in scored}
+        self._species_spawn_credit = {
+            sid: credit
+            for sid, credit in self._species_spawn_credit.items()
+            if sid in active_ids
+        }
+        total = sum(score for _sp, score in scored)
+        if total <= 0.0:
+            share = 1.0 / len(scored)
+            for sp, _score in scored:
+                self._species_spawn_credit[id(sp)] = self._species_spawn_credit.get(id(sp), 0.0) + share
+        else:
+            for sp, score in scored:
+                self._species_spawn_credit[id(sp)] = (
+                    self._species_spawn_credit.get(id(sp), 0.0) + score / total
+                )
+
+        chosen, _score = max(
+            scored,
+            key=lambda item: (
+                self._species_spawn_credit.get(id(item[0]), 0.0),
+                item[1],
+                item[0].best().fitness,
+            ),
+        )
+        chosen_id = id(chosen)
+        self._species_spawn_credit[chosen_id] = self._species_spawn_credit.get(chosen_id, 0.0) - 1.0
+        self._species_offspring_total[chosen_id] = self._species_offspring_total.get(chosen_id, 0) + 1
+        self._last_species_spawn_scores = [
+            {
+                "species_id": id(sp),
+                "members": len(sp.members),
+                "score": score,
+                "share": score / total if total > 0.0 else 1.0 / len(scored),
+                "credit": self._species_spawn_credit.get(id(sp), 0.0),
+                "offspring_total": self._species_offspring_total.get(id(sp), 0),
+            }
+            for sp, score in scored
+        ]
+        return chosen
 
     def _spawn_offspring(self) -> None:
         if not self._evaluated:

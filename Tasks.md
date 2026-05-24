@@ -82,16 +82,13 @@ Nutzen:
 - Mehr strukturelle Vielfalt.
 - Weniger lokales Festfahren.
 
-### P1: Reproduktion per Species-Budget
+### P1: Reproduktion per Species-Budget ✅
 
-Aktuell entsteht ein Kind per Tournament Selection aus der gesamten evaluierten Population.
+Kinder entstehen species-budgetiert statt rein aus der gesamten evaluierten Population.
 
-Aufgaben:
+**Bereits implementiert:** Rolling Spawn-Credits pro Species in `Population._select_parent_species()`: Spawn-Anteile werden aus Shared-Fitness, Stagnationsfaktor und Jugendbonus berechnet. Schwache/stagnierende Species erhalten weniger, aber durch ein Mindestbudget nie null Reproduktion. Junge Species bekommen einen Bonus. Parent-Tournament läuft innerhalb der ausgewählten Species; Crossover wählt den zweiten Parent bevorzugt aus derselben Species und nutzt Interspecies-Crossover nur mit konfigurierter Wahrscheinlichkeit. Diagnostics expose `species_spawn_scores`.
 
-- Spawn-Anteile pro Species nach Shared Fitness berechnen.
-- Schwache/stagnierende Species kontrolliert reduzieren.
-- Junge Species Mindestbudget geben.
-- Crossover bevorzugt innerhalb derselben Species.
+**Noch offen:** — (alle Aufgaben sind implementiert).
 
 Nutzen:
 
@@ -163,16 +160,15 @@ Nutzen:
 
 ## 3. Netzwerkmodell
 
-### P0: Netzwerkgröße kontrollierter wachsen lassen
+### P0: Netzwerkgröße kontrollierter wachsen lassen ⚡
 
 Größere Aufgaben brauchen größere Netze, aber unkontrolliertes Wachstum wird teuer.
 
-Aufgaben:
+**Bereits implementiert:** Strukturell aktive Nodes/Connections werden erkannt (`Genome.active_structure_info()` und `memory_info()`). Population-Diagnostics enthalten durchschnittliche aktive/inaktive Connections und inaktive Hidden Nodes. `remove_node` bevorzugt inaktive Hidden Nodes, `remove_connection` bevorzugt enabled Connections, die auf keinem Input→Output-Pfad liegen.
+
+Noch offen:
 
 - Weiche Komplexitätsstrafe optional einführen.
-- Inaktive Nodes/Connections erkennen.
-- Pruning-Mutation gezielter auf wirkungslose Struktur anwenden.
-- Netzkomplexität in Fitnessstatistik anzeigen.
 
 Nutzen:
 
@@ -198,7 +194,7 @@ Nutzen:
 
 Persistente Node-Werte sind einfach und flexibel, aber schwer steuerbar.
 
-**Bereits implementiert:** Persistente Nodes (`persistent=True`) behalten Werte über Forward-Passes hinweg, `reset()` löscht sie. Memory-Toggle in GUI.
+**Bereits implementiert:** Persistente Nodes (`persistent=True`) behalten Werte über Forward-Passes hinweg, `reset()` löscht sie. Memory-Toggle in GUI. Leaky Memory ist als evolvierbares `leak_alpha` auf Nodes implementiert (`0.0` = kein Carry, `1.0` = volle Retention), inklusive Copy/Pickle-Kompatibilität, Mutation-Clamping und Forward-Pfad-Unterstützung.
 
 **Wichtig für sequentielle Aufgaben:** Mit einem Tick-basierten Ansatz (ein Token/Zeichen pro Tick, ein "Output-relevant"-Flag als zweiter Input) kann YANE prinzipiell lernen, sich wie ein Sprachmodell zu verhalten — ohne festes Kontextfenster, da der interne State theoretisch über beliebig viele Ticks persistiert. Der entscheidende technische Engpass dabei ist Gating: ohne gezielte Schreib-/Vergess-Kontrolle kollabiert der State bei langen Sequenzen numerisch oder das Netz kann keine selektive Retention lernen. Gating (`value = gate * old + (1 - gate) * new`) ist daher der einzige echte technische Blocker für diese Aufgabenklasse.
 
@@ -206,8 +202,7 @@ Noch offen:
 
 - Explizite Memory Nodes als eigener NodeType prüfen.
 - Gating-Mechanismen implementieren: `value = gate * old + (1 - gate) * new`, wobei `gate` ein evolvierbarer Parameter oder ein weiterer Node-Output ist.
-- Leaky memory als einfachere Variante: `value = alpha * old + new`, mit evolvierbarem Zerfall `alpha`.
-- Mutation für `alpha` und Gate-Stärke.
+- Gate-Stärke-Mutation für das spätere explizite Gating.
 - Reset-Regeln klarer visualisieren.
 
 Nutzen:
@@ -537,6 +532,7 @@ Nutzen:
 - [x] Forward-Microbenchmarks: benchmarks/forward_bench.py (acyclic vs cyclic, n∈{10,50,200,1000}).
 - [x] Vektorisierte Batch-Auswertung: forward_batch() (NumPy push-Modell, topologisch, Fallback bei Zyklen/Memory, alle 15 Aktivierungen, 8 Tests).
 - [x] Curriculum Learning: set_curriculum(stages, on_stage_advance), automatischer Stufenwechsel, Population behalten, curriculum_complete-Stopp, 24 Tests.
+- [x] Species-Budget-Reproduktion: Rolling Spawn-Credits, Jugend-Mindestbudget, Stagnationsreduktion, species-internes Tournament/Crossover.
 
 ### ⚡ Teilweise implementiert (Rest siehe Task-Detail oben)
 
@@ -545,17 +541,16 @@ Nutzen:
 - [x] Worker-Abstraktion: _run_evaluations() + EvaluationResult done; explizites Lamarck in Runner verschoben, GUI-Pfad vereinheitlicht.
 - [x] Genome-Visualisierung: Basis-Canvas + Gewichtsfarben + Aktivierungslabel + Persistent-Ring + Disabled-Connections + Innovationsnummern.
 - [x] Lamarck Rest: per-Species + Zeitmessung done; `genome.lamarck_sigma` als eigenes evolvierbares Strategy-Gen implementiert.
-- [ ] Memory-Mechanismen: Persistente Nodes done; Gating, Leaky Memory, eigener NodeType fehlen.
+- [ ] Netzwerkgröße kontrollieren: Inactive-Detection, gezieltes Pruning und Komplexitätsdiagnostik done; optionale Komplexitätsstrafe fehlt.
+- [ ] Memory-Mechanismen: Persistente Nodes + Leaky Memory done; Gating und eigener NodeType fehlen.
 
 ### 🔲 Noch nicht begonnen
 
 - [ ] Multi-Objective Optimization
-- [ ] Species-Budget-Reproduktion (verschoben auf Phase 3)
 - [ ] Quality Diversity / MAP-Elites
 - [ ] Coevolution
 - [ ] Adaptive Populationsgröße
 - [ ] Warm-Start / Transfer Learning
-- [ ] Netzwerkgröße kontrollieren (Komplexitätsstrafe, Inactive-Detection)
 - [ ] Normalisierung als Framework-Feature
 - [ ] Modulare Subnetze
 - [ ] CPPN / Indirekte Kodierung
@@ -718,4 +713,3 @@ Kumulative `lamarck_time_ms`-Messung in `_lamarck_refine()`, exponiert in `popul
 ### Strukturiertes Logging (P1)
 
 `logs/<kategorie>/<timestamp>/`-Struktur mit `run.log`, `config.json`, `best_genome.json`, `fitness_history.csv`. `util/logger.py`: `setup_logging(name, log_root_override)`, Auto-Cleanup pro Kategorie (max 20). API-Server nutzt `"api"`-Kategorie. 359 Tests, `pytest -m ci` < 1 s, Coverage ≥ 80% für `core/` und `evolution/`.
-

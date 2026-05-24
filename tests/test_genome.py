@@ -214,6 +214,27 @@ class TestGenomeForward(unittest.TestCase):
         info = g.memory_info()
         self.assertEqual(info["nodes"], 0)
         self.assertEqual(info["connections"], 0)
+        self.assertEqual(info["active_connections"], 0)
+
+    def test_active_structure_info_counts_only_input_output_paths(self):
+        from yane.core.connection import Connection
+        from yane.util.activation import ActivationType
+        g = _make_genome(1, 1)
+        active_hidden = Node(NodeType.HIDDEN)
+        inactive_hidden = Node(NodeType.HIDDEN)
+        active_hidden.activation = ActivationType.LINEAR
+        inactive_hidden.activation = ActivationType.LINEAR
+        g.nodes.extend([active_hidden, inactive_hidden])
+        g.input_nodes[0].connections.append(Connection(active_hidden))
+        active_hidden.connections.append(Connection(g.output_nodes[0]))
+        inactive_hidden.connections.append(Connection(g.output_nodes[0]))
+        g._invalidate_topology()
+
+        info = g.active_structure_info()
+        self.assertEqual(info["active_hidden_nodes"], 1)
+        self.assertEqual(info["inactive_hidden_nodes"], 1)
+        self.assertEqual(info["active_connections"], 2)
+        self.assertEqual(info["inactive_enabled_connections"], 1)
 
     def test_max_triggers_bfs_limits_cycles(self):
         """A node with max_triggers=1 fires at most once per BFS pass."""

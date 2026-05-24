@@ -111,6 +111,22 @@ class TestRemoveNode(unittest.TestCase):
                 self.assertIsNot(conn.target, target,
                     "remove_node left a dangling connection to the removed node")
 
+    def test_remove_node_prefers_inactive_hidden_node(self):
+        from yane.core.connection import Connection
+        g = _make_genome(1, 1)
+        active = Node(NodeType.HIDDEN)
+        inactive = Node(NodeType.HIDDEN)
+        g.nodes.extend([active, inactive])
+        g.input_nodes[0].connections.append(Connection(active))
+        active.connections.append(Connection(g.output_nodes[0]))
+        inactive.connections.append(Connection(g.output_nodes[0]))
+        g._invalidate_topology()
+
+        smart_mutation.remove_node(g)
+
+        self.assertIn(active, g.nodes)
+        self.assertNotIn(inactive, g.nodes)
+
     def test_bypass_connection_created(self):
         g = _make_genome(2, 1)
         smart_mutation.add_node(g)
@@ -429,6 +445,23 @@ class TestDisableEnableConnection(unittest.TestCase):
         # Threshold 0.85 is very conservative.
         self.assertGreater(removed_small / n_trials, 0.85,
             "Small-weight connections must be removed far more often than large-weight ones")
+
+    def test_remove_connection_prefers_inactive_enabled_connection(self):
+        """Structurally inactive enabled edges are pruned before active edges."""
+        from yane.core.connection import Connection
+        g = _make_genome(1, 1)
+        active = Connection(g.output_nodes[0]); active.weight = 100.0
+        dead_hidden = Node(NodeType.HIDDEN)
+        inactive = Connection(dead_hidden); inactive.weight = 0.01
+        g.nodes.append(dead_hidden)
+        g.input_nodes[0].connections.append(active)
+        g.output_nodes[0].connections.append(inactive)
+        g._invalidate_topology()
+
+        smart_mutation.remove_connection(g)
+
+        self.assertIn(active, g.input_nodes[0].connections)
+        self.assertNotIn(inactive, g.output_nodes[0].connections)
 
 
 if __name__ == "__main__":

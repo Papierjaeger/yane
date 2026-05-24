@@ -586,6 +586,35 @@ class TestLeakAlpha(unittest.TestCase):
         n.fire_simple()
         self.assertAlmostEqual(n.value, 3.0, places=9)
 
+    def test_large_compiled_forward_respects_leak_alpha(self):
+        """The NumPy-backed compiled path must decay persistent hidden state."""
+        from yane.core.connection import Connection
+        from yane.core.genome import Genome
+        from yane.util.activation import ActivationType
+
+        g = Genome()
+        inp = Node(NodeType.INPUT)
+        hid = self._persistent_node(alpha=0.5)
+        out = Node(NodeType.OUTPUT)
+        inp.activation = ActivationType.LINEAR
+        hid.activation = ActivationType.LINEAR
+        out.activation = ActivationType.LINEAR
+        inp.connections.append(Connection(hid))
+        inp.connections[0].weight = 1.0
+        for _ in range(g._FIRE_NUMPY_THRESHOLD):
+            conn = Connection(out)
+            conn.weight = 0.0
+            hid.connections.append(conn)
+        g.nodes = [inp, hid, out]
+        g.input_nodes = [inp]
+        g.output_nodes = [out]
+        g._invalidate_topology()
+
+        g.forward([4.0])
+        self.assertAlmostEqual(hid.value, 2.0, places=9)
+        g.forward([0.0])
+        self.assertAlmostEqual(hid.value, 1.0, places=9)
+
     def test_copy_preserves_leak_alpha(self):
         n = self._persistent_node(alpha=0.3)
         c = n.copy()

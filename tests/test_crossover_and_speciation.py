@@ -651,6 +651,25 @@ class TestSpeciesBudget(unittest.TestCase):
         self.assertGreater(chosen_b, 0,
                            "Stagnating species must still occasionally be chosen")
 
+    def test_equal_species_receive_balanced_budget(self):
+        """Rolling spawn credits should split offspring nearly evenly."""
+        pop, sp_a, sp_b = self._pop_with_two_species(fit_a=1.0, fit_b=1.0)
+        counts = {id(sp_a): 0, id(sp_b): 0}
+        for _ in range(100):
+            chosen = pop._select_parent_species()
+            counts[id(chosen)] += 1
+        self.assertLessEqual(abs(counts[id(sp_a)] - counts[id(sp_b)]), 1)
+
+    def test_species_spawn_credit_tracks_offspring_totals(self):
+        pop, sp_a, sp_b = self._pop_with_two_species(fit_a=5.0, fit_b=1.0)
+        for _ in range(10):
+            pop._select_parent_species()
+        self.assertEqual(
+            sum(pop._species_offspring_total.values()),
+            10,
+        )
+        self.assertTrue(pop._last_species_spawn_scores)
+
 
 if __name__ == '__main__':
     unittest.main()

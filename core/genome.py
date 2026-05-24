@@ -293,7 +293,7 @@ class Genome:
                     for tgt, conn in pairs:
                         values[tgt] += conn._weight * activated
                 if node._retain_value:
-                    values[ni] = activated
+                    values[ni] = node.leak_alpha * activated if node._persist_value else activated
                 else:
                     values[ni] = 0.0
 
@@ -310,7 +310,7 @@ class Genome:
                     for tgt, conn in pairs:
                         values[tgt] += conn._weight * activated
                 if node._retain_value:
-                    values[ni] = activated
+                    values[ni] = node.leak_alpha * activated if node._persist_value else activated
                 else:
                     values[ni] = 0.0
 
@@ -925,8 +925,65 @@ class Genome:
     def connection_count(self) -> int:
         return self._connection_count
 
+    def active_structure_info(self) -> dict:
+        """Return structural activity counts for enabled input->output paths.
+
+        A hidden node is active when it is reachable from an input and can reach
+        an output through enabled connections.  A connection is active when it is
+        enabled and both endpoints lie on such a path.
+        """
+        enabled_edges = [
+            (src, conn.target, conn)
+            for src in self.nodes
+            for conn in src.connections
+            if conn.enabled
+        ]
+        forward: dict[Node, list[Node]] = {}
+        reverse: dict[Node, list[Node]] = {}
+        for src, tgt, _conn in enabled_edges:
+            forward.setdefault(src, []).append(tgt)
+            reverse.setdefault(tgt, []).append(src)
+
+        reachable: set[Node] = set()
+        stack = list(self.input_nodes)
+        while stack:
+            node = stack.pop()
+            if node in reachable:
+                continue
+            reachable.add(node)
+            stack.extend(forward.get(node, ()))
+
+        can_reach_output: set[Node] = set()
+        stack = list(self.output_nodes)
+        while stack:
+            node = stack.pop()
+            if node in can_reach_output:
+                continue
+            can_reach_output.add(node)
+            stack.extend(reverse.get(node, ()))
+
+        active_nodes = reachable & can_reach_output
+        active_connections = sum(
+            1
+            for src, tgt, _conn in enabled_edges
+            if src in active_nodes and tgt in active_nodes
+        )
+        hidden_nodes = [n for n in self.nodes if n.type is NodeType.HIDDEN]
+        active_hidden = sum(1 for n in hidden_nodes if n in active_nodes)
+        enabled_connections = len(enabled_edges)
+        return {
+            "active_nodes": len(active_nodes),
+            "active_hidden_nodes": active_hidden,
+            "inactive_hidden_nodes": len(hidden_nodes) - active_hidden,
+            "enabled_connections": enabled_connections,
+            "active_connections": active_connections,
+            "inactive_connections": self.connection_count - active_connections,
+            "inactive_enabled_connections": enabled_connections - active_connections,
+        }
+
     def memory_info(self) -> dict:
         """Returns a breakdown of node/connection counts for memory profiling."""
+        active = self.active_structure_info()
         return {
             "nodes": len(self.nodes),
             "connections": self.connection_count,
@@ -934,4 +991,5 @@ class Genome:
             "output_nodes": len(self.output_nodes),
             "max_nodes": self.max_nodes,
             "max_connections": self.max_connections,
+            **active,
         }
