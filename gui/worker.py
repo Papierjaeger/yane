@@ -404,6 +404,13 @@ class TrainingWorker(QThread):
         eval_ema       = eval_ms
         batch_count    = 0
 
+        # Disable Python's automatic cyclic GC for the duration of the
+        # multiprocessing loop.  Automatic GC triggered inside next_genome_batch()
+        # (during allocation) can try to finalise numpy/C-ext objects while the
+        # pool's IPC threads hold C-level references to them → segfault.
+        # Explicit gc.collect() calls below run at quiescent points (after
+        # pool.map() has returned) and are safe.
+        gc.disable()
         try:
             while self._running:
                 while self._paused and self._running:
@@ -482,6 +489,7 @@ class TrainingWorker(QThread):
                     self.error_occurred.emit(str(exc))
                     break
         finally:
+            gc.enable()
             pool.terminate()
             pool.join()
 
