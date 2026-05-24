@@ -609,9 +609,11 @@ class NeuroEvolution:
                 self._write_crash_snapshot(iterations, mem, _li)
 
             # --- Curriculum stage advancement --------------------------------
+            _stage_advanced = False
             if self._curriculum is not None:
                 self._curriculum.record_fitness(fitness)
                 if self._curriculum.maybe_advance():
+                    _stage_advanced = True
                     stage = self._curriculum.current_stage
                     _li("Curriculum: advanced to stage %d/%d '%s'",
                         self._curriculum.stage_index + 1,
@@ -636,9 +638,13 @@ class NeuroEvolution:
                     stop_reason = "external"
                     break
 
-            stop_reason = self._check_stop_reason(fitness, iterations, _li)
-            if stop_reason is not None:
-                break
+            # Skip stop-condition check when a stage just advanced: the fitness
+            # that triggered the advance belongs to the old task and must not be
+            # used to satisfy min_fitness or other global stop criteria.
+            if not _stage_advanced:
+                stop_reason = self._check_stop_reason(fitness, iterations, _li)
+                if stop_reason is not None:
+                    break
 
             if iterations % self._resource_check_interval == 0:
                 self._enforce_memory_limit()
@@ -1165,8 +1171,12 @@ class NeuroEvolution:
     ) -> None:
         if self._log_run_dir is None:
             return
+        try:
+            best = self.get_best()
+        except RuntimeError:
+            _li("Run summary skipped: population was reset during a curriculum stage advance")
+            return
         import pickle
-        best = self.get_best()
         pkl_path = self._log_run_dir / "best_genome.pkl"
         pkl_path.write_bytes(pickle.dumps(best))
         mem = self.population_memory_info()
