@@ -280,6 +280,36 @@ python -m yane.benchmarks.profile_serialization --sizes 0 10 50 200
 sie über `GET /presets` und `GET /presets/{name}` bereit; die GUI hat ein
 Preset-Dropdown und kann aktuelle Einstellungen als neues Preset speichern.
 
+Presets unterstützen seit Schema-Version 2 einen optionalen Abschnitt
+`adaptive_policies`, der adaptive Einstellungen wie `AdaptiveController`,
+`OperatorScheduler`, Lamarck-Budget und Interspecies-Modus vollständig
+beschreibt. Vier fertige adaptive Profile sind enthalten:
+
+| Preset-Datei | Beschreibung |
+|---|---|
+| `adaptive_konservativ.json` | Alle adaptiven Mechanismen aus — stabil, reproduzierbar |
+| `adaptive_balanciert.json` | AdaptiveController + Scheduler aktiv, guter Ausgangspunkt |
+| `adaptive_aggressiv.json` | Hohe Interspecies-Rate, NES-Optimizer — für schwierige Probleme |
+| `adaptive_analysefreundlich.json` | Alles aktiv, Lamarck-Budget begrenzt — gut für Diagnostics |
+
+```python
+from yane.util.presets import load_preset, save_preset
+
+preset = load_preset("adaptive_balanciert")
+print(preset.adaptive_policies)
+
+save_preset("Mein Experiment", config={...}, adaptive_policies={
+    "adaptive_controller": True,
+    "operator_scheduler": True,
+    "interspecies_mode": "Adaptiv",
+    "interspecies_min_rate": 0.01,
+    "interspecies_max_rate": 0.15,
+    "lamarck_schedule": "Adaptiv",
+    "lamarck_optimizer": "Hill-Climbing",
+    "lamarck_budget": 0,
+})
+```
+
 ### Lamarckian Refinement
 
 ```python
@@ -321,6 +351,49 @@ Für Vergleichsläufe gibt es:
 ```bash
 python -m yane.benchmarks.compare_lamarck_modes --env Acrobot-v1 --modes hc nes sa
 ```
+
+### Adaptive Control Layer
+
+```python
+yane.set_adaptive_control(enabled=True)
+ctrl = yane.get_adaptive_controller()   # AdaptiveController
+```
+
+Der `AdaptiveController` liest jede Generation einheitliche Populations-Signale
+(`plateau_ratio`, `diversity_score`, `fitness_trend`, `species_stagnation`,
+`eval_cost`, `best_complexity`) und passt damit automatisch interspecies-Crossover-Rate,
+QD-Druck, Pruning-Druck und Lamarck-Budget an. Jedes Feature hat eine
+`FeaturePolicy` mit den Modi `"off"` / `"fixed"` / `"adaptive"` / `"auto"`.
+
+```python
+# Adaptive Operator Scheduler
+yane.set_operator_scheduler(enabled=True)
+sched = yane.get_operator_scheduler()   # OperatorScheduler
+```
+
+Der `OperatorScheduler` verfolgt die Erfolgsrate aller Mutations-Operatoren
+pro Generation und pro Species und skaliert ihre Auswahlwahrscheinlichkeit
+entsprechend.
+
+```python
+# Lamarck-Budget pro Generation begrenzen
+yane.set_lamarck_budget(budget_per_gen=100)   # None = unbegrenzt
+
+# Lamarck nur für bestimmte Species
+yane.set_lamarck_per_species(species_ids=[0, 2], eligible=True)
+```
+
+Alle adaptiven Diagnostics stehen in `population_memory_info()` unter den
+Schlüsseln `adaptive_controller` und `operator_scheduler`.
+
+#### Benchmark-Vergleich
+
+```bash
+python -m yane.benchmarks.adaptive_suite --problem xor --max-iter 5000 --seeds 3
+```
+
+Vergleicht 7 Konfigurationen (baseline bis full_adaptive) auf XOR oder CartPole
+und gibt eine Tabelle mit Lösungsrate, Median-Iterationen und mittlerer Zeit aus.
 
 ### Batch-API
 
@@ -394,17 +467,47 @@ yane/
     smart_mutation.py         Strukturmutationen
     innovation.py             Innovation Numbers für NEAT-Crossover
     population.py             Population, Speziation, Selection, Novelty
+    lamarck_refiner.py        Lamarckian Refinement (Hill-Climb, NES, SA, CMA-ES)
+    adaptive_controller.py    Adaptive Control Layer (AdaptiveController, FeaturePolicy)
+    operator_scheduler.py     Adaptive Mutation Operator Scheduler
+    diagnostics.py            Diagnostics-Aggregation für population_memory_info()
     efficiency_penalty.py     Laufzeitbasierte Fitnessstrafe
+    coevolution.py            Hall-of-Fame und kompetitive Fitness-Helfer
+    modularity.py             Hidden-Module erkennen und duplizieren
+    indirect_encoding.py      CPPN/HyperNEAT-artige Connection-Generierung
+    matrix_export.py          Matrixexport für NumPy/CuPy-kompatible DAGs
+    backprop.py               optionaler PyTorch-Finetuning-Hook
+    async_evaluation.py       Future-basierte Evaluation-Queues
+    descriptors.py            Descriptor-Registry und Fitness-Komponenten
   util/
     activation.py             Aktivierungsfunktionen
+    presets.py                Preset-Serialisierung und -Laden (Schema v2)
     resource_guard.py         Speicherüberwachung
     logger.py                 Logging-Helfer
+  benchmarks/
+    adaptive_suite.py         Vergleich: baseline vs full_adaptive auf XOR/CartPole
+    run_suite.py              Benchmark-Gate für CI
+    profile_serialization.py  Checkpoint-Serialisierungs-Profiler
+  presets/
+    fast_dataset.json
+    multi_objective_compact.json
+    quality_diversity.json
+    robust_gym.json
+    adaptive_konservativ.json
+    adaptive_balanciert.json
+    adaptive_aggressiv.json
+    adaptive_analysefreundlich.json
   gui/
     main.py
     window.py                 PySide6-Hauptfenster
     worker.py                 Trainings- und Demo-Threads
     canvas.py                 Netzwerk- und Fitnessvisualisierung
     examples.py               GUI-Beispielregistry
+    panels/
+      left_panel.py           Diagnostics-Sidebar
+    tabs/
+      training_tab.py         Training-Tab mit Adaptive Control Section
+      inspect_tab.py          Inspect-Tab
   api/
     server.py                 FastAPI-App
     models.py                 Pydantic-Modelle
@@ -429,4 +532,9 @@ pytest
 
 ## Status
 
-Aktive Entwicklung.
+Aktive Entwicklung. Teststand: `682 passed`.
+
+Stabiler Kern: Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API,
+Logging, Checkpoints, Multi-Objective, Quality Diversity, CMA-ES, Presets,
+Benchmark-Gates, Adaptive Control Layer, Operator Scheduler, Lamarck-Budget,
+Interspecies-Trigger, Adaptive Benchmark-Suite, GUI-Stability-Guard.

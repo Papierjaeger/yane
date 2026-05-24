@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0-Adaptive-Tasks und P1-Preset-System abgeschlossen. Teststand: `682 passed`.
+**Aktueller Stand:** Alle P0-Adaptive-Tasks, P1-Preset-System und P1-Release-Cleanup abgeschlossen. Teststand: `682 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging und Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -46,19 +46,19 @@ Nutzen:
 - Adaptive Experimente werden reproduzierbar und zwischen Nutzern austauschbar.
 - GUI-Konfiguration wird schneller und weniger fehleranfaellig.
 
-### P1 🔲 Release-Cleanup und API-Konsistenz
+### P1 ✅ Release-Cleanup und API-Konsistenz
 
 Nach vielen schnellen Feature-Adds sollte die oeffentliche Oberflaeche
 geglaettet werden.
 
 Aufgaben:
 
-- Public API auf Namenskonsistenz pruefen: `set_*`, `get_*`, Diagnostics-Keys.
-- Adaptive Parameter einheitlich benennen: `*_mode`, `*_policy`, `*_min`, `*_max`, `*_budget`.
-- README-Beispiele gegen aktuellen Code ausfuehren und aktualisieren.
-- Veraltete Kommentare und Docstrings entfernen oder aktualisieren.
-- Importpfade und `__all__` fuer neue Module (`adaptive_controller`, `operator_scheduler`) pruefen.
-- Minimalen Release-Abschnitt in README ergaenzen.
+- Public API auf Namenskonsistenz pruefen: `set_*`, `get_*`, Diagnostics-Keys. ✅
+- Adaptive Parameter einheitlich benennen: `*_mode`, `*_policy`, `*_min`, `*_max`, `*_budget`. ✅
+- README-Beispiele gegen aktuellen Code ausfuehren und aktualisieren. ✅
+- Veraltete Kommentare und Docstrings entfernen oder aktualisieren. ✅
+- Importpfade und `__all__` fuer neue Module (`adaptive_controller`, `operator_scheduler`) pruefen. ✅
+- Minimalen Release-Abschnitt in README ergaenzen. ✅
 
 Nutzen:
 
@@ -240,6 +240,12 @@ Aufgaben:
 
 - `benchmarks/adaptive_suite.py`: 7 Konfigurationen (baseline → full_adaptive) auf XOR und CartPole.
 - Metriken: Loesung, Iterationen, Wall-Time, Best-Fitness, adaptive Diagnostics.
+
+### ✅ P1 Release-Cleanup und API-Konsistenz
+
+- `__init__.py`: `AdaptiveController`, `AdaptiveSignals`, `FeaturePolicy`, `OperatorScheduler` zu `__all__` hinzugefuegt.
+- README: Abschnitt Adaptive Control Layer + Operator Scheduler ergaenzt, Projektstruktur aktualisiert, Presets-Abschnitt um `adaptive_policies` und Preset-Tabelle erweitert, Status-Abschnitt aktualisiert.
+- API-Namenskonsistenz bestaetigt: `set_*`/`get_*` konsistent, Diagnostics-Keys konsistent.
 
 ### ✅ P1 Preset-System fuer adaptive Profile erweitern
 
