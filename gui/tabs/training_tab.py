@@ -366,6 +366,16 @@ class TrainingTab(QWidget):
             "Wenn deaktiviert, können keine Neuronen ihre Werte behalten — das\n"
             "Netz ist rein feedforward auf Schritt-Ebene.")
 
+        self.chk_curriculum = QCheckBox("aktiv")
+        self.chk_curriculum.setChecked(False)
+        self.chk_curriculum.setVisible(False)   # shown only for examples that support it
+        self.chk_curriculum.setToolTip(
+            "Curriculum Learning: Training in aufsteigend schwieriger werdenden Stufen.\n\n"
+            "Pi-Ziffern: Stufe 1 (3 Ziffern) → Stufe 2 (6 Ziffern) → Stufe 3 (10 Ziffern).\n"
+            "Die Population wird bei jedem Stufenwechsel behalten, aber neu bewertet.\n\n"
+            "Erzwingt sequentielle Ausführung (kein Multiprocessing).\n"
+            "Curriculum-Stufe und Fortschritt sind im linken Panel sichtbar.")
+
         cfg_form.addRow("Inputs:",         self.spin_inputs)
         cfg_form.addRow("Outputs:",        self.spin_outputs)
         cfg_form.addRow("Max nodes:",      self.spin_nodes)
@@ -395,6 +405,7 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Sigma penalty:", self.dspin_sigma_penalty)
         cfg_form.addRow("Normalization:", self.chk_normalize)
         cfg_form.addRow("Memory:",        self.chk_memory)
+        cfg_form.addRow("Curriculum:",    self.chk_curriculum)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
 
@@ -622,6 +633,9 @@ class TrainingTab(QWidget):
         self.chk_normalize.setVisible(ex.supports_normalization)
         if ex.supports_normalization:
             self.chk_normalize.setChecked(True)   # default on when switching examples
+        self.chk_curriculum.setVisible(ex.make_curriculum is not None)
+        if ex.make_curriculum is None:
+            self.chk_curriculum.setChecked(False)
             self._render_group.setVisible(False)
         self._best_genome = None
         self.btn_run_best.setEnabled(False)
@@ -710,6 +724,12 @@ class TrainingTab(QWidget):
                 make_eval_fn = functools.partial(ex.make_eval, normalize=False)
             else:
                 make_eval_fn = ex.make_eval
+
+            # Curriculum: build stages and register on yane before worker starts.
+            if ex.make_curriculum is not None and self.chk_curriculum.isChecked():
+                normalize = self.chk_normalize.isChecked() if ex.supports_normalization else True
+                stages = ex.make_curriculum(normalize=normalize)
+                self._yane.set_curriculum(stages)
 
             # --- Structured logging for GUI runs ---------------------------
             _log_dir = _setup_log(f"gui/{ex.name}")

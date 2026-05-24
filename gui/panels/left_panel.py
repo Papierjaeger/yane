@@ -293,6 +293,30 @@ class LeftPanel(QWidget):
         lamarck_grp.addRow("Best σ_lamarck:", self.lbl_lamarck_sigma)
         layout.addWidget(lamarck_grp)
 
+        # ── Curriculum ────────────────────────────────────────────────────
+        cur_grp = _CollapsibleGroup("Curriculum", collapsed=False)
+        self.lbl_cur_stage  = _label("—", "statValue")
+        self.lbl_cur_name   = _label("—", "mutRate")
+        self.lbl_cur_target = _label("—", "mutRate")
+        self.lbl_cur_best   = _label("—", "mutRate")
+        self.lbl_cur_stage.setToolTip(
+            "Aktuelle Stufe des Curriculums (Index / Gesamt).\n"
+            "Beim Stufenwechsel wird die Population neu bewertet.")
+        self.lbl_cur_name.setToolTip("Name der aktuellen Stufe.")
+        self.lbl_cur_target.setToolTip(
+            "Ziel-Fitness der aktuellen Stufe — bei Erreichen wird\n"
+            "automatisch zur nächsten Stufe gewechselt.")
+        self.lbl_cur_best.setToolTip(
+            "Bestes Fitness-Ergebnis in der aktuellen Stufe\n"
+            "(nur Genome gezählt, die auf dieser Stufe bewertet wurden).")
+        cur_grp.addRow("Stage:",  self.lbl_cur_stage)
+        cur_grp.addRow("Name:",   self.lbl_cur_name)
+        cur_grp.addRow("Target:", self.lbl_cur_target)
+        cur_grp.addRow("Best:",   self.lbl_cur_best)
+        self._cur_grp = cur_grp
+        cur_grp.setVisible(False)   # only shown when curriculum is active
+        layout.addWidget(cur_grp)
+
         # ── Evaluation timing ─────────────────────────────────────────────
         eval_grp = _CollapsibleGroup("Evaluation timing", collapsed=True)
         self.lbl_eval_mean   = _label("—", "statValue")
@@ -588,6 +612,20 @@ class LeftPanel(QWidget):
         ):
             v = mem.get(key)
             lbl.setText(str(v) if v is not None else "—")
+
+        # Curriculum stats
+        cur_idx = mem.get("curriculum_stage_index")
+        if cur_idx is not None:
+            self._cur_grp.setVisible(True)
+            count = mem.get("curriculum_stage_count", "?")
+            self.lbl_cur_stage.setText(f"{cur_idx + 1} / {count}")
+            self.lbl_cur_name.setText(mem.get("curriculum_stage_name") or "—")
+            target = mem.get("curriculum_stage_target")
+            self.lbl_cur_target.setText(f"{target:.4f}" if target is not None else "—")
+            best = mem.get("curriculum_stage_best")
+            self.lbl_cur_best.setText(f"{best:.4f}" if best is not None else "—")
+        else:
+            self._cur_grp.setVisible(False)
 
         # Lamarck stats
         lamarck_mode = mem.get("lamarck_mode")

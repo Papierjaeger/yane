@@ -142,6 +142,15 @@ class TrainingWorker(QThread):
         self._iteration = 0
         last_emit = 0.0
 
+        # Curriculum requires sequential evaluation: stage advances must be
+        # atomic and the population re-evaluation after reset_stagnation() would
+        # race with MP batch submissions.
+        if self._yane._curriculum is not None:
+            self.workers_resolved.emit(1)
+            self.info_message.emit("Curriculum aktiv — Training läuft sequenziell.")
+            self._run_sequential(last_emit)
+            return
+
         n_workers = getattr(self._yane, '_n_workers', 1)
         if n_workers == 0:
             # Auto: let _run_multiprocess measure eval speed and choose
@@ -154,13 +163,18 @@ class TrainingWorker(QThread):
             self._run_sequential(last_emit)
 
     def _run_sequential(self, last_emit: float, auto: bool = False) -> None:
-        # Create the eval fn here on the worker thread so gym.make() never blocks
-        # the main thread (gym init can take 0.5–2 s for Acrobot, CartPole, etc.).
-        try:
-            self._evaluate = self._make_eval_fn(self._render_cb)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-            return
+        # When curriculum is active, use it directly as the evaluation function
+        # (it delegates to the current stage's fitness_fn).  Otherwise build
+        # the eval fn here on the worker thread so gym.make() never blocks the
+        # main thread (gym init can take 0.5–2 s for Acrobot, CartPole, etc.).
+        if self._yane._curriculum is not None:
+            self._evaluate = self._yane._curriculum
+        else:
+            try:
+                self._evaluate = self._make_eval_fn(self._render_cb)
+            except Exception as exc:
+                self.error_occurred.emit(str(exc))
+                return
 
         _OVERHEAD_MS      = 16.0
         _MP_RECHECK_EVERY = 50   # in auto mode: re-evaluate whether MP helps
@@ -177,6 +191,21 @@ class TrainingWorker(QThread):
                 self._iteration += 1
                 if self._yane.min_fitness is not None and fitness >= self._yane.min_fitness:
                     self._running = False
+
+                # Curriculum advancement: record finalized fitness and check
+                # whether the current stage target has been reached.
+                cur = self._yane._curriculum
+                if cur is not None and self._running:
+                    cur.record_fitness(fitness)
+                    if cur.maybe_advance():
+                        self._yane._population.reset_stagnation()
+                        stage = cur.current_stage
+                        self.info_message.emit(
+                            f"Curriculum: Stage {cur.stage_index + 1}/{cur.stage_count}"
+                            f" — {stage.name or 'unnamed'}"
+                        )
+                    elif cur.is_complete():
+                        self._running = False
 
                 # Auto mode: periodically check if MP has become worthwhile.
                 # The first genome is often empty (no connections) and thus much

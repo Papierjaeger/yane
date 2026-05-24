@@ -44,6 +44,39 @@ def make_eval(render_callback=None, step_callback=None, demo=False, normalize=Tr
     return evaluate
 
 
+def make_curriculum_eval(n_digits: int, normalize: bool = True):
+    """Return an evaluation function for the first *n_digits* digits of pi.
+
+    Each output error contributes at most 1.0 in normalized space (digits /9).
+    A perfect score is 0.0; the worst-case score is -n_digits.
+    """
+    data = dataset if normalize else [
+        {"input": [s["input"][0]], "output": [s["output"][0]]}
+        for s in _raw
+    ]
+    samples = data[:n_digits]
+
+    def evaluate(genome):
+        genome.reset()
+        fitness = 0.0
+        for sample in samples:
+            outputs = genome.forward(sample["input"])
+            fitness -= abs(outputs[0] - sample["output"][0])
+        return fitness
+
+    evaluate.__name__ = f"pi_{n_digits}digits"
+    return evaluate
+
+
+# Curriculum specification: (n_digits, stage_target, label)
+# Target = average error ≤ 0.5 per digit in normalised [0,1] space.
+CURRICULUM_SPEC = [
+    (3,  -1.5, "3 digits"),
+    (6,  -3.0, "6 digits"),
+    (10, -5.0, "10 digits"),
+]
+
+
 def main():
     yane = NeuroEvolution()
     yane.configure(n_inputs=N_INPUTS, n_outputs=N_OUTPUTS,

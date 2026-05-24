@@ -31,6 +31,8 @@ from yane.examples.sequence_recall_PI import (
     make_eval as _pi_make_eval,
     N_INPUTS as _PI_NI, N_OUTPUTS as _PI_NO, TARGET_FITNESS as _PI_FIT,
     dataset as _PI_DATASET, DECIMAL_PLACES as _PI_DECIMAL_PLACES,
+    make_curriculum_eval as _pi_make_curriculum_eval,
+    CURRICULUM_SPEC as _PI_CURRICULUM_SPEC,
 )
 
 
@@ -595,6 +597,7 @@ class ExampleConfig:
         sequence_samples: list[tuple[list[float], list[float]]] | None = None,
         input_scale: list[float] | None = None,
         output_scale: list[float] | None = None,
+        make_curriculum: Callable | None = None,
     ) -> None:
         self.name = name
         self.description = description
@@ -616,6 +619,28 @@ class ExampleConfig:
         # the Inspect tab exposes a toggle to view/enter values in raw units.
         self.input_scale = input_scale
         self.output_scale = output_scale
+        # Optional curriculum factory: called with (normalize=bool) →
+        # list[CurriculumStage].  When set, the training tab shows a
+        # "Curriculum" checkbox.
+        self.make_curriculum = make_curriculum
+
+
+def _pi_make_curriculum(normalize: bool = True):
+    """Build CurriculumStage list for the Pi-digits example.
+
+    Three stages of increasing difficulty, each evaluated on the first
+    n_digits pairs.  The stage target is average error ≤ 0.5 per digit in
+    normalised [0,1] space, i.e. target = -n_digits × 0.5.
+    """
+    from yane.evolution.curriculum import CurriculumStage
+    return [
+        CurriculumStage(
+            _pi_make_curriculum_eval(n, normalize=normalize),
+            target_fitness=target,
+            name=label,
+        )
+        for n, target, label in _PI_CURRICULUM_SPEC
+    ]
 
 
 def load_examples() -> list[ExampleConfig]:
@@ -690,6 +715,7 @@ def load_examples() -> list[ExampleConfig]:
             sequence_samples=[(s["input"], s["output"]) for s in _PI_DATASET[:_PI_DECIMAL_PLACES]],
             input_scale=[9.0],
             output_scale=[9.0],
+            make_curriculum=_pi_make_curriculum,
         ),
     ]
 
