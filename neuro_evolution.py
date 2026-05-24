@@ -366,42 +366,70 @@ class NeuroEvolution:
         """
         self._sanitizer.configure(fallback=fallback, clip_low=clip_low, clip_high=clip_high)
 
-    def set_lamarck(self, n_steps: int = 5, sigma: float = 1.0) -> None:
-        """Explicit Lamarckian refinement: hill-climb every genome before evaluation.
+    def set_lamarck(
+        self,
+        n_steps: int = 5,
+        sigma: float = 1.0,
+        mode: str = "hill_climbing",
+        learning_rate: float = 0.01,
+    ) -> None:
+        """Explicit weight refinement before each genome evaluation.
 
-        When n_steps > 0 this overrides the adaptive mode — every genome is
-        refined for exactly n_steps hill-climbing attempts before its fitness
-        is measured.  n_steps = 0 re-enables adaptive mode.
+        ``mode='hill_climbing'`` (default): n_steps independent hill-climbing
+        attempts, each requiring 1 fitness evaluation.
+
+        ``mode='nes'``: Natural Evolution Strategies.  n_steps antithetic
+        perturbation pairs are used to estimate a gradient, then one directed
+        weight update is applied.  Costs ``2*n_steps + 1`` evaluations but
+        makes a single geographically directed step rather than n_steps random
+        attempts — more efficient for large weight vectors.
+
+        In both modes, n_steps = 0 re-enables adaptive scheduling.
 
         Args:
-            n_steps: hill-climbing attempts per genome (default 5).
-                     0 = use adaptive mode (default behaviour).
-            sigma:   multiplier on genome.sigma_global (default 1.0).
+            n_steps:       steps / perturbation pairs (default 5; 0 = adaptive).
+            sigma:         multiplier on ``genome.lamarck_sigma`` (default 1.0).
+            mode:          ``'hill_climbing'`` or ``'nes'``.
+            learning_rate: NES gradient step size (only used when mode='nes').
         """
-        self._lamarck.set_explicit(n_steps, sigma)
+        if mode == "nes":
+            self._lamarck.set_nes(
+                k=n_steps, sigma=sigma, learning_rate=learning_rate, adaptive=False
+            )
+        else:
+            self._lamarck.nes_mode = False
+            self._lamarck.set_explicit(n_steps, sigma)
 
     def set_lamarck_adaptive(
         self,
         max_steps: int = 3,
         top_k: float = 0.2,
         sigma: float = 1.0,
+        mode: str = "hill_climbing",
+        learning_rate: float = 0.01,
     ) -> None:
-        """Configure the built-in adaptive Lamarck refinement.
+        """Configure adaptive Lamarckian / NES refinement.
 
-        Adaptive Lamarck fires automatically during stagnation without any
-        manual activation.  The number of hill-climbing steps scales linearly
-        from 0 (no stagnation) to max_steps (full stagnation), and only
-        genomes whose fitness falls in the top top_k fraction of the evaluated
-        pool are refined — keeping the cost proportional to usefulness.
+        Fires automatically during stagnation.  Steps scale linearly from 0
+        (no stagnation) to max_steps (full stagnation); only genomes in the
+        top top_k fraction of the pool are refined.
 
         Args:
-            max_steps: maximum hill-climbing steps at full stagnation (default 3).
-                       0 disables adaptive mode entirely.
-            top_k:     fraction of the pool eligible for refinement (default 0.2).
-                       1.0 = refine all genomes.
-            sigma:     multiplier on genome.sigma_global (default 1.0).
+            max_steps:     maximum steps at full stagnation (default 3).
+                           0 disables adaptive mode entirely.
+            top_k:         fraction eligible for refinement (default 0.2).
+            sigma:         multiplier on ``genome.lamarck_sigma`` (default 1.0).
+            mode:          ``'hill_climbing'`` (default) or ``'nes'``.
+            learning_rate: NES gradient step size (only used when mode='nes').
         """
-        self._lamarck.set_adaptive(max_steps, top_k, sigma)
+        if mode == "nes":
+            self._lamarck.set_nes(
+                k=max_steps, sigma=sigma, learning_rate=learning_rate, adaptive=True
+            )
+            self._lamarck.top_k = max(0.0, min(1.0, top_k))
+        else:
+            self._lamarck.nes_mode = False
+            self._lamarck.set_adaptive(max_steps, top_k, sigma)
 
     def set_curriculum(
         self,
@@ -487,6 +515,8 @@ class NeuroEvolution:
             "lamarck_max_steps": self._lamarck.max_steps,
             "lamarck_top_k": self._lamarck.top_k,
             "lamarck_sigma": self._lamarck.sigma,
+            "lamarck_nes_mode": self._lamarck.nes_mode,
+            "lamarck_nes_lr": self._lamarck.nes_lr,
             # Efficiency penalty
             "efficiency_penalty": (
                 {"max_ms": self._efficiency_penalty.max_ms,

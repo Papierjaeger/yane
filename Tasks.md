@@ -273,17 +273,13 @@ Nutzen:
 - Deutlich bessere Skalierung bei großen supervised Aufgaben.
 - Bleibt optional, Neuroevolution bleibt Kernidee.
 
-### P2: Natural Evolution Strategies (NES) als Lamarck-Alternative
+### P2: Natural Evolution Strategies (NES) als Lamarck-Alternative ✅
 
 Hill-Climbing ändert Gewichte zufällig und hält die bessere Variante. NES schätzt aus mehreren Perturbationen einen approximierten Fitness-Gradienten und macht gerichtete Schritte.
 
-Aufgaben:
+**Bereits implementiert:** `LamarckRefiner.refine_nes()` mit antithetischen Perturbationen (2k+1 Evals pro Schritt, Varianzreduktion durch ± Paare). Gradient-Normalisierung: `theta += lr * grad / (k * sigma)`. Accept/Revert-Mechanismus analog zu Hill-Climbing. `set_lamarck(mode='nes', learning_rate=...)` und `set_lamarck_adaptive(mode='nes')` in `NeuroEvolution`. `mode`-Property: `"nes_explicit"` / `"nes_adaptive"`. In Diagnostics und Config-Dict. 16 Tests in `tests/test_nes.py`.
 
-- `_nes_refine()` als Alternative zu `_lamarck_refine()` implementieren.
-- k Perturbationen ± epsilon; Gradienten-Schätzung: `g = sum(f_i * noise_i) / (k * epsilon)`.
-- Schrittweite adaptiv (analoges sigma_global-Konzept).
-- Benchmark: NES vs. Hill-Climbing auf Acrobot / LunarLander.
-- Umschaltbar via `set_lamarck(mode='nes')`.
+**Noch offen:** Benchmark: NES vs. Hill-Climbing auf Acrobot / LunarLander (separates Benchmark-Skript).
 
 Nutzen:
 

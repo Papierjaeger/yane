@@ -17,6 +17,9 @@ class LamarckRefiner:
         # Adaptive mode — fires when steps == 0 and max_steps > 0 (default).
         self.max_steps: int = 3     # ceiling: steps at full stagnation
         self.top_k: float = 0.2     # only refine top fraction of evaluated pool
+        # NES mode — if True, refine_nes() replaces refine() everywhere.
+        self.nes_mode: bool = False
+        self.nes_lr: float = 0.01   # learning rate for gradient step
         # Cumulative counters
         self.n_applied: int = 0
         self.n_steps_total: int = 0
@@ -25,10 +28,11 @@ class LamarckRefiner:
 
     @property
     def mode(self) -> str:
+        prefix = "nes_" if self.nes_mode else ""
         if self.steps > 0:
-            return "explicit"
+            return f"{prefix}explicit"
         if self.max_steps > 0:
-            return "adaptive"
+            return f"{prefix}adaptive"
         return "off"
 
     def set_explicit(self, n_steps: int, sigma: float) -> None:
@@ -42,6 +46,34 @@ class LamarckRefiner:
         self.top_k = max(0.0, min(1.0, top_k))
         self.sigma = sigma
         self.steps = 0  # adaptive requires explicit to be off
+
+    def set_nes(
+        self,
+        k: int = 5,
+        sigma: float = 1.0,
+        learning_rate: float = 0.01,
+        adaptive: bool = False,
+    ) -> None:
+        """Switch to NES (Natural Evolution Strategies) mode.
+
+        Args:
+            k:             Perturbation pairs per refinement call.  Costs 2k+1
+                           fitness evaluations per genome.
+            sigma:         Noise scale multiplier on genome.lamarck_sigma.
+            learning_rate: Step size for the gradient update (default 0.01).
+            adaptive:      If True, use adaptive scheduling (like set_lamarck_adaptive)
+                           rather than applying to every genome.
+        """
+        self.nes_mode = True
+        self.nes_lr = float(learning_rate)
+        self.sigma = float(sigma)
+        if adaptive:
+            self.steps = 0
+            if self.max_steps <= 0:
+                self.max_steps = k   # sensible default
+        else:
+            self.steps = max(1, k)
+            self.max_steps = 0
 
     def refine(
         self,
@@ -95,6 +127,92 @@ class LamarckRefiner:
                     c.weight = w
                 for n, b in zip(nodes, saved_biases):
                     n.bias = b
+
+        self.time_ms += (time.perf_counter() - t0) * 1000.0
+        return best_fitness
+
+    def refine_nes(
+        self,
+        genome: Genome,
+        fitness_fn: Callable[[Genome], float],
+        baseline_fitness: float | None = None,
+        n_steps: int | None = None,
+    ) -> float:
+        """NES gradient update via antithetic perturbations; return best fitness.
+
+        Uses k antithetic pairs (2k fitness evaluations) to estimate a gradient,
+        applies one directed step, then accepts if better — otherwise reverts.
+        Total cost: 2k+1 evaluations vs. k+1 for hill-climbing at equal steps.
+
+        Args:
+            baseline_fitness: known fitness before refinement.
+            n_steps: number of perturbation pairs (k); defaults to self.steps.
+        """
+        k = self.steps if n_steps is None else n_steps
+        if k <= 0:
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        conns = [c for node in genome.nodes for c in node.connections if c.enabled]
+        nodes = genome.nodes
+        if not conns and not nodes:
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        genome_sigma = getattr(genome, 'lamarck_sigma', genome.sigma_global)
+        sigma = genome_sigma * self.sigma
+        if not (0.0 < sigma < 1e6):
+            return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
+
+        t0 = time.perf_counter()
+        baseline = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
+
+        orig_w = [c.weight for c in conns]
+        orig_b = [n.bias   for n in nodes]
+        d, d_b = len(orig_w), len(orig_b)
+
+        grad_w = [0.0] * d
+        grad_b = [0.0] * d_b
+
+        for _ in range(k):
+            noise_w = [random.gauss(0.0, 1.0) for _ in range(d)]
+            noise_b = [random.gauss(0.0, 1.0) for _ in range(d_b)]
+
+            # Positive perturbation
+            for i, c in enumerate(conns):
+                c.weight = orig_w[i] + sigma * noise_w[i]
+            for i, n in enumerate(nodes):
+                n.bias = orig_b[i] + sigma * noise_b[i]
+            f_plus = fitness_fn(genome)
+
+            # Negative perturbation (antithetic for variance reduction)
+            for i, c in enumerate(conns):
+                c.weight = orig_w[i] - sigma * noise_w[i]
+            for i, n in enumerate(nodes):
+                n.bias = orig_b[i] - sigma * noise_b[i]
+            f_minus = fitness_fn(genome)
+
+            # Antithetic gradient estimate: (f+ - f-) / 2 * noise
+            diff = (f_plus - f_minus) * 0.5
+            for i in range(d):
+                grad_w[i] += diff * noise_w[i]
+            for i in range(d_b):
+                grad_b[i] += diff * noise_b[i]
+
+        # Normalised gradient step: theta += lr * g / (k * sigma)
+        scale = self.nes_lr / (k * sigma)
+        for i, c in enumerate(conns):
+            c.weight = orig_w[i] + scale * grad_w[i]
+        for i, n in enumerate(nodes):
+            n.bias = orig_b[i] + scale * grad_b[i]
+
+        new_fitness = fitness_fn(genome)
+        if new_fitness > baseline:
+            best_fitness = new_fitness
+        else:
+            for i, c in enumerate(conns):
+                c.weight = orig_w[i]
+            for i, n in enumerate(nodes):
+                n.bias = orig_b[i]
+            best_fitness = baseline
 
         self.time_ms += (time.perf_counter() - t0) * 1000.0
         return best_fitness
