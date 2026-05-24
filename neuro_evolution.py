@@ -29,7 +29,10 @@ from yane.evolution.evaluation import (  # noqa: F401  (EvaluationResult re-expo
     EvaluationRunner,
     aggregate_fitnesses,
 )
-from yane.evolution.multi_objective import as_objectives
+from yane.evolution.fitness_finalization import (
+    FitnessFinalizationConfig,
+    finalize_fitness_value,
+)
 from yane.evolution.quality_diversity import MAPElitesArchive
 from yane.util.resource_guard import ResourceGuard
 from yane.evolution.curriculum import Curriculum, CurriculumStage  # noqa: F401
@@ -1949,38 +1952,20 @@ class NeuroEvolution:
         genome: Genome | None = None,
     ) -> float:
         """Sanitize + efficiency penalty. Applied by every submission path."""
-        objectives = as_objectives(fitness) if self._multi_objective_enabled else None
-        if objectives is not None:
-            if self._multi_objective_weights is not None:
-                if len(self._multi_objective_weights) != len(objectives):
-                    raise ValueError(
-                        "multi-objective weights must match objective count "
-                        f"({len(self._multi_objective_weights)} != {len(objectives)})"
-                    )
-                scalar = sum(w * v for w, v in zip(self._multi_objective_weights, objectives))
-            else:
-                scalar = sum(objectives)
-            if genome is not None:
-                genome.objectives = tuple(self._sanitizer.apply(v) for v in objectives)
-            fitness = scalar
-        elif genome is not None:
-            genome.objectives = None
-        if genome is not None and self._fitness_component_weights is not None:
-            component_score, _ = self._fitness_component_weights.scalarize(genome)
-            fitness += component_score
-        fitness = self._sanitizer.apply(fitness)
-        if self._efficiency_penalty is not None and elapsed_ms is not None:
-            fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)
-        if genome is not None and (
-            self._complexity_penalty_nodes > 0.0
-            or self._complexity_penalty_connections > 0.0
-        ):
-            hidden = max(0, len(genome.nodes) - len(genome.input_nodes) - len(genome.output_nodes))
-            fitness -= (
-                self._complexity_penalty_nodes * hidden
-                + self._complexity_penalty_connections * genome.connection_count
-            )
-        return fitness
+        return finalize_fitness_value(
+            fitness,
+            elapsed_ms,
+            genome,
+            FitnessFinalizationConfig(
+                sanitizer=self._sanitizer,
+                multi_objective_enabled=self._multi_objective_enabled,
+                multi_objective_weights=self._multi_objective_weights,
+                fitness_component_weights=self._fitness_component_weights,
+                efficiency_penalty=self._efficiency_penalty,
+                complexity_penalty_nodes=self._complexity_penalty_nodes,
+                complexity_penalty_connections=self._complexity_penalty_connections,
+            ),
+        )
 
     def _run_evaluations(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]

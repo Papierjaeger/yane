@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -45,7 +46,56 @@ class TestGUISmoke(unittest.TestCase):
         self.assertTrue(hasattr(tab, "chk_matrix_forward"))
         self.assertTrue(hasattr(tab, "chk_fitness_components"))
         self.assertTrue(hasattr(tab, "chk_cppn_substrate"))
+        self.assertTrue(hasattr(tab, "chk_remote_eval"))
+        self.assertTrue(hasattr(tab, "edit_remote_urls"))
         tab.close()
+
+    def test_training_tab_builds_remote_evaluation_config(self):
+        from yane.gui.tabs.training_tab import TrainingTab
+
+        tab = TrainingTab()
+        tab.chk_remote_eval.setChecked(True)
+        tab.edit_remote_urls.setText("http://localhost:8700, http://worker:8700")
+        tab.edit_remote_token.setText("secret")
+        tab.spin_remote_batch.setValue(8)
+
+        cfg = tab._current_remote_config()
+
+        self.assertTrue(cfg.enabled)
+        self.assertEqual(cfg.worker_urls, ("http://localhost:8700", "http://worker:8700"))
+        self.assertEqual(cfg.token, "secret")
+        self.assertEqual(cfg.effective_batch_size, 8)
+        tab.close()
+
+    def test_training_worker_remote_bootstraps_first_genome(self):
+        from yane import NeuroEvolution
+        from yane.gui.remote_config import RemoteEvaluationConfig
+        from yane.gui.worker import TrainingWorker
+
+        class FakeRemoteClient:
+            def __init__(self, **kwargs):
+                pass
+
+            def evaluate_batch(self, genomes):
+                return [(genome, 1.0) for genome in genomes]
+
+            def close(self):
+                pass
+
+        yane = NeuroEvolution()
+        yane.configure(1, 1)
+        yane.set_min_fitness(1.0)
+        worker = TrainingWorker(
+            yane,
+            lambda render_cb: None,
+            remote_config=RemoteEvaluationConfig(enabled=True, worker_urls=("http://fake",)),
+        )
+
+        with patch("yane.gui.worker.RemoteEvaluationClient", FakeRemoteClient):
+            worker._running = True
+            worker._run_remote(0.0)
+
+        self.assertEqual(yane.population.evaluated_count, 1)
 
     def test_left_panel_accepts_new_diagnostics(self):
         from yane import NeuroEvolution

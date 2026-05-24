@@ -11,6 +11,8 @@ from typing import Callable
 from PySide6.QtCore import QThread, Signal
 
 from yane.core.genome import Genome
+from yane.evolution.remote_evaluation import RemoteEvaluationClient
+from yane.gui.remote_config import RemoteEvaluationConfig
 from yane.neuro_evolution import _aggregate_fitnesses, _return_memory_to_os
 
 _EMIT_INTERVAL_S    = 0.5    # emit UI update at most every 500 ms
@@ -122,12 +124,14 @@ class TrainingWorker(QThread):
         yane,
         make_eval_fn: Callable,   # called on the worker thread to create the eval fn
         render_cb: Callable | None = None,
+        remote_config: RemoteEvaluationConfig | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._yane = yane
         self._make_eval_fn = make_eval_fn
         self._render_cb = render_cb
+        self._remote_config = remote_config or RemoteEvaluationConfig()
         self._evaluate: Callable | None = None
         self._running = False
         self._paused = False
@@ -141,6 +145,10 @@ class TrainingWorker(QThread):
         self._running = True
         self._iteration = 0
         last_emit = 0.0
+
+        if self._remote_config.enabled:
+            self._run_remote(last_emit)
+            return
 
         # Curriculum requires sequential evaluation: stage advances must be
         # atomic and the population re-evaluation after reset_stagnation() would
@@ -235,6 +243,85 @@ class TrainingWorker(QThread):
 
         self._emit_final()
         _close_env(fitness_fn)
+
+    def _run_remote(self, last_emit: float) -> None:
+        cfg = self._remote_config
+        self.workers_resolved.emit(len(cfg.worker_urls))
+        self.info_message.emit(
+            f"Remote Evaluation aktiv — {len(cfg.worker_urls)} Worker-URL(s)."
+        )
+        client = RemoteEvaluationClient(
+            worker_urls=list(cfg.worker_urls),
+            token=cfg.token,
+            timeout_s=cfg.timeout_s,
+            max_retries=cfg.max_retries,
+        )
+        batch_size = cfg.effective_batch_size
+        try:
+            if not self._yane._population._evaluated:
+                seed = self._yane.next_genome()
+                started = time.perf_counter()
+                seed_results = client.evaluate_batch([seed])
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                if not seed_results:
+                    raise RuntimeError("Remote-Bootstrap-Evaluierung fehlgeschlagen.")
+                _genome, seed_fitness = seed_results[0]
+                self._yane.submit_fitness(seed_fitness, elapsed_ms)
+                self._iteration += 1
+                if (
+                    self._yane.min_fitness is not None
+                    and seed_fitness >= self._yane.min_fitness
+                ):
+                    self._running = False
+
+            while self._running:
+                while self._paused and self._running:
+                    time.sleep(0.05)
+                try:
+                    genomes = self._yane.next_genome_batch(batch_size)
+                    started = time.perf_counter()
+                    remote_results = client.evaluate_batch(genomes)
+                    elapsed_per = ((time.perf_counter() - started) * 1000.0) / max(
+                        1, len(remote_results)
+                    )
+                    if not remote_results:
+                        raise RuntimeError("Keine Remote-Evaluierung erfolgreich.")
+                    results = [
+                        (genome, fitness, elapsed_per)
+                        for genome, fitness in remote_results
+                    ]
+                    self._yane.submit_fitness_batch(results)
+                    self._iteration += len(results)
+
+                    _, best_fitness = max(remote_results, key=lambda item: item[1])
+                    if (
+                        self._yane.min_fitness is not None
+                        and best_fitness >= self._yane.min_fitness
+                    ):
+                        self._running = False
+
+                    if self._iteration % _MEMORY_CHECK_EVERY < batch_size:
+                        self._yane._enforce_memory_limit()
+                        guard = self._yane._resource_guard
+                        while self._running and not guard.system_ok():
+                            time.sleep(0.5)
+
+                    if self._iteration % _GC_EVERY < batch_size and self._running:
+                        gc.collect()
+                        _return_memory_to_os()
+
+                    now = time.perf_counter()
+                    if now - last_emit >= _EMIT_INTERVAL_S:
+                        last_emit = now
+                        self._emit_update(self._iteration, best_fitness)
+                    time.sleep(0)
+                except Exception as exc:
+                    self.error_occurred.emit(str(exc))
+                    break
+        finally:
+            client.close()
+
+        self._emit_final()
 
     def _run_parallel(self, n_workers: int, last_emit: float) -> None:
         # Each thread owns its own eval_fn (and thus its own gym env).

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QPushButton, QFrame, QLabel, QSizePolicy, QFormLayout,
     QGroupBox, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
-    QMessageBox, QProgressBar, QTabWidget, QInputDialog,
+    QMessageBox, QProgressBar, QTabWidget, QInputDialog, QLineEdit,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
@@ -16,11 +16,13 @@ from yane.gui.canvas import FitnessChart, SpeciesChart
 from yane.gui.worker import TrainingWorker, EpisodeRunner
 from yane.gui.examples import load_examples
 from yane.gui._helpers import _label, _divider, CollapsibleGroup
+from yane.gui.remote_config import RemoteEvaluationConfig
 from yane.gui.research_features import (
     ResearchFeatureConfig,
     apply_research_features,
     configure_cppn_substrate_population,
 )
+from yane.gui.training_sections import inline_row
 from yane.util.presets import list_presets, load_preset, save_preset
 
 class GymRenderWidget(QLabel):
@@ -119,16 +121,13 @@ class TrainingTab(QWidget):
             self._preset_by_index[self.preset_combo.count()] = preset
             self.preset_combo.addItem(preset.name, preset)
         self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
-        preset_row = QWidget()
-        preset_lay = QHBoxLayout(preset_row)
-        preset_lay.setContentsMargins(0, 0, 0, 0)
-        preset_lay.setSpacing(4)
-        preset_lay.addWidget(self.preset_combo, stretch=1)
         self.btn_save_preset = QPushButton("Save")
         self.btn_save_preset.setToolTip("Save the current GUI settings as a reusable preset.")
         self.btn_save_preset.clicked.connect(self._save_current_preset)
-        preset_lay.addWidget(self.btn_save_preset)
-        cfg_form.addRow("Preset:", preset_row)
+        cfg_form.addRow(
+            "Preset:",
+            inline_row(self.preset_combo, self.btn_save_preset, stretch_first=True),
+        )
 
         self.desc_label = _label("", "sectionTitle")
         self.desc_label.setWordWrap(True)
@@ -446,6 +445,36 @@ class TrainingTab(QWidget):
         self.spin_cppn_hidden.setValue(2)
         self.spin_cppn_hidden.setToolTip("Anzahl Hidden-Nodes in der CPPN-Substratschicht.")
 
+        self.chk_remote_eval = QCheckBox("aktiv")
+        self.chk_remote_eval.setChecked(False)
+        self.chk_remote_eval.setToolTip(
+            "Remote Evaluation aktivieren.\n"
+            "Die GUI sendet Genome an RemoteWorkerServer-Instanzen und übernimmt\n"
+            "die zurückgelieferte Fitness in die lokale Population.")
+        self.edit_remote_urls = QLineEdit()
+        self.edit_remote_urls.setPlaceholderText("http://localhost:8700, http://worker:8700")
+        self.edit_remote_urls.setToolTip("Kommagetrennte Remote-Worker-URLs.")
+        self.edit_remote_token = QLineEdit()
+        self.edit_remote_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit_remote_token.setPlaceholderText("token")
+        self.edit_remote_token.setToolTip("Shared Secret für Authorization: Bearer <token>.")
+        self.dspin_remote_timeout = QDoubleSpinBox()
+        self.dspin_remote_timeout.setRange(1.0, 3600.0)
+        self.dspin_remote_timeout.setSingleStep(1.0)
+        self.dspin_remote_timeout.setDecimals(1)
+        self.dspin_remote_timeout.setValue(30.0)
+        self.dspin_remote_timeout.setSuffix(" s")
+        self.spin_remote_retries = QSpinBox()
+        self.spin_remote_retries.setRange(0, 10)
+        self.spin_remote_retries.setValue(2)
+        self.spin_remote_batch = QSpinBox()
+        self.spin_remote_batch.setRange(0, 10000)
+        self.spin_remote_batch.setValue(0)
+        self.spin_remote_batch.setSpecialValueText("Auto")
+        self.spin_remote_batch.setToolTip(
+            "Remote-Batchgröße. Auto nutzt 2 Jobs pro Worker-URL."
+        )
+
         import multiprocessing as _mp
         _ncpu = _mp.cpu_count()
         self.spin_workers = QSpinBox()
@@ -516,26 +545,21 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Max nodes:",      self.spin_nodes)
         cfg_form.addRow("Max connections:", self.spin_conns)
         cfg_form.addRow("Population:",     self.spin_pop)
-        workers_row = QWidget()
-        workers_lay = QHBoxLayout(workers_row)
-        workers_lay.setContentsMargins(0, 0, 0, 0)
-        workers_lay.addWidget(self.spin_workers)
         self.lbl_workers_active = _label("", "mutRate")
         self.lbl_workers_active.setToolTip(
             "Tatsächlich genutzte Worker-Anzahl während des Trainings.\n"
             "Wird beim Start automatisch bestimmt (Auto-Modus)\n"
             "oder entspricht dem manuell gewählten Wert.")
-        workers_lay.addWidget(self.lbl_workers_active)
-        cfg_form.addRow("Workers:", workers_row)
+        cfg_form.addRow("Workers:", inline_row(self.spin_workers, self.lbl_workers_active))
         cfg_form.addRow("Target species:", self.spin_species)
-        lamarck_row = QWidget()
-        lamarck_lay = QHBoxLayout(lamarck_row)
-        lamarck_lay.setContentsMargins(0, 0, 0, 0)
-        lamarck_lay.setSpacing(4)
-        lamarck_lay.addWidget(self.combo_lamarck_schedule, stretch=1)
-        lamarck_lay.addWidget(self.combo_lamarck_optimizer, stretch=1)
-        lamarck_lay.addWidget(self.spin_lamarck)
-        cfg_form.addRow("Lamarck:",        lamarck_row)
+        cfg_form.addRow(
+            "Lamarck:",
+            inline_row(
+                self.combo_lamarck_schedule,
+                self.combo_lamarck_optimizer,
+                self.spin_lamarck,
+            ),
+        )
         cfg_form.addRow("Multi-eval:",     self.spin_multi_eval)
         cfg_form.addRow("Aggregation:",   self.combo_aggregation)
         cfg_form.addRow("Sigma penalty:", self.dspin_sigma_penalty)
@@ -548,37 +572,38 @@ class TrainingTab(QWidget):
         # --- Advanced settings group (collapsed by default) ---
         advance_grp = CollapsibleGroup("Advanced", collapsed=True)
         advance_grp.addRow("Fitness shaping:",   self.chk_fitness_shaping)
-        mo_row = QWidget()
-        mo_lay = QHBoxLayout(mo_row)
-        mo_lay.setContentsMargins(0, 0, 0, 0)
-        mo_lay.setSpacing(4)
-        mo_lay.addWidget(self.chk_multi_objective)
-        mo_lay.addWidget(QLabel("complexity ×"))
-        mo_lay.addWidget(self.dspin_mo_complexity)
-        advance_grp.addRow("Multi-objective:", mo_row)
-        qd_row = QWidget()
-        qd_lay = QHBoxLayout(qd_row)
-        qd_lay.setContentsMargins(0, 0, 0, 0)
-        qd_lay.setSpacing(4)
-        qd_lay.addWidget(self.chk_quality_diversity)
-        qd_lay.addWidget(self.combo_qd_descriptor)
-        advance_grp.addRow("Quality diversity:", qd_row)
-        fc_row = QWidget()
-        fc_lay = QHBoxLayout(fc_row)
-        fc_lay.setContentsMargins(0, 0, 0, 0)
-        fc_lay.setSpacing(4)
-        fc_lay.addWidget(self.chk_fitness_components)
-        fc_lay.addWidget(self.combo_fitness_component_mode)
-        advance_grp.addRow("Fitness components:", fc_row)
-        cppn_row = QWidget()
-        cppn_lay = QHBoxLayout(cppn_row)
-        cppn_lay.setContentsMargins(0, 0, 0, 0)
-        cppn_lay.setSpacing(4)
-        cppn_lay.addWidget(self.chk_cppn_substrate)
-        cppn_lay.addWidget(QLabel("hidden"))
-        cppn_lay.addWidget(self.spin_cppn_hidden)
-        advance_grp.addRow("CPPN substrate init:", cppn_row)
+        advance_grp.addRow(
+            "Multi-objective:",
+            inline_row(self.chk_multi_objective, QLabel("complexity ×"), self.dspin_mo_complexity),
+        )
+        advance_grp.addRow(
+            "Quality diversity:",
+            inline_row(self.chk_quality_diversity, self.combo_qd_descriptor),
+        )
+        advance_grp.addRow(
+            "Fitness components:",
+            inline_row(self.chk_fitness_components, self.combo_fitness_component_mode),
+        )
+        advance_grp.addRow(
+            "CPPN substrate init:",
+            inline_row(self.chk_cppn_substrate, QLabel("hidden"), self.spin_cppn_hidden),
+        )
         advance_grp.addRow("Matrix forward:", self.chk_matrix_forward)
+        advance_grp.addRow(
+            "Remote eval:",
+            inline_row(self.chk_remote_eval, self.edit_remote_urls, stretch_last=True),
+        )
+        advance_grp.addRow("Remote token:", self.edit_remote_token)
+        advance_grp.addRow(
+            "Remote timeout/retry/batch:",
+            inline_row(
+                self.dspin_remote_timeout,
+                QLabel("retries"),
+                self.spin_remote_retries,
+                QLabel("batch"),
+                self.spin_remote_batch,
+            ),
+        )
         ablation_row = QWidget()
         ablation_lay = QHBoxLayout(ablation_row)
         ablation_lay.setContentsMargins(0, 0, 0, 0)
@@ -1015,6 +1040,16 @@ class TrainingTab(QWidget):
             self.chk_cppn_substrate.setChecked(bool(cfg["cppn_substrate"]))
         if "cppn_hidden" in cfg:
             self.spin_cppn_hidden.setValue(int(cfg["cppn_hidden"]))
+        if "remote_eval" in cfg:
+            self.chk_remote_eval.setChecked(bool(cfg["remote_eval"]))
+        if "remote_urls" in cfg:
+            self.edit_remote_urls.setText(str(cfg["remote_urls"]))
+        if "remote_timeout_s" in cfg:
+            self.dspin_remote_timeout.setValue(float(cfg["remote_timeout_s"]))
+        if "remote_retries" in cfg:
+            self.spin_remote_retries.setValue(int(cfg["remote_retries"]))
+        if "remote_batch_size" in cfg:
+            self.spin_remote_batch.setValue(int(cfg["remote_batch_size"]))
         if "multi_objective" in cfg:
             self.chk_multi_objective.setChecked(bool(cfg["multi_objective"]))
         if "multi_objective_complexity_weight" in cfg:
@@ -1042,6 +1077,11 @@ class TrainingTab(QWidget):
             "matrix_forward": self.chk_matrix_forward.isChecked(),
             "cppn_substrate": self.chk_cppn_substrate.isChecked(),
             "cppn_hidden": self.spin_cppn_hidden.value(),
+            "remote_eval": self.chk_remote_eval.isChecked(),
+            "remote_urls": self.edit_remote_urls.text(),
+            "remote_timeout_s": self.dspin_remote_timeout.value(),
+            "remote_retries": self.spin_remote_retries.value(),
+            "remote_batch_size": self.spin_remote_batch.value(),
             "diversity_injection": self.chk_diversity_injection.isChecked(),
         }
 
@@ -1249,6 +1289,18 @@ class TrainingTab(QWidget):
             return self.render_frame.emit
         return None
 
+    def _current_remote_config(self) -> RemoteEvaluationConfig:
+        if self.chk_remote_eval.isChecked() and self.chk_curriculum.isChecked():
+            raise ValueError("Remote Evaluation ist mit Curriculum-Learning aktuell nicht kompatibel.")
+        return RemoteEvaluationConfig.from_text(
+            enabled=self.chk_remote_eval.isChecked(),
+            worker_urls_text=self.edit_remote_urls.text(),
+            token=self.edit_remote_token.text(),
+            timeout_s=self.dspin_remote_timeout.value(),
+            max_retries=self.spin_remote_retries.value(),
+            batch_size=self.spin_remote_batch.value(),
+        )
+
     def _make_eval_factory(self, ex):
         if ex.supports_normalization and not self.chk_normalize.isChecked():
             import functools
@@ -1353,6 +1405,7 @@ class TrainingTab(QWidget):
             self._apply_evolution_options(research_cfg)
             render_cb = self._render_callback_for_example(ex)
             make_eval_fn = self._make_eval_factory(ex)
+            remote_cfg = self._current_remote_config()
             self._configure_quality_diversity()
             self._configure_curriculum(ex)
             self._setup_gui_run_logging(ex)
@@ -1371,7 +1424,12 @@ class TrainingTab(QWidget):
         # when Python GC and Qt internal refcount race each other.
         self._run_id += 1
         run_id = self._run_id
-        worker = TrainingWorker(self._yane, make_eval_fn, render_cb=render_cb)
+        worker = TrainingWorker(
+            self._yane,
+            make_eval_fn,
+            render_cb=render_cb,
+            remote_config=remote_cfg,
+        )
         worker.finished.connect(worker.deleteLater)
         worker.iteration_done.connect(self._on_iteration)
         worker.error_occurred.connect(self._on_error)

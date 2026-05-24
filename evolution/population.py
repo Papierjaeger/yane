@@ -22,6 +22,10 @@ from yane.evolution.multi_objective import pareto_scores
 from yane.evolution.quality_diversity import MAPElitesArchive
 from yane.evolution.operator_scheduler import OperatorScheduler
 from yane.evolution.modularity import ModuleLibrary
+from yane.evolution.mutation_tracking import (
+    record_interspecies_success,
+    record_mutation_success,
+)
 
 # Module-level key functions — C-level attrgetter is ~2× faster than a Python
 # lambda for attribute access in max()/min()/sorted() calls.
@@ -352,36 +356,14 @@ class Population:
             self._since_last_injection += 1
             self._topology_stagnation_count += 1
 
-        # ── Interspecies offspring success tracking ───────────────────────
-        interspecies_parent_fit = getattr(genome, '_interspecies_parent_fitness', None)
-        if interspecies_parent_fit is not None:
-            self._interspecies_n_offspring += 1
-            if fitness >= interspecies_parent_fit:
-                self._interspecies_n_improved += 1
-            self._interspecies_offspring_fitness.append(fitness)
-            if len(self._interspecies_offspring_fitness) > self._interspecies_offspring_fitness_max:
-                self._interspecies_offspring_fitness.pop(0)
-            # Rolling window to prevent unbounded counters
-            if self._interspecies_n_offspring >= 100:
-                self._interspecies_n_offspring //= 2
-                self._interspecies_n_improved //= 2
-
-        # ── Mutation success tracking ─────────────────────────────────────
-        # Track which mutation types led to fitness improvements.
-        # "Improvement" = child fitness >= parent fitness.
-        parent_fit = getattr(genome, '_parent_fitness', None)
-        improved = parent_fit is not None and fitness >= parent_fit
-        for mt in getattr(genome, '_mutation_types_fired', []):
-            self._mutation_total[mt] = self._mutation_total.get(mt, 0) + 1
-            if improved:
-                self._mutation_success[mt] = self._mutation_success.get(mt, 0) + 1
-            # Per-species tracking: find the genome's species and update.
-            for sp in self._species:
-                if genome in sp.members:
-                    sp._mut_total[mt] = sp._mut_total.get(mt, 0) + 1
-                    if improved:
-                        sp._mut_success[mt] = sp._mut_success.get(mt, 0) + 1
-                    break
+        record_interspecies_success(self, genome, fitness)
+        record_mutation_success(
+            self._mutation_total,
+            self._mutation_success,
+            self._species,
+            genome,
+            fitness,
+        )
 
         self._prune()
 
