@@ -897,6 +897,7 @@ def load_examples() -> list[ExampleConfig]:
                 **_HARD_DATASET_DEFAULTS,
                 "lamarck_schedule": "Explizit",
                 "lamarck_steps": 8,
+                "quality_diversity_descriptor": "Behavior",
             },
             default_adaptive_policies=_HARD_DATASET_ADAPTIVE,
         ),
@@ -919,6 +920,7 @@ def load_examples() -> list[ExampleConfig]:
                 **_HARD_DATASET_DEFAULTS,
                 "lamarck_schedule": "Explizit",
                 "lamarck_steps": 5,
+                "quality_diversity_descriptor": "Behavior",
                 "cppn_substrate": True,
                 "cppn_hidden": 4,
             },
@@ -1069,7 +1071,10 @@ def load_examples() -> list[ExampleConfig]:
                 stateful=False,
                 default_population=300,
                 default_target_species=10,
-                default_config=_LARGE_CONTROL_DEFAULTS,
+                default_config={
+                    **_LARGE_CONTROL_DEFAULTS,
+                    "multi_eval": 2,
+                },
                 default_adaptive_policies=_LARGE_CONTROL_ADAPTIVE,
             ),
             ExampleConfig(
@@ -1184,7 +1189,10 @@ def load_examples() -> list[ExampleConfig]:
                 stateful=False,
                 default_population=220,
                 default_target_species=6,
-                default_config=_LARGE_CONTROL_DEFAULTS,
+                default_config={
+                    **_LARGE_CONTROL_DEFAULTS,
+                    "early_stop_factor": 0.0,
+                },
                 default_adaptive_policies=_LARGE_CONTROL_ADAPTIVE,
             ),
         ]
