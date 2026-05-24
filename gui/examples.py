@@ -643,7 +643,6 @@ _FAST_DATASET_DEFAULTS = _gui_defaults(
     fitness_shaping=True,
     matrix_forward=True,
     novelty=True,
-    convergence_spread=0.0001,
 )
 _HARD_DATASET_DEFAULTS = _gui_defaults(
     n_workers=1,
@@ -653,7 +652,6 @@ _HARD_DATASET_DEFAULTS = _gui_defaults(
     quality_diversity_descriptor="Topology",
     fitness_components=True,
     fitness_component_mode="Adaptiv",
-    convergence_spread=0.0001,
 )
 _HARD_DATASET_ADAPTIVE = _adaptive_defaults(
     adaptive_controller=True,
@@ -673,7 +671,6 @@ _SEQUENCE_DEFAULTS = _gui_defaults(
     quality_diversity_descriptor="Behavior",
     fitness_components=True,
     fitness_component_mode="Adaptiv",
-    convergence_spread=0.0001,
 )
 _SEQUENCE_ADAPTIVE = _adaptive_defaults(
     adaptive_controller=True,
