@@ -4,6 +4,14 @@ import unittest
 
 from yane import NeuroEvolution
 from yane.evolution.curriculum import Curriculum, CurriculumStage
+from yane.examples.sequence_recall_PI import (
+    DECIMAL_PLACES as PI_DECIMAL_PLACES,
+    TARGET_FITNESS as PI_TARGET_FITNESS,
+    dataset as PI_DATASET,
+    make_eval as make_pi_eval,
+    make_curriculum_eval as make_pi_curriculum_eval,
+    make_curriculum_targets as make_pi_curriculum_targets,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +140,50 @@ class TestCurriculum(unittest.TestCase):
             "curriculum_n_advances",
         ):
             self.assertIn(key, info)
+
+
+class TestPiCurriculum(unittest.TestCase):
+
+    class _ReplayGenome:
+        def __init__(self, outputs):
+            self.outputs = list(outputs)
+            self.i = 0
+
+        def reset(self):
+            self.i = 0
+
+        def forward(self, _inputs):
+            value = self.outputs[self.i]
+            self.i += 1
+            return [value]
+
+    def test_pi_default_target_is_perfect_fitness(self):
+        self.assertEqual(PI_TARGET_FITNESS, 0.0)
+
+    def test_pi_curriculum_targets_scale_from_gui_target(self):
+        targets = make_pi_curriculum_targets(-0.5, PI_DECIMAL_PLACES)
+        self.assertEqual(len(targets), PI_DECIMAL_PLACES)
+        self.assertAlmostEqual(targets[0], -0.05)
+        self.assertAlmostEqual(targets[-1], -0.5)
+
+    def test_pi_curriculum_protects_previous_outputs(self):
+        expected_1 = PI_DATASET[0]["output"][0]
+        expected_2 = PI_DATASET[1]["output"][0]
+        eval_fn = make_pi_curriculum_eval(
+            2,
+            protected_digits=1,
+            protect_tolerance=0.0,
+        )
+
+        prefix_regressed = self._ReplayGenome([expected_1 + 0.1, expected_2])
+        new_digit_wrong = self._ReplayGenome([expected_1, expected_2 + 0.1])
+
+        self.assertLess(eval_fn(prefix_regressed), eval_fn(new_digit_wrong))
+
+    def test_pi_fitness_is_zero_for_correct_rounded_digits(self):
+        outputs = [sample["output"][0] + 0.01 for sample in PI_DATASET[:PI_DECIMAL_PLACES]]
+        genome = self._ReplayGenome(outputs)
+        self.assertEqual(make_pi_eval()(genome), 0.0)
 
 
 # ---------------------------------------------------------------------------

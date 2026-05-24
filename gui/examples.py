@@ -32,6 +32,7 @@ from yane.examples.sequence_recall_PI import (
     N_INPUTS as _PI_NI, N_OUTPUTS as _PI_NO, TARGET_FITNESS as _PI_FIT,
     dataset as _PI_DATASET, DECIMAL_PLACES as _PI_DECIMAL_PLACES,
     make_curriculum_eval as _pi_make_curriculum_eval,
+    make_curriculum_targets as _pi_make_curriculum_targets,
     CURRICULUM_SPEC as _PI_CURRICULUM_SPEC,
 )
 
@@ -598,6 +599,9 @@ class ExampleConfig:
         input_scale: list[float] | None = None,
         output_scale: list[float] | None = None,
         make_curriculum: Callable | None = None,
+        default_population: int = 100,
+        default_target_species: int = 5,
+        default_curriculum: bool = False,
     ) -> None:
         self.name = name
         self.description = description
@@ -623,23 +627,38 @@ class ExampleConfig:
         # list[CurriculumStage].  When set, the training tab shows a
         # "Curriculum" checkbox.
         self.make_curriculum = make_curriculum
+        self.default_population = default_population
+        self.default_target_species = default_target_species
+        self.default_curriculum = default_curriculum
 
 
-def _pi_make_curriculum(normalize: bool = True):
+def _pi_make_curriculum(
+    normalize: bool = True,
+    target_fitness: float = _PI_FIT,
+):
     """Build CurriculumStage list for the Pi-digits example.
 
-    Three stages of increasing difficulty, each evaluated on the first
-    n_digits pairs.  The stage target is average error ≤ 0.5 per digit in
-    normalised [0,1] space, i.e. target = -n_digits × 0.5.
+    Stages expand the learned prefix one digit at a time.  The final target is
+    the value chosen in the GUI; intermediate targets are scaled to the prefix
+    length, and already learned prefix digits are strongly protected.
     """
     from yane.evolution.curriculum import CurriculumStage
+    targets = _pi_make_curriculum_targets(
+        final_target_fitness=target_fitness,
+        total_digits=_PI_DECIMAL_PLACES,
+    )
     return [
         CurriculumStage(
-            _pi_make_curriculum_eval(n, normalize=normalize),
+            _pi_make_curriculum_eval(
+                n,
+                normalize=normalize,
+                protected_digits=n - 1,
+                protect_tolerance=0.0,
+            ),
             target_fitness=target,
             name=label,
         )
-        for n, target, label in _PI_CURRICULUM_SPEC
+        for (n, label), target in zip(_PI_CURRICULUM_SPEC, targets)
     ]
 
 
@@ -705,7 +724,7 @@ def load_examples() -> list[ExampleConfig]:
             name="Sequence: Pi-Ziffern",
             description="Sagt die nächste Ziffer von Pi voraus — braucht Gedächtnis (1 Input, 1 Output, 10 Samples). Digit /9 → [0,1].",
             n_inputs=_PI_NI, n_outputs=_PI_NO,
-            max_nodes=20, max_connections=60,
+            max_nodes=30, max_connections=100,
             make_eval=_pi_make_eval,
             target_fitness=_PI_FIT,
             category="Dataset",
@@ -716,6 +735,9 @@ def load_examples() -> list[ExampleConfig]:
             input_scale=[9.0],
             output_scale=[9.0],
             make_curriculum=_pi_make_curriculum,
+            default_population=200,
+            default_target_species=8,
+            default_curriculum=True,
         ),
     ]
 

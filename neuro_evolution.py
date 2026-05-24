@@ -643,6 +643,15 @@ class NeuroEvolution:
             # used to satisfy min_fitness or other global stop criteria.
             if not _stage_advanced:
                 stop_reason = self._check_stop_reason(fitness, iterations, _li)
+                # When on an intermediate curriculum stage, min_fitness reflects
+                # the final task's target — it must not fire on easier-stage
+                # scores that happen to exceed it.  Each intermediate stage is
+                # governed solely by its own CurriculumStage.target_fitness
+                # (via maybe_advance()).
+                if (stop_reason == "target_reached"
+                        and self._curriculum is not None
+                        and not self._curriculum.is_last_stage):
+                    stop_reason = None
                 if stop_reason is not None:
                     break
 

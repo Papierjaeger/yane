@@ -622,6 +622,8 @@ class TrainingTab(QWidget):
         self.spin_outputs.setValue(ex.n_outputs)
         self.spin_nodes.setValue(ex.max_nodes)
         self.spin_conns.setValue(ex.max_connections)
+        self.spin_pop.setValue(ex.default_population)
+        self.spin_species.setValue(ex.default_target_species)
         self.dspin_target.setValue(ex.target_fitness)
         self.desc_label.setText(ex.description)
         # Default memory based on example type; user can override before training.
@@ -634,7 +636,9 @@ class TrainingTab(QWidget):
         if ex.supports_normalization:
             self.chk_normalize.setChecked(True)   # default on when switching examples
         self.chk_curriculum.setVisible(ex.make_curriculum is not None)
-        if ex.make_curriculum is None:
+        if ex.make_curriculum is not None:
+            self.chk_curriculum.setChecked(ex.default_curriculum)
+        else:
             self.chk_curriculum.setChecked(False)
             self._render_group.setVisible(False)
         self._best_genome = None
@@ -728,7 +732,15 @@ class TrainingTab(QWidget):
             # Curriculum: build stages and register on yane before worker starts.
             if ex.make_curriculum is not None and self.chk_curriculum.isChecked():
                 normalize = self.chk_normalize.isChecked() if ex.supports_normalization else True
-                stages = ex.make_curriculum(normalize=normalize)
+                target_fitness = (
+                    self.dspin_target.value()
+                    if self.dspin_target.value() > -1e9
+                    else ex.target_fitness
+                )
+                stages = ex.make_curriculum(
+                    normalize=normalize,
+                    target_fitness=target_fitness,
+                )
                 self._yane.set_curriculum(stages)
 
             # --- Structured logging for GUI runs ---------------------------
@@ -1062,7 +1074,5 @@ class TrainingTab(QWidget):
             self.ram_bar.setStyleSheet(
                 f"QProgressBar::chunk {{ background-color: {color}; border-radius: 3px; }}"
             )
-
-
 
 

@@ -263,12 +263,13 @@ class Population:
     def reset_stagnation(self) -> None:
         """Reset stagnation counters after a curriculum stage switch.
 
-        Moves all evaluated genomes back to the unevaluated queue so they are
-        re-assessed under the new stage's fitness function.  Species assignments
+        Moves all evaluated genomes to the front of the unevaluated queue so
+        known-good genomes are re-assessed under the new stage before fresh
+        offspring can dominate diagnostics.  Species assignments
         are kept intact.  The stagnation and best-fitness-seen counters are
         cleared so the new stage starts from a clean baseline.
         """
-        self._unevaluated.extend(self._evaluated)
+        self._unevaluated = self._evaluated + self._unevaluated
         self._evaluated.clear()
         self._stagnation_count = 0
         self._topology_stagnation_count = 0
