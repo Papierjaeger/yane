@@ -715,5 +715,91 @@ class TestWeightClipping(unittest.TestCase):
         self.assertEqual(yane._population._weight_clip, (3.0, 1.0))
 
 
+class TestComplexityPenalty(unittest.TestCase):
+
+    def test_complexity_penalty_reduces_submitted_fitness(self):
+        from yane import NeuroEvolution
+        from yane.core.connection import Connection
+        from yane.core.node import Node, NodeType
+
+        yane = NeuroEvolution()
+        yane.configure(1, 1)
+        yane.set_complexity_penalty(node_penalty=0.5, connection_penalty=0.25)
+        g = yane.next_genome()
+        hidden = Node(NodeType.HIDDEN)
+        g.nodes.append(hidden)
+        g.input_nodes[0].connections.append(Connection(hidden))
+        hidden.connections.append(Connection(g.output_nodes[0]))
+        g._invalidate_topology()
+
+        yane.submit_fitness(10.0)
+        self.assertAlmostEqual(g.fitness, 10.0 - 0.5 - 0.5)
+
+    def test_complexity_penalty_defaults_to_zero(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(1, 1)
+        self.assertEqual(yane._config_dict()["complexity_penalty_nodes"], 0.0)
+        self.assertEqual(yane._config_dict()["complexity_penalty_connections"], 0.0)
+
+
+class TestWarmStartTransfer(unittest.TestCase):
+
+    def _checkpoint(self):
+        import tempfile
+        from pathlib import Path
+        from yane import NeuroEvolution
+
+        tmp = tempfile.TemporaryDirectory()
+        path = Path(tmp.name) / "warm.pkl"
+        src = NeuroEvolution(seed=0)
+        src.configure(2, 1)
+        src.set_population_size(8)
+        src.set_max_iterations(12)
+        src.train(lambda g: 1.0)
+        src.save_checkpoint(path)
+        return tmp, path
+
+    def test_warm_start_imports_compatible_population(self):
+        from yane import NeuroEvolution
+        tmp, path = self._checkpoint()
+        self.addCleanup(tmp.cleanup)
+
+        dst = NeuroEvolution(seed=1)
+        dst.configure(2, 1)
+        dst.set_population_size(5)
+        n = dst.warm_start_from_checkpoint(path)
+        self.assertEqual(n, 5)
+        self.assertEqual(dst._population.unevaluated_count, 5)
+
+    def test_warm_start_filters_against_new_fitness(self):
+        from yane import NeuroEvolution
+        tmp, path = self._checkpoint()
+        self.addCleanup(tmp.cleanup)
+
+        dst = NeuroEvolution(seed=1)
+        dst.configure(2, 1)
+        dst.set_population_size(8)
+
+        calls = [0]
+        def fitness(_genome):
+            calls[0] += 1
+            return 1.0 if calls[0] <= 3 else -1.0
+
+        n = dst.warm_start_from_checkpoint(path, fitness_fn=fitness, min_fitness=0.0)
+        self.assertEqual(n, 3)
+        self.assertEqual(dst._population.evaluated_count, 3)
+
+    def test_warm_start_rejects_incompatible_io(self):
+        from yane import NeuroEvolution
+        tmp, path = self._checkpoint()
+        self.addCleanup(tmp.cleanup)
+
+        dst = NeuroEvolution(seed=1)
+        dst.configure(3, 1)
+        with self.assertRaises(ValueError):
+            dst.warm_start_from_checkpoint(path)
+
+
 if __name__ == "__main__":
     unittest.main()

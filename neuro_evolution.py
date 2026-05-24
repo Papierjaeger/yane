@@ -58,6 +58,8 @@ class NeuroEvolution:
         self._seed: int | None = seed
         self._current_genome: Genome | None = None
         self._efficiency_penalty: EfficiencyPenalty | None = None
+        self._complexity_penalty_nodes: float = 0.0
+        self._complexity_penalty_connections: float = 0.0
         self._resource_guard = ResourceGuard()
         self._resource_check_interval: int = 50  # check psutil every N iters (was 1 = ~5% overhead)
         self._population_size: int = 100
@@ -485,6 +487,8 @@ class NeuroEvolution:
                  "penalty_per_ms": self._efficiency_penalty.penalty_per_ms}
                 if self._efficiency_penalty is not None else None
             ),
+            "complexity_penalty_nodes": self._complexity_penalty_nodes,
+            "complexity_penalty_connections": self._complexity_penalty_connections,
             # Resource limits
             "resource_check_interval": self._resource_check_interval,
             "memory_limit_gb": self._resource_guard.max_process_gb,
@@ -576,7 +580,7 @@ class NeuroEvolution:
             genome = self._population.select_for_evaluation()
 
             result = self._run_evaluations(genome, fitness_fn)
-            fitness = self._finalize_fitness(result.fitness, result.elapsed_ms)
+            fitness = self._finalize_fitness(result.fitness, result.elapsed_ms, genome)
             self._population.submit(genome, fitness, result.elapsed_ms)
             iterations += 1
             self._n_evaluations_done += self._runner.n_evaluations
@@ -904,6 +908,19 @@ class NeuroEvolution:
         if self._population is not None:
             self._population._weight_clip = clip
 
+    def set_complexity_penalty(
+        self,
+        node_penalty: float = 0.0,
+        connection_penalty: float = 0.0,
+    ) -> None:
+        """Enable an optional soft penalty for larger genomes.
+
+        Defaults are zero.  When enabled, finalized fitness is reduced by
+        ``node_penalty * hidden_nodes + connection_penalty * connections``.
+        """
+        self._complexity_penalty_nodes = max(0.0, float(node_penalty))
+        self._complexity_penalty_connections = max(0.0, float(connection_penalty))
+
     def set_elitism(
         self,
         elite_count: int = 1,
@@ -1017,6 +1034,88 @@ class NeuroEvolution:
         self._population_size    = cfg.get("population_size", self._population_size)
         self._seed               = cfg.get("seed", self._seed)
 
+    def warm_start_from_checkpoint(
+        self,
+        path: str | Path,
+        fitness_fn: Callable[[Genome], float] | None = None,
+        min_fitness: float | None = None,
+        reset_strategy: bool = False,
+    ) -> int:
+        """Use genomes from a checkpoint as the current population.
+
+        This is transfer learning rather than exact resume: call ``configure()``
+        for the new task first, then warm-start from a related checkpoint.  The
+        input/output counts must match.  If ``fitness_fn`` is provided, genomes
+        are evaluated on the new task immediately and only genomes meeting
+        ``min_fitness`` are kept; otherwise they are queued for re-evaluation.
+
+        Returns the number of imported genomes.
+        """
+        self._ensure_configured()
+        payload = _ckpt.read(path)
+        source_pop = payload["population"]
+        genomes = [g.copy() for g in (source_pop._evaluated + list(source_pop._unevaluated))]
+        if not genomes:
+            raise ValueError("Checkpoint population is empty")
+
+        kept: list[Genome] = []
+        for genome in genomes:
+            if len(genome.input_nodes) != self._n_inputs or len(genome.output_nodes) != self._n_outputs:
+                raise ValueError(
+                    "Checkpoint topology is incompatible with current configure(): "
+                    f"{len(genome.input_nodes)}→{len(genome.output_nodes)} vs "
+                    f"{self._n_inputs}→{self._n_outputs}"
+                )
+            genome.max_nodes = self._max_nodes
+            genome.max_connections = self._max_connections
+            genome.allow_memory = self._stateful
+            genome._last_species_id = None
+            genome._species_stale = True
+            if reset_strategy:
+                self._reset_genome_strategy(genome)
+            if fitness_fn is not None:
+                fitness = self._finalize_fitness(
+                    self._run_evaluations(genome, fitness_fn).fitness,
+                    None,
+                    genome,
+                )
+                if min_fitness is not None and fitness < min_fitness:
+                    continue
+                genome.fitness = fitness
+                genome.shared_fitness = fitness
+            kept.append(genome)
+
+        if not kept:
+            raise ValueError("No checkpoint genomes passed the warm-start filter")
+
+        self._tracker = payload.get("tracker", self._tracker)
+        self._population = Population(
+            max_size=self._population_size,
+            initial_genome=kept[0].copy(),
+            tracker=self._tracker,
+            target_species=self.get_target_species(),
+        )
+        self._population.elite_count = self._elite_count
+        self._population.species_elite_count = self._species_elite_count
+        if fitness_fn is None:
+            self._population._unevaluated = kept[:self._population_size]
+            self._population._evaluated = []
+        else:
+            self._population._evaluated = kept[:self._population_size]
+            self._population._unevaluated = []
+            for genome in self._population._evaluated:
+                self._population._assign_one_genome(genome)
+        return len(kept[:self._population_size])
+
+    @staticmethod
+    def _reset_genome_strategy(genome: Genome) -> None:
+        from yane.core.genome import _MUTATION_GENES, _SCALAR_GENES
+        default = Genome()
+        for attr in _SCALAR_GENES:
+            setattr(genome, attr, getattr(default, attr))
+        for attr in _MUTATION_GENES:
+            setattr(genome, attr, getattr(default, attr).copy())
+
     # -------------------------------------------------------------------------
     # Manual loop (for complex multi-step evaluation)
     # -------------------------------------------------------------------------
@@ -1030,7 +1129,11 @@ class NeuroEvolution:
     def submit_fitness(self, fitness: float, elapsed_ms: float | None = None) -> None:
         if self._current_genome is None:
             raise RuntimeError("Call next_genome() before submit_fitness().")
-        self._population.submit(self._current_genome, self._finalize_fitness(fitness, elapsed_ms), elapsed_ms)
+        self._population.submit(
+            self._current_genome,
+            self._finalize_fitness(fitness, elapsed_ms, self._current_genome),
+            elapsed_ms,
+        )
         self._current_genome = None
 
     def next_genome_batch(self, n: int) -> list[Genome]:
@@ -1057,7 +1160,11 @@ class NeuroEvolution:
             else:
                 genome, fitness = item
                 elapsed_ms = None
-            self._population.submit(genome, self._finalize_fitness(fitness, elapsed_ms), elapsed_ms)
+            self._population.submit(
+                genome,
+                self._finalize_fitness(fitness, elapsed_ms, genome),
+                elapsed_ms,
+            )
 
     # -------------------------------------------------------------------------
     # Tick mode (operates on current_genome)
@@ -1086,11 +1193,25 @@ class NeuroEvolution:
     def _apply_sanitize(self, fitness: float) -> float:
         return self._sanitizer.apply(fitness)
 
-    def _finalize_fitness(self, fitness: float, elapsed_ms: float | None) -> float:
+    def _finalize_fitness(
+        self,
+        fitness: float,
+        elapsed_ms: float | None,
+        genome: Genome | None = None,
+    ) -> float:
         """Sanitize + efficiency penalty. Applied by every submission path."""
         fitness = self._sanitizer.apply(fitness)
         if self._efficiency_penalty is not None and elapsed_ms is not None:
             fitness = self._efficiency_penalty.apply(fitness, elapsed_ms)
+        if genome is not None and (
+            self._complexity_penalty_nodes > 0.0
+            or self._complexity_penalty_connections > 0.0
+        ):
+            hidden = max(0, len(genome.nodes) - len(genome.input_nodes) - len(genome.output_nodes))
+            fitness -= (
+                self._complexity_penalty_nodes * hidden
+                + self._complexity_penalty_connections * genome.connection_count
+            )
         return fitness
 
     def _run_evaluations(
