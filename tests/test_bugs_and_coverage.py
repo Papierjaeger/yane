@@ -617,14 +617,18 @@ class TestLeakAlpha(unittest.TestCase):
 
     def test_copy_preserves_leak_alpha(self):
         n = self._persistent_node(alpha=0.3)
+        n.memory_gate = 0.4
         c = n.copy()
         self.assertAlmostEqual(c.leak_alpha, 0.3, places=9)
+        self.assertAlmostEqual(c.memory_gate, 0.4, places=9)
 
     def test_pickle_roundtrip_preserves_leak_alpha(self):
         import pickle
         n = self._persistent_node(alpha=0.7)
+        n.memory_gate = 0.2
         n2 = pickle.loads(pickle.dumps(n))
         self.assertAlmostEqual(n2.leak_alpha, 0.7, places=9)
+        self.assertAlmostEqual(n2.memory_gate, 0.2, places=9)
 
     def test_old_pickle_gets_default_leak_alpha(self):
         """Pickles from before leak_alpha existed should unpickle with alpha=1.0."""
@@ -633,9 +637,12 @@ class TestLeakAlpha(unittest.TestCase):
         state = n.__getstate__()
         del state['leak_alpha']
         del state['mutation_leak_alpha']
+        del state['memory_gate']
+        del state['mutation_memory_gate']
         n2 = Node.__new__(Node)
         n2.__setstate__(state)
         self.assertAlmostEqual(n2.leak_alpha, 1.0, places=9)
+        self.assertAlmostEqual(n2.memory_gate, 0.0, places=9)
 
     def test_mutate_clamps_leak_alpha(self):
         """After many mutations, leak_alpha stays in [0, 1]."""
@@ -644,6 +651,8 @@ class TestLeakAlpha(unittest.TestCase):
             n.mutate(sigma=10.0)
         self.assertGreaterEqual(n.leak_alpha, 0.0)
         self.assertLessEqual(n.leak_alpha, 1.0)
+        self.assertGreaterEqual(n.memory_gate, 0.0)
+        self.assertLessEqual(n.memory_gate, 1.0)
 
     def test_non_persistent_node_not_mutated(self):
         """leak_alpha should not change for non-persistent hidden nodes."""
@@ -654,6 +663,21 @@ class TestLeakAlpha(unittest.TestCase):
         for _ in range(50):
             n.mutate(sigma=1.0)
         self.assertAlmostEqual(n.leak_alpha, 0.5, places=9)
+
+    def test_memory_gate_blends_old_and_new_state(self):
+        from yane.util.activation import ActivationType
+        n = self._persistent_node(alpha=1.0)
+        n.memory_gate = 0.75
+        n.activation = ActivationType.LINEAR
+        n.value = 8.0
+        n.bias = 0.0
+        n.fire(set())
+        self.assertAlmostEqual(n.value, 8.0, places=9)
+
+        n.value = 8.0
+        n.bias = -4.0
+        n.fire(set())
+        self.assertAlmostEqual(n.value, 7.0, places=9)
 
 
 if __name__ == '__main__':

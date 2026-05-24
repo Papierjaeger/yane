@@ -280,6 +280,7 @@ class Genome:
             for node, ni, pairs, tgt_arr, wt_arr, scratch, use_np in general_data:
                 val = (data[node.input_index] * node.input_scale
                        if node.input_index < n_data else 0.0)
+                old_value = values[ni]
                 values[ni] = val
                 v = val + node.bias
                 try:
@@ -293,11 +294,16 @@ class Genome:
                     for tgt, conn in pairs:
                         values[tgt] += conn._weight * activated
                 if node._retain_value:
-                    values[ni] = node.leak_alpha * activated if node._persist_value else activated
+                    if node._persist_value:
+                        retained = node.leak_alpha * activated
+                        values[ni] = node.memory_gate * old_value + (1.0 - node.memory_gate) * retained
+                    else:
+                        values[ni] = activated
                 else:
                     values[ni] = 0.0
 
             for node, ni, pairs, tgt_arr, wt_arr, scratch, use_np in exec_compiled:
+                old_value = values[ni]
                 v = values[ni] + node.bias
                 try:
                     activated = node._activate_fn(v)
@@ -310,7 +316,11 @@ class Genome:
                     for tgt, conn in pairs:
                         values[tgt] += conn._weight * activated
                 if node._retain_value:
-                    values[ni] = node.leak_alpha * activated if node._persist_value else activated
+                    if node._persist_value:
+                        retained = node.leak_alpha * activated
+                        values[ni] = node.memory_gate * old_value + (1.0 - node.memory_gate) * retained
+                    else:
+                        values[ni] = activated
                 else:
                     values[ni] = 0.0
 
