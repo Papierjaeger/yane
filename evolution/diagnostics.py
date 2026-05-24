@@ -94,6 +94,12 @@ def build_population_info(
         "sanitize_enabled":    sanitizer.enabled,
         "n_invalid_fitness":   sanitizer.n_invalid,
         "n_clipped_fitness":   sanitizer.n_clipped,
+        # Weight / bias / output clipping counters
+        "n_weight_clipped":    population._n_weight_clipped,
+        "n_bias_clipped":      population._n_bias_clipped,
+        "n_output_sanitized":  sum(
+            getattr(g, 'n_output_sanitized', 0) for g in all_genomes
+        ),
         # Ablation flags
         "ablation_novelty_enabled":            population._novelty_enabled,
         "ablation_speciation_enabled":         population._speciation_enabled,

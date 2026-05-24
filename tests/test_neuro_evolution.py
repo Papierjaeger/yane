@@ -714,6 +714,162 @@ class TestWeightClipping(unittest.TestCase):
         yane.set_weight_clipping(w_max=3.0, b_max=1.0)
         self.assertEqual(yane._population._weight_clip, (3.0, 1.0))
 
+    def test_clipping_counter_increments(self):
+        """n_weight_clipped / n_bias_clipped increase when values are clamped."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution(seed=0)
+        # n_initial_hidden=1 creates connections from the start.
+        yane.configure(n_inputs=1, n_outputs=1, n_initial_hidden=1)
+        # Small pop so the unevaluated queue empties fast → spawn is triggered.
+        yane.set_population_size(3)
+        yane.set_weight_clipping(w_max=0.001)
+        # Evaluate enough iterations to exhaust the initial queue and trigger spawn.
+        yane.set_max_iterations(10)
+        yane.train(lambda g: 0.0)
+        pop = yane._population
+        self.assertGreater(pop._n_weight_clipped + pop._n_bias_clipped, 0)
+
+    def test_clipping_counter_no_increment_when_in_bounds(self):
+        """Counters stay at zero when all weights are already within bounds."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution(seed=0)
+        yane.configure(1, 1)
+        # Zero out all weights so they're within a tight bound.
+        for genome in yane._population._unevaluated:
+            for node in genome.nodes:
+                node.bias = 0.0
+                for conn in node.connections:
+                    conn.weight = 0.0
+        yane.set_weight_clipping(w_max=10.0)
+        # No training — just check initial state.
+        pop = yane._population
+        self.assertEqual(pop._n_weight_clipped, 0)
+        self.assertEqual(pop._n_bias_clipped, 0)
+
+    def test_clipping_counters_exposed_in_diagnostics(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution(seed=0)
+        yane.configure(1, 1)
+        yane.set_weight_clipping(w_max=0.001)
+        yane.set_max_iterations(1)
+        yane.train(lambda g: 0.0)
+        info = yane.population_memory_info()
+        self.assertIn("n_weight_clipped", info)
+        self.assertIn("n_bias_clipped", info)
+
+
+class TestOutputSanitizing(unittest.TestCase):
+    """set_output_sanitizing() replaces NaN/Inf in forward() output."""
+
+    def _make(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution(seed=0)
+        yane.configure(n_inputs=1, n_outputs=1)
+        return yane
+
+    def _genome_with_inf_output(self):
+        """Return a genome whose forward() produces Inf via output_scale=inf."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution(seed=0)
+        yane.configure(1, 1, n_initial_hidden=1)
+        g = yane._population._unevaluated[0]
+        g._forward_dispatch = None
+        for node in g.output_nodes:
+            node.output_scale = float('inf')
+            node.bias = 1.0   # ensures node value != 0 so Inf propagates
+        return g
+
+    def test_forward_replaces_nan_inf(self):
+        import math
+        g = self._genome_with_inf_output()
+        g._output_sanitize = True
+        g._output_fallback = -1.0
+        out = g.forward([0.0])
+        self.assertEqual(len(out), 1)
+        self.assertFalse(math.isnan(out[0]))
+        self.assertFalse(math.isinf(out[0]))
+        self.assertEqual(out[0], -1.0)
+
+    def test_forward_no_sanitizing_by_default(self):
+        import math
+        g = self._genome_with_inf_output()
+        self.assertFalse(g._output_sanitize)   # default off
+        out = g.forward([0.0])
+        # Without sanitizing, inf output_scale must produce non-finite result
+        # (only if the node value is non-zero; bias=1.0 guarantees it).
+        self.assertFalse(math.isfinite(out[0]))
+
+    def test_set_output_sanitizing_applies_to_population(self):
+        import math
+        yane = self._make()
+        yane.set_output_sanitizing(enabled=True, fallback=0.0)
+        for g in yane._population._unevaluated + yane._population._evaluated:
+            self.assertTrue(g._output_sanitize)
+            self.assertEqual(g._output_fallback, 0.0)
+
+    def test_set_output_sanitizing_disabled(self):
+        yane = self._make()
+        yane.set_output_sanitizing(enabled=True)
+        yane.set_output_sanitizing(enabled=False)
+        for g in yane._population._unevaluated + yane._population._evaluated:
+            self.assertFalse(g._output_sanitize)
+
+    def test_counter_increments_on_sanitize(self):
+        import math
+        g = self._genome_with_inf_output()
+        g._output_sanitize = True
+        g._output_fallback = 0.0
+        self.assertEqual(g.n_output_sanitized, 0)
+        g.forward([0.0])
+        self.assertGreater(g.n_output_sanitized, 0)
+
+    def test_counter_not_incremented_when_output_clean(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution(seed=0)
+        yane.configure(1, 1)
+        g = yane._population._unevaluated[0]
+        g._output_sanitize = True
+        for node in g.output_nodes:
+            node.bias = 0.0
+            node.output_scale = 1.0
+        out = g.forward([0.5])
+        import math
+        self.assertTrue(math.isfinite(out[0]))
+        self.assertEqual(g.n_output_sanitized, 0)
+
+    def test_counter_in_diagnostics(self):
+        yane = self._make()
+        yane.set_output_sanitizing(enabled=True)
+        yane.set_max_iterations(1)
+        yane.train(lambda g: 0.0)
+        info = yane.population_memory_info()
+        self.assertIn("n_output_sanitized", info)
+
+    def test_copy_inherits_sanitize_settings(self):
+        g = self._genome_with_inf_output()
+        g._output_sanitize = True
+        g._output_fallback = -99.0
+        g2 = g.copy()
+        self.assertTrue(g2._output_sanitize)
+        self.assertEqual(g2._output_fallback, -99.0)
+        self.assertEqual(g2.n_output_sanitized, 0)
+
+    def test_forward_batch_sanitizes(self):
+        import math
+        from yane import NeuroEvolution
+        yane = NeuroEvolution(seed=0)
+        yane.configure(1, 1)
+        g = yane._population._unevaluated[0]
+        g._output_sanitize = True
+        g._output_fallback = 42.0
+        for node in g.output_nodes:
+            node.bias = float('inf')
+        batch = [[0.0], [1.0], [2.0]]
+        results = g.forward_batch(batch)
+        for row in results:
+            self.assertEqual(len(row), 1)
+            self.assertTrue(math.isfinite(row[0]))
+
 
 class TestComplexityPenalty(unittest.TestCase):
 

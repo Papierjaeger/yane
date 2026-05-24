@@ -53,6 +53,11 @@ class Genome:
         self._innov_cache: tuple | None = None  # (innov_dict, max_innov); cleared by _invalidate_topology
         self._values_arr = None               # np.float64 array — reused node-value buffer for forward()
 
+        # Output sanitizing (NaN/Inf → fallback after every forward pass)
+        self._output_sanitize: bool = False
+        self._output_fallback: float = 0.0
+        self.n_output_sanitized: int = 0      # cumulative, session-only (not copied to children)
+
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
         self.max_connections: int | None = None
@@ -150,6 +155,16 @@ class Genome:
         for node in self._triggered:
             node.fire(next_triggered)
         self._triggered = next_triggered
+
+    def _sanitize_outputs(self, result: list[float]) -> list[float]:
+        """Replace NaN/Inf in output vector with fallback. Mutates result in-place."""
+        import math
+        fallback = self._output_fallback
+        for i, v in enumerate(result):
+            if not math.isfinite(v):
+                result[i] = fallback
+                self.n_output_sanitized += 1
+        return result
 
     def get_outputs(self) -> list[float]:
         return [node.value * node.output_scale for node in self.output_nodes]
@@ -527,7 +542,8 @@ class Genome:
         # After the first call, this is a direct 1-attribute-read + 1-call.
         fn = self._forward_dispatch
         if fn is not None:
-            return fn(data)
+            result = fn(data)
+            return self._sanitize_outputs(result) if self._output_sanitize else result
 
         # First call: resolve topology and install the dispatch function.
         if not self._has_cycles:
@@ -537,11 +553,13 @@ class Genome:
                 compiled = self._compile_forward()
                 self._compiled_forward = compiled
                 self._forward_dispatch = compiled
-                return compiled(data)
+                result = compiled(data)
+                return self._sanitize_outputs(result) if self._output_sanitize else result
             self._has_cycles = True
 
         self._forward_dispatch = self._bfs_forward
-        return self._bfs_forward(data)
+        result = self._bfs_forward(data)
+        return self._sanitize_outputs(result) if self._output_sanitize else result
 
     def forward_batch(self, batch) -> list[list[float]]:
         """Vectorized forward pass for a batch of input vectors.
@@ -628,9 +646,12 @@ class Genome:
 
         # --- Collect outputs -----------------------------------------------
         result = []
+        sanitize = self._output_sanitize
         for i in range(N):
             row = [float(vals[i, node_to_idx[id(n)]]) * n.output_scale
                    for n in self.output_nodes]
+            if sanitize:
+                self._sanitize_outputs(row)
             result.append(row)
         return result
 
@@ -855,6 +876,8 @@ class Genome:
             self.mutation_gate_source, other.mutation_gate_source
         ).copy()
 
+        child._output_sanitize = self._output_sanitize
+        child._output_fallback = self._output_fallback
         child._invalidate_topology()
         return child
 
@@ -896,6 +919,9 @@ class Genome:
             setattr(genome, attr, getattr(self, attr).copy())
         genome.mutation_gate_source = self.mutation_gate_source.copy()
 
+        genome._output_sanitize = self._output_sanitize
+        genome._output_fallback = self._output_fallback
+        # n_output_sanitized starts fresh (per-instance counter, not inherited)
         genome._connection_count = self._connection_count
         # Topology caches reference old Node objects — must recompute for the copy.
         genome._exec_order = None

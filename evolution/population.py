@@ -155,6 +155,8 @@ class Population:
         # When set to (w_max, b_max), all weights and biases are clamped to
         # [-w_max, w_max] and [-b_max, b_max] after each mutation.
         self._weight_clip: tuple[float, float] | None = None
+        self._n_weight_clipped: int = 0   # cumulative clipped weight events
+        self._n_bias_clipped: int = 0     # cumulative clipped bias events
 
         # Ablation flags — all default ON.  Set to False to disable the
         # corresponding mechanism for controlled comparison runs.
@@ -1174,9 +1176,15 @@ class Population:
         if self._weight_clip is not None:
             w_max, b_max = self._weight_clip
             for node in child.nodes:
-                node.bias = max(-b_max, min(b_max, node.bias))
+                clipped = max(-b_max, min(b_max, node.bias))
+                if clipped != node.bias:
+                    self._n_bias_clipped += 1
+                node.bias = clipped
                 for conn in node.connections:
-                    conn.weight = max(-w_max, min(w_max, conn.weight))
+                    clipped_w = max(-w_max, min(w_max, conn.weight))
+                    if clipped_w != conn.weight:
+                        self._n_weight_clipped += 1
+                    conn.weight = clipped_w
         child._parent_fitness = parent.fitness
         child.fitness = 0.0
         self._unevaluated.append(child)

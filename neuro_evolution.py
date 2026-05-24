@@ -73,6 +73,9 @@ class NeuroEvolution:
         self._species_elite_count: int = 1
         # Fitness sanitizing (disabled by default)
         self._sanitizer = FitnessSanitizer()
+        # Output sanitizing — replaces NaN/Inf in forward() results (disabled by default)
+        self._output_sanitize: bool = False
+        self._output_fallback: float = 0.0
         # Cached configure() parameters for logging / introspection.
         self._n_inputs: int = 0
         self._n_outputs: int = 0
@@ -146,6 +149,8 @@ class NeuroEvolution:
         initial.max_nodes = max_nodes
         initial.max_connections = max_connections
         initial.allow_memory = stateful
+        initial._output_sanitize = self._output_sanitize
+        initial._output_fallback = self._output_fallback
 
         for i in range(n_inputs):
             node = Node(NodeType.INPUT, innovation=tracker.next())
@@ -498,6 +503,9 @@ class NeuroEvolution:
             "sanitize_fallback": self._sanitizer.fallback,
             "sanitize_clip_low": self._sanitizer.clip_low,
             "sanitize_clip_high": self._sanitizer.clip_high,
+            # Output sanitizing
+            "output_sanitize": self._output_sanitize,
+            "output_sanitize_fallback": self._output_fallback,
         }
 
     # -------------------------------------------------------------------------
@@ -958,6 +966,32 @@ class NeuroEvolution:
         if self._population is not None:
             self._population._weight_clip = clip
 
+    def set_output_sanitizing(
+        self,
+        enabled: bool = True,
+        fallback: float = 0.0,
+    ) -> None:
+        """Replace NaN/Inf values in genome forward-pass outputs with *fallback*.
+
+        Useful when activation functions can overflow (e.g. unbounded outputs,
+        very large weights). Does NOT sanitize internal node values — only the
+        final output vector is checked, keeping the forward hot-path fast.
+
+        Diagnostic counter ``n_output_sanitized`` in ``population_memory_info()``
+        tracks cumulative replacement events across all genomes.
+
+        Args:
+            enabled: True (default) to enable sanitizing; False to disable.
+            fallback: Replacement value for NaN/Inf outputs (default 0.0).
+        """
+        self._output_sanitize = enabled
+        self._output_fallback = fallback
+        if self._population is not None:
+            for genome in (self._population._evaluated
+                           + list(self._population._unevaluated)):
+                genome._output_sanitize = enabled
+                genome._output_fallback = fallback
+
     def set_complexity_penalty(
         self,
         node_penalty: float = 0.0,
@@ -1143,6 +1177,8 @@ class NeuroEvolution:
             genome.max_nodes = self._max_nodes
             genome.max_connections = self._max_connections
             genome.allow_memory = self._stateful
+            genome._output_sanitize = self._output_sanitize
+            genome._output_fallback = self._output_fallback
             genome._last_species_id = None
             genome._species_stale = True
             if reset_strategy:

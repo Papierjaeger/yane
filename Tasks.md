@@ -368,9 +368,9 @@ Nutzen:
 
 Sehr große Gewichte/Aktivierungen können Netze instabil machen.
 
-**Bereits implementiert:** `set_weight_clipping(w_max, b_max)` in `NeuroEvolution` — klemmt alle Gewichte auf `[-w_max, w_max]` und alle Biases auf `[-b_max, b_max]` nach jeder Mutation. `b_max` defaults zu `w_max`. `None` (default) deaktiviert Clipping.
+**Bereits implementiert:** `set_weight_clipping(w_max, b_max)` in `NeuroEvolution` — klemmt alle Gewichte auf `[-w_max, w_max]` und alle Biases auf `[-b_max, b_max]` nach jeder Mutation. `b_max` defaults zu `w_max`. `None` (default) deaktiviert Clipping. `set_output_sanitizing(enabled, fallback)` ersetzt NaN/Inf in Forward-Outputs (alle 4 Forward-Pfade). Zähler `n_weight_clipped`, `n_bias_clipped`, `n_output_sanitized` in Diagnostics. 17 Tests.
 
-**Noch offen:** Output-Sanitizing pro Forward; Zähler für Clipping-Ereignisse.
+**Noch offen:** — (alle Aufgaben sind implementiert).
 
 Nutzen:
 
