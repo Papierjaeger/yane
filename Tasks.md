@@ -126,16 +126,13 @@ Nutzen:
 
 - Starke Methode für Strategien, Spiele und robuste Policies.
 
-### P2: Adaptive Populationsgröße
+### P2: Adaptive Populationsgröße ✅
 
 Die Populationsgröße ist aktuell fix. Dynamische Anpassung könnte Ressourcen effizienter nutzen.
 
-Aufgaben:
+**Bereits implementiert:** `set_adaptive_population(min_size, max_size, growth_rate=0.05, enabled=True)` in `NeuroEvolution`. Intern in `Population._adjust_population_size()` (debounced auf 1× pro Generation via `spawn_count % max_size`). Wächst bei hoher Stagnation oder wenig Species; schrumpft bei Excess-Species und gesunder Population. Klemmt immer auf `[min_size, max_size]`. Zähler `_n_pop_size_adjustments` in Diagnostics (`n_pop_size_adjustments`). Config in `_config_dict()`. 18 Tests in `tests/test_adaptive_population.py`.
 
-- Populationsgröße automatisch reduzieren, wenn Species sich stark konsolidiert hat (wenig Diversität braucht weniger Kandidaten).
-- Populationsgröße erhöhen, wenn viele Species gleichzeitig wachsen (Exploration-Phase).
-- Mindest- und Maximalgröße als Grenzen definieren.
-- Größenveränderung schrittweise (kein sprunghafter Drop).
+**Noch offen:** — (alle geplanten Aufgaben sind implementiert).
 
 Nutzen:
 
@@ -535,12 +532,12 @@ Nutzen:
 - [ ] Multi-Objective Optimization
 - [ ] Quality Diversity / MAP-Elites
 - [ ] Coevolution
-- [ ] Adaptive Populationsgröße
+- [x] Adaptive Populationsgröße
 - [ ] Modulare Subnetze
 - [ ] CPPN / Indirekte Kodierung
 - [ ] Lokale Optimierer (Simulated Annealing, CMA-ES)
 - [ ] Backprop-Hybrid
-- [ ] NES als Lamarck-Alternative
+- [x] NES als Lamarck-Alternative
 - [ ] Genom-Serialisierung optimieren
 - [ ] GPU-Unterstützung
 - [x] Ablation Tests: set_novelty_search, set_speciation, set_crossover, set_diversity_injection + bestehende Lamarck/Memory-Knöpfe. 14 Tests in test_ablation.py.

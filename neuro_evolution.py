@@ -63,6 +63,10 @@ class NeuroEvolution:
         self._resource_guard = ResourceGuard()
         self._resource_check_interval: int = 50  # check psutil every N iters (was 1 = ~5% overhead)
         self._population_size: int = 100
+        self._adaptive_pop_enabled: bool = False
+        self._adaptive_pop_min: int = 100
+        self._adaptive_pop_max: int = 100
+        self._adaptive_pop_rate: float = 0.05
         self._n_workers: int = 1
         # Lamarckian refinement
         self._lamarck = LamarckRefiner()
@@ -193,6 +197,10 @@ class NeuroEvolution:
         )
         self._population.elite_count = self._elite_count
         self._population.species_elite_count = self._species_elite_count
+        self._population._adaptive_pop_enabled = self._adaptive_pop_enabled
+        self._population._adaptive_pop_min = self._adaptive_pop_min
+        self._population._adaptive_pop_max = self._adaptive_pop_max
+        self._population._adaptive_pop_rate = self._adaptive_pop_rate
 
     def set_seed(self, seed: int | None) -> None:
         """Set or clear the random seed.
@@ -226,6 +234,39 @@ class NeuroEvolution:
         self._population_size = n
         if self._population is not None:
             self._population.max_size = n
+
+    def set_adaptive_population(
+        self,
+        min_size: int,
+        max_size: int,
+        growth_rate: float = 0.05,
+        enabled: bool = True,
+    ) -> None:
+        """Enable adaptive population sizing.
+
+        Automatically grows or shrinks the population between [min_size, max_size]
+        based on species diversity and stagnation pressure.  The current size is
+        preserved — it must fall within [min_size, max_size].
+
+        Args:
+            min_size:    Minimum allowed population size.
+            max_size:    Maximum allowed population size.
+            growth_rate: Fractional change per generation (default 0.05 = 5 %).
+            enabled:     Pass False to disable without losing the configured limits.
+        """
+        if min_size < 1:
+            raise ValueError(f"min_size must be >= 1, got {min_size}")
+        if max_size < min_size:
+            raise ValueError(f"max_size must be >= min_size, got {max_size} < {min_size}")
+        self._adaptive_pop_enabled = enabled
+        self._adaptive_pop_min = min_size
+        self._adaptive_pop_max = max_size
+        self._adaptive_pop_rate = max(0.0, growth_rate)
+        if self._population is not None:
+            self._population._adaptive_pop_enabled = enabled
+            self._population._adaptive_pop_min = min_size
+            self._population._adaptive_pop_max = max_size
+            self._population._adaptive_pop_rate = self._adaptive_pop_rate
 
     def set_max_iterations(self, n: int) -> None:
         self.max_iterations = n
@@ -494,6 +535,10 @@ class NeuroEvolution:
             "stateful": self._stateful,
             # Population
             "population_size": self._population_size,
+            "adaptive_pop_enabled": self._adaptive_pop_enabled,
+            "adaptive_pop_min": self._adaptive_pop_min,
+            "adaptive_pop_max": self._adaptive_pop_max,
+            "adaptive_pop_rate": self._adaptive_pop_rate,
             "n_workers": self._n_workers,
             "target_species": pop._target_species if pop else None,
             "compat_threshold": pop._compat_threshold if pop else None,
@@ -1237,6 +1282,10 @@ class NeuroEvolution:
         )
         self._population.elite_count = self._elite_count
         self._population.species_elite_count = self._species_elite_count
+        self._population._adaptive_pop_enabled = self._adaptive_pop_enabled
+        self._population._adaptive_pop_min = self._adaptive_pop_min
+        self._population._adaptive_pop_max = self._adaptive_pop_max
+        self._population._adaptive_pop_rate = self._adaptive_pop_rate
         if fitness_fn is None:
             self._population._unevaluated = kept[:self._population_size]
             self._population._evaluated = []

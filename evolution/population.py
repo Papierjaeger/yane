@@ -158,6 +158,13 @@ class Population:
         self._n_weight_clipped: int = 0   # cumulative clipped weight events
         self._n_bias_clipped: int = 0     # cumulative clipped bias events
 
+        # Adaptive population size — disabled by default.
+        self._adaptive_pop_enabled: bool = False
+        self._adaptive_pop_min: int = max_size
+        self._adaptive_pop_max: int = max_size
+        self._adaptive_pop_rate: float = 0.05
+        self._n_pop_size_adjustments: int = 0
+
         # Ablation flags — all default ON.  Set to False to disable the
         # corresponding mechanism for controlled comparison runs.
         self._novelty_enabled: bool = True
@@ -1008,11 +1015,44 @@ class Population:
         ]
         return chosen
 
+    def _adjust_population_size(self) -> None:
+        """Grow or shrink max_size based on species diversity and stagnation.
+
+        Debounced to fire at most once per generation (every max_size spawns).
+        Grows when diversity is low or stagnation is high; shrinks when species
+        count exceeds target and the population is healthy.
+        """
+        if not self._adaptive_pop_enabled:
+            return
+        if self._spawn_count % max(1, self.max_size) != 0:
+            return
+
+        sp_count = self.species_count
+        target = max(1, self._target_species)
+        stag_frac = min(1.0, self._stagnation_count / max(1, self.stagnation_threshold))
+
+        should_grow = stag_frac > 0.3 or sp_count < int(target * 0.75)
+        should_shrink = sp_count > int(target * 1.25) and stag_frac < 0.2
+
+        if should_grow:
+            new_size = int(self.max_size * (1.0 + self._adaptive_pop_rate))
+        elif should_shrink:
+            new_size = int(self.max_size * (1.0 - self._adaptive_pop_rate))
+        else:
+            return
+
+        new_size = max(self._adaptive_pop_min, min(self._adaptive_pop_max, new_size))
+        if new_size != self.max_size:
+            self.max_size = new_size
+            self._n_pop_size_adjustments += 1
+
     def _spawn_offspring(self) -> None:
         if not self._evaluated:
             if not self._unevaluated:
                 self._bootstrap_initial_population()
             return
+
+        self._adjust_population_size()
 
         # Always run species management — skipping it during stagnation injection
         # causes unbounded species growth (no merging/threshold adjustment) which

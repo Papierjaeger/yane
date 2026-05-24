@@ -97,6 +97,9 @@ def build_population_info(
         # Weight / bias / output clipping counters
         "n_weight_clipped":    population._n_weight_clipped,
         "n_bias_clipped":      population._n_bias_clipped,
+        # Adaptive population size
+        "adaptive_pop_enabled":       population._adaptive_pop_enabled,
+        "n_pop_size_adjustments":     population._n_pop_size_adjustments,
         "n_output_sanitized":  sum(
             getattr(g, 'n_output_sanitized', 0) for g in all_genomes
         ),
