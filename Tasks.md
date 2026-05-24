@@ -14,16 +14,13 @@ Diese Datei sammelt Ideen, Aufgaben und Forschungsrichtungen, um YANE allgemein 
 
 ## 1. Fitness, Evaluation und Training
 
-### P1: Curriculum Learning
+### P1: Curriculum Learning ✅
 
 Schwere Aufgaben können in Stufen gelernt werden.
 
-Aufgaben:
+**Bereits implementiert:** `CurriculumStage(fitness_fn, target_fitness, name)` + `Curriculum`-Klasse in `evolution/curriculum.py`. `NeuroEvolution.set_curriculum(stages, on_stage_advance)` aktiviert den Curriculum-Modus; `train()` akzeptiert dann kein explizites `fitness_fn` mehr. Automatischer Stufenwechsel sobald der beste Genome die `target_fitness` einer Stufe erreicht — Population wird behalten, Stagnationszähler und `_best_fitness_seen` werden für den neuen Task zurückgesetzt (Re-Evaluierungs-Zyklus). `on_stage_advance`-Callback (Index + Stage). `curriculum_stage`-Property. Curriculum-Infos (Stage-Index, -Name, -Target, -Best, -Evals, n_advances) in `population_memory_info()`. Stoppgrund `"curriculum_complete"` wenn letzte Stufe ihre Ziel-Fitness erreicht. 24 Tests in `tests/test_curriculum.py`.
 
-- Curriculum-Interface definieren.
-- Fitnessfunktion kann aktuelle Stufe melden.
-- Automatischer Stufenwechsel bei Ziel-Fitness.
-- Population beim Stufenwechsel behalten.
+**Noch offen:** — (alle Aufgaben sind implementiert).
 
 Nutzen:
 
@@ -488,7 +485,7 @@ Nutzen:
 | Phase | Fokus | Enthaltene Tasks (offen) |
 |---|---|---|
 | **Phase 3** · Skalierung | Species-Budget-Reproduktion, Batch-Forward, Serialisierung, Worker-Pipeline | P1: Serialisierung |
-| **Phase 4** · Schwierige Aufgaben | Curriculum, Multi-Objective, MAP-Elites, Memory/Gating, Hybrid-Optimierung | P1: Curriculum, Memory (Rest); P2: Multi-Obj, QD, NES, Backprop |
+| **Phase 4** · Schwierige Aufgaben | Curriculum, Multi-Objective, MAP-Elites, Memory/Gating, Hybrid-Optimierung | P1: Memory (Rest); P2: Multi-Obj, QD, NES, Backprop |
 
 > Phase 1 und 2 sind vollständig abgeschlossen. Species-Budget-Reproduktion wurde bewusst von Phase 2 auf Phase 3 verschoben (erfordert Umbau von steady-state zu generationsbasiertem Spawn-Modell).
 
@@ -539,6 +536,7 @@ Nutzen:
 - [x] Weight/Bias-Clipping: set_weight_clipping(w_max, b_max) nach jeder Mutation.
 - [x] Forward-Microbenchmarks: benchmarks/forward_bench.py (acyclic vs cyclic, n∈{10,50,200,1000}).
 - [x] Vektorisierte Batch-Auswertung: forward_batch() (NumPy push-Modell, topologisch, Fallback bei Zyklen/Memory, alle 15 Aktivierungen, 8 Tests).
+- [x] Curriculum Learning: set_curriculum(stages, on_stage_advance), automatischer Stufenwechsel, Population behalten, curriculum_complete-Stopp, 24 Tests.
 
 ### ⚡ Teilweise implementiert (Rest siehe Task-Detail oben)
 
@@ -551,7 +549,6 @@ Nutzen:
 
 ### 🔲 Noch nicht begonnen
 
-- [ ] Curriculum Learning
 - [ ] Multi-Objective Optimization
 - [ ] Species-Budget-Reproduktion (verschoben auf Phase 3)
 - [ ] Quality Diversity / MAP-Elites

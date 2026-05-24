@@ -30,6 +30,7 @@ from yane.evolution.evaluation import (  # noqa: F401  (EvaluationResult re-expo
     aggregate_fitnesses,
 )
 from yane.util.resource_guard import ResourceGuard
+from yane.evolution.curriculum import Curriculum, CurriculumStage  # noqa: F401
 
 # Re-export for gui/worker.py backwards compatibility
 _aggregate_fitnesses = aggregate_fitnesses
@@ -85,6 +86,9 @@ class NeuroEvolution:
         self._convergence_min_stagnation: float = 1.0       # stagnation fraction required
         self._max_evaluations: int | None = None
         self._n_evaluations_done: int = 0
+        # Curriculum learning
+        self._curriculum: "Curriculum | None" = None
+        self._on_stage_advance: Callable | None = None
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
 
@@ -391,6 +395,54 @@ class NeuroEvolution:
         """
         self._lamarck.set_adaptive(max_steps, top_k, sigma)
 
+    def set_curriculum(
+        self,
+        stages: list,
+        on_stage_advance: Callable | None = None,
+    ) -> None:
+        """Configure curriculum learning: a sequence of progressively harder tasks.
+
+        When curriculum is active, ``train()`` does **not** require a
+        ``fitness_fn`` argument — pass ``None`` or omit it.
+
+        Args:
+            stages: List of ``CurriculumStage`` objects, each with a
+                ``fitness_fn`` (callable), an optional ``target_fitness``
+                threshold, and an optional ``name``.  The last stage uses
+                ``min_fitness`` (or ``max_iterations``) as its stop condition.
+            on_stage_advance: Optional callback invoked when a stage advances.
+                Signature: ``callback(stage_index: int, stage: CurriculumStage)``.
+
+        Example::
+
+            from yane.evolution.curriculum import CurriculumStage
+            ne.set_curriculum([
+                CurriculumStage(easy_fn,   target_fitness=0.90, name="easy"),
+                CurriculumStage(medium_fn, target_fitness=0.95, name="medium"),
+                CurriculumStage(hard_fn,   name="hard"),  # last stage
+            ])
+            ne.set_target_fitness(0.98)  # stop condition for the final stage
+            ne.train()
+
+        Note: generator-based fitness functions (early-stopping protocol) are
+        not supported inside curriculum stages.
+        """
+        stages_list = list(stages)
+        if not stages_list:
+            raise ValueError("set_curriculum() requires at least one stage")
+        for s in stages_list:
+            if not isinstance(s, CurriculumStage):
+                raise TypeError(
+                    f"stages must be CurriculumStage instances, got {type(s)}"
+                )
+        self._curriculum = Curriculum(stages_list)
+        self._on_stage_advance = on_stage_advance
+
+    @property
+    def curriculum_stage(self) -> int | None:
+        """Current curriculum stage index, or None if no curriculum is set."""
+        return self._curriculum.stage_index if self._curriculum else None
+
     def _config_dict(self) -> dict:
         """Return all NeuroEvolution settings as a JSON-serializable dict."""
         pop = self._population
@@ -449,7 +501,7 @@ class NeuroEvolution:
 
     def train(
         self,
-        fitness_fn: Callable[[Genome], float],
+        fitness_fn: Callable[[Genome], float] | None = None,
         run_name: str | None = None,
         on_stop: Callable[[str], None] | None = None,
     ) -> int:
@@ -461,8 +513,11 @@ class NeuroEvolution:
         - ``max_evaluations`` — stops after N total fitness-function calls.
         - ``max_iterations`` — stops after N genome evaluations.
         - Convergence — stops when IQR < ``fitness_spread_eps`` at full stagnation.
+        - ``"curriculum_complete"`` — all curriculum stages finished (curriculum
+          mode only).
 
-        Automatically pauses when system memory is low and resumes when it recovers.
+        Automatically pauses when system memory is low and resumes when it
+        recovers.
 
         Structured logging is automatically set up: a timestamped directory
         under ``logs/<run_name>/`` receives ``run.log``, ``config.json``,
@@ -470,17 +525,32 @@ class NeuroEvolution:
 
         Args:
             fitness_fn: Function that evaluates a genome and returns fitness.
+                Omit (or pass ``None``) when curriculum is set via
+                ``set_curriculum()``.
             run_name: Category name for logs (default: derived from *fitness_fn*).
             on_stop: Optional callback called with the stop reason string when
                 training ends.  Possible values: ``"target_reached"``,
-                ``"max_evaluations"``, ``"max_iterations"``, ``"converged"``.
+                ``"max_evaluations"``, ``"max_iterations"``, ``"converged"``,
+                ``"curriculum_complete"``.
         Returns:
             Number of iterations performed.
         """
         self._ensure_configured()
 
+        # Curriculum takes priority; fitness_fn may be None when curriculum is set.
+        if self._curriculum is not None:
+            fitness_fn = self._curriculum
+        elif fitness_fn is None:
+            raise ValueError(
+                "fitness_fn is required when no curriculum is set. "
+                "Call set_curriculum() first or pass a fitness function."
+            )
+
         # --- Structured logging setup ----------------------------------------
-        name = run_name or _derive_run_name(fitness_fn)
+        name = run_name or (
+            self._curriculum.current_stage.name or "curriculum"
+            if self._curriculum else _derive_run_name(fitness_fn)
+        )
         self._log_run_name = name
         from yane.util.logger import setup_logging as _setup, write_json as _wj, write_csv as _wc, log_info as _li
         self._log_run_dir = _setup(name)
@@ -531,6 +601,28 @@ class NeuroEvolution:
                     mem.get("largest_genome_nodes", 0),
                     mem.get("largest_genome_connections", 0))
                 self._write_crash_snapshot(iterations, mem, _li)
+
+            # --- Curriculum stage advancement --------------------------------
+            if self._curriculum is not None:
+                self._curriculum.record_fitness(fitness)
+                if self._curriculum.maybe_advance():
+                    stage = self._curriculum.current_stage
+                    _li("Curriculum: advanced to stage %d/%d '%s'",
+                        self._curriculum.stage_index + 1,
+                        self._curriculum.stage_count,
+                        stage.name or "")
+                    self._population.reset_stagnation()
+                    if self._on_stage_advance is not None:
+                        try:
+                            self._on_stage_advance(
+                                self._curriculum.stage_index, stage
+                            )
+                        except Exception:
+                            pass
+                elif self._curriculum.is_complete():
+                    stop_reason = "curriculum_complete"
+                    _li("Curriculum: all stages complete  iterations=%d", iterations)
+                    break
 
             stop_reason = self._check_stop_reason(fitness, iterations, _li)
             if stop_reason is not None:
@@ -636,7 +728,7 @@ class NeuroEvolution:
     def population_memory_info(self) -> dict:
         """Returns node/connection/fitness/species diagnostics for the population."""
         self._ensure_configured()
-        return build_population_info(
+        info = build_population_info(
             self._population,
             self._lamarck,
             self._sanitizer,
@@ -644,6 +736,9 @@ class NeuroEvolution:
             self._runner.aggregation,
             self._runner.n_early_stopped,
         )
+        if self._curriculum is not None:
+            info.update(self._curriculum.info())
+        return info
 
     def set_target_species(self, n: int) -> None:
         """Set the target number of species the population tries to maintain.
