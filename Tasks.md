@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0-Adaptive-Tasks, P1-Preset-System, P1-Release-Cleanup und P1-Pareto/MAP-Elites-Visualisierung abgeschlossen. Teststand: `687 passed`.
+**Aktueller Stand:** Alle P0-Adaptive-Tasks, P1-Preset-System, P1-Release-Cleanup, P1-Pareto/MAP-Elites-Visualisierung und AdaptiveController/OperatorScheduler-Checkpoint-State abgeschlossen. Teststand: `693 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging und Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -119,7 +119,7 @@ Nutzen:
 - Lange Simulationen koennen auf mehrere Prozesse oder Maschinen verteilt werden.
 - Saubere Grundlage fuer Cluster- oder Server-Experimente.
 
-### P1 🔲 Checkpoint-Format langfristig haerten
+### P1 ⚡ Checkpoint-Format langfristig haerten
 
 Checkpoint v2 mit Migration und Metadata-Sidecar ist implementiert. Langfristig
 sollten Payloads robuster und besser inspizierbar werden.
@@ -130,7 +130,7 @@ Aufgaben:
 - JSON-Metadaten in GUI/API sichtbar machen.
 - Optional: getrennte Speicherung von Config, Tracker, Population, QD-Archiv.
 - Import-Warnungen fuer fehlende Descriptor-Callbacks in GUI anzeigen.
-- Checkpoint-State fuer `AdaptiveController` und `OperatorScheduler` pruefen und testen.
+- Checkpoint-State fuer `AdaptiveController` und `OperatorScheduler` pruefen und testen. ✅
 - Dokumentieren, welche Teile Pickle bleiben und warum.
 
 Nutzen:
@@ -240,6 +240,13 @@ Aufgaben:
 
 - `benchmarks/adaptive_suite.py`: 7 Konfigurationen (baseline → full_adaptive) auf XOR und CartPole.
 - Metriken: Loesung, Iterationen, Wall-Time, Best-Fitness, adaptive Diagnostics.
+
+### ✅ P1 Checkpoint: AdaptiveController und OperatorScheduler State
+
+- `save_checkpoint()` speichert jetzt `adaptive_ctrl`, `adaptive_ctrl_enabled`, `operator_scheduler`, `operator_scheduler_enabled`.
+- `load_checkpoint()` stellt diese wieder her; `_operator_scheduler` wird neu an die Population verdrahtet.
+- Rueckwaertskompatibel: Alte Checkpoints ohne diese Keys laden mit `enabled=False`.
+- 6 neue Tests in `test_checkpoint_migration.py`. 693 passed.
 
 ### ✅ P1 Pareto- und MAP-Elites-Visualisierung polishen
 

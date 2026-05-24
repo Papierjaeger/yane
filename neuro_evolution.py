@@ -1452,6 +1452,10 @@ class NeuroEvolution:
             "n_clipped_fitness":     self._sanitizer.n_clipped,
             "n_early_stopped":       self._runner.n_early_stopped,
             "early_stopping_n":      self._runner.early_stopping_n,
+            "adaptive_ctrl_enabled":      self._adaptive_ctrl_enabled,
+            "adaptive_ctrl":              self._adaptive_ctrl,
+            "operator_scheduler_enabled": self._operator_scheduler_enabled,
+            "operator_scheduler":         self._operator_scheduler,
         })
 
     def load_checkpoint(self, path: str | Path) -> None:
@@ -1484,6 +1488,14 @@ class NeuroEvolution:
         self._runner.n_early_stopped  = payload.get("n_early_stopped", 0)
         self._runner.early_stopping_n = payload.get("early_stopping_n", None)
         self._normalizer              = payload.get("normalizer", None)
+        if "adaptive_ctrl" in payload:
+            self._adaptive_ctrl = payload["adaptive_ctrl"]
+        self._adaptive_ctrl_enabled = payload.get("adaptive_ctrl_enabled", False)
+        if "operator_scheduler" in payload:
+            self._operator_scheduler = payload["operator_scheduler"]
+        self._operator_scheduler_enabled = payload.get("operator_scheduler_enabled", False)
+        if self._operator_scheduler_enabled and self._population is not None:
+            self._population._operator_scheduler = self._operator_scheduler
         # Restore cached config so _config_dict() + logs are accurate.
         self._n_inputs           = cfg.get("n_inputs", self._n_inputs)
         self._n_outputs          = cfg.get("n_outputs", self._n_outputs)
