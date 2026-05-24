@@ -142,15 +142,14 @@ Nutzen:
 - Weniger Evaluierungen in konvergierten Phasen, mehr Vielfalt in Explorationsphasen.
 - Bessere Ressourcennutzung bei langen Runs.
 
-### P2: Warm-Start und Transfer Learning
+### P2: Warm-Start und Transfer Learning ⚡
 
 Trainiertes Bestes Genome oder ganze Population als Startpunkt für verwandte Aufgaben nutzen.
 
-Aufgaben:
+**Bereits implementiert:** `NeuroEvolution.warm_start_from_checkpoint(path, fitness_fn=None, min_fitness=None, reset_strategy=False)` importiert kompatible Checkpoint-Populationen in eine neu konfigurierte Aufgabe. Optionaler Fitness-Filter hält nur Genome über Baseline; optionales Strategy-Reset initialisiert sigma/rates neu. Inkompatible Input/Output-Topologien werden abgelehnt.
 
-- `load_population(checkpoint)` als Startpunkt statt zufälliger Initialisierung.
-- Filterung: nur Genome behalten, die auf neuer Aufgabe mindestens Baseline erreichen.
-- Optionale Re-Initialisierung der Strategie-Gene (sigma, rates) bei Start.
+Noch offen:
+
 - Beispiel: CartPole-trainiertes Netz als Startpunkt für Acrobot.
 
 Nutzen:
@@ -160,30 +159,28 @@ Nutzen:
 
 ## 3. Netzwerkmodell
 
-### P0: Netzwerkgröße kontrollierter wachsen lassen ⚡
+### P0: Netzwerkgröße kontrollierter wachsen lassen ✅
 
 Größere Aufgaben brauchen größere Netze, aber unkontrolliertes Wachstum wird teuer.
 
-**Bereits implementiert:** Strukturell aktive Nodes/Connections werden erkannt (`Genome.active_structure_info()` und `memory_info()`). Population-Diagnostics enthalten durchschnittliche aktive/inaktive Connections und inaktive Hidden Nodes. `remove_node` bevorzugt inaktive Hidden Nodes, `remove_connection` bevorzugt enabled Connections, die auf keinem Input→Output-Pfad liegen.
+**Bereits implementiert:** Strukturell aktive Nodes/Connections werden erkannt (`Genome.active_structure_info()` und `memory_info()`). Population-Diagnostics enthalten durchschnittliche aktive/inaktive Connections und inaktive Hidden Nodes. `remove_node` bevorzugt inaktive Hidden Nodes, `remove_connection` bevorzugt enabled Connections, die auf keinem Input→Output-Pfad liegen. Eine optionale weiche Komplexitätsstrafe ist via `set_complexity_penalty(node_penalty, connection_penalty)` verfügbar und standardmäßig aus.
 
-Noch offen:
-
-- Weiche Komplexitätsstrafe optional einführen.
+**Noch offen:** — (alle Aufgaben sind implementiert).
 
 Nutzen:
 
 - Bessere Balance zwischen Ausdrucksstärke und Geschwindigkeit.
 
-### P1: Normalisierung als Framework-Feature
+### P1: Normalisierung als Framework-Feature ⚡
 
 Aktuell normalisieren Beispiele manuell.
 
-Aufgaben:
+**Bereits implementiert:** `ScaleNormalizer` in `yane.util.normalization` abstrahiert per-channel Input-/Output-Skalierung, normalisierte Samples und Denormalisierung. Multiplication und Pi nutzen den Normalizer; GUI-Inspect verwendet dieselben Scale-Metadaten weiter.
 
-- Input- und Output-Normalizer in `NeuroEvolution` oder ExampleConfig abstrahieren.
+Noch offen:
+
 - Standardnormalisierer: min/max, z-score, clipping, running stats.
 - Normalizer mit Genom/Experiment speichern.
-- GUI-Inspect mit Rohwerten und normalisierten Werten vereinheitlichen.
 
 Nutzen:
 
@@ -194,15 +191,14 @@ Nutzen:
 
 Persistente Node-Werte sind einfach und flexibel, aber schwer steuerbar.
 
-**Bereits implementiert:** Persistente Nodes (`persistent=True`) behalten Werte über Forward-Passes hinweg, `reset()` löscht sie. Memory-Toggle in GUI. Leaky Memory ist als evolvierbares `leak_alpha` auf Nodes implementiert (`0.0` = kein Carry, `1.0` = volle Retention), inklusive Copy/Pickle-Kompatibilität, Mutation-Clamping und Forward-Pfad-Unterstützung.
+**Bereits implementiert:** Persistente Nodes (`persistent=True`) behalten Werte über Forward-Passes hinweg, `reset()` löscht sie. Memory-Toggle in GUI. Leaky Memory ist als evolvierbares `leak_alpha` auf Nodes implementiert (`0.0` = kein Carry, `1.0` = volle Retention), inklusive Copy/Pickle-Kompatibilität, Mutation-Clamping und Forward-Pfad-Unterstützung. Zusätzlich gibt es ein evolvierbares `memory_gate` für persistente Nodes: `state = gate * old + (1 - gate) * new`.
 
 **Wichtig für sequentielle Aufgaben:** Mit einem Tick-basierten Ansatz (ein Token/Zeichen pro Tick, ein "Output-relevant"-Flag als zweiter Input) kann YANE prinzipiell lernen, sich wie ein Sprachmodell zu verhalten — ohne festes Kontextfenster, da der interne State theoretisch über beliebig viele Ticks persistiert. Der entscheidende technische Engpass dabei ist Gating: ohne gezielte Schreib-/Vergess-Kontrolle kollabiert der State bei langen Sequenzen numerisch oder das Netz kann keine selektive Retention lernen. Gating (`value = gate * old + (1 - gate) * new`) ist daher der einzige echte technische Blocker für diese Aufgabenklasse.
 
 Noch offen:
 
 - Explizite Memory Nodes als eigener NodeType prüfen.
-- Gating-Mechanismen implementieren: `value = gate * old + (1 - gate) * new`, wobei `gate` ein evolvierbarer Parameter oder ein weiterer Node-Output ist.
-- Gate-Stärke-Mutation für das spätere explizite Gating.
+- Dynamisches Gating prüfen, wobei `gate` von einem weiteren Node-Output statt nur einem evolvierbaren Parameter kommen kann.
 - Reset-Regeln klarer visualisieren.
 
 Nutzen:
@@ -541,8 +537,10 @@ Nutzen:
 - [x] Worker-Abstraktion: _run_evaluations() + EvaluationResult done; explizites Lamarck in Runner verschoben, GUI-Pfad vereinheitlicht.
 - [x] Genome-Visualisierung: Basis-Canvas + Gewichtsfarben + Aktivierungslabel + Persistent-Ring + Disabled-Connections + Innovationsnummern.
 - [x] Lamarck Rest: per-Species + Zeitmessung done; `genome.lamarck_sigma` als eigenes evolvierbares Strategy-Gen implementiert.
-- [ ] Netzwerkgröße kontrollieren: Inactive-Detection, gezieltes Pruning und Komplexitätsdiagnostik done; optionale Komplexitätsstrafe fehlt.
-- [ ] Memory-Mechanismen: Persistente Nodes + Leaky Memory done; Gating und eigener NodeType fehlen.
+- [x] Netzwerkgröße kontrollieren: Inactive-Detection, gezieltes Pruning, Komplexitätsdiagnostik und optionale Komplexitätsstrafe done.
+- [ ] Normalisierung: ScaleNormalizer done; weitere Normalizer + Persistenz fehlen.
+- [ ] Warm-Start / Transfer Learning: Checkpoint-Population importieren, filtern und Strategy-Gene resetten done; Beispiel/GUI fehlt.
+- [ ] Memory-Mechanismen: Persistente Nodes + Leaky Memory + statisches Gating done; dynamisches Gating und eigener NodeType fehlen.
 
 ### 🔲 Noch nicht begonnen
 
@@ -550,8 +548,6 @@ Nutzen:
 - [ ] Quality Diversity / MAP-Elites
 - [ ] Coevolution
 - [ ] Adaptive Populationsgröße
-- [ ] Warm-Start / Transfer Learning
-- [ ] Normalisierung als Framework-Feature
 - [ ] Modulare Subnetze
 - [ ] CPPN / Indirekte Kodierung
 - [ ] Lokale Optimierer (Simulated Annealing, CMA-ES)
