@@ -53,6 +53,7 @@ class Genome:
         self._compiled_forward = None         # cached closure; avoids attribute lookup in hot loop
         self._forward_dispatch = None         # set after first forward(); direct call from then on
         self._innov_cache: tuple | None = None  # (innov_dict, max_innov); cleared by _invalidate_topology
+        self._active_structure_cache: dict | None = None  # cleared by _invalidate_topology
         self._values_arr = None               # np.float64 array — reused node-value buffer for forward()
 
         # Output sanitizing (NaN/Inf → fallback after every forward pass)
@@ -934,6 +935,9 @@ class Genome:
         genome._forward_dispatch = None
         genome._has_cycles = self._has_cycles
         genome._values_arr = None   # fresh buffer; allocated on first forward()
+        # active_structure_cache holds only integer counts — safe to share until
+        # the copy is mutated (which calls _invalidate_topology → clears the cache).
+        genome._active_structure_cache = self._active_structure_cache
         return genome
 
     # -------------------------------------------------------------------------
@@ -956,6 +960,7 @@ class Genome:
         state['_compiled_forward'] = None
         state['_forward_dispatch'] = None
         state['_innov_cache'] = None
+        state['_active_structure_cache'] = None
         state['_values_arr'] = None   # numpy buffer; rebuilt on first forward() in subprocess
         return state
 
@@ -971,6 +976,7 @@ class Genome:
         self.__dict__.setdefault('_last_species_id', None)
         self.__dict__.setdefault('_species_stale', True)
         self.__dict__.setdefault('_values_arr', None)
+        self.__dict__.setdefault('_active_structure_cache', None)
         if 'mutation_gate_source' not in state:
             m = Mutation()
             m.bool_rate = 0.05
@@ -1031,6 +1037,7 @@ class Genome:
         self._compiled_forward = None
         self._forward_dispatch = None
         self._innov_cache = None
+        self._active_structure_cache = None
         self._species_stale = True  # topology changed → needs species re-assignment
         self._last_species_id = None  # old species ID is now stale too
         self._values_arr = None     # will be reallocated in next _compile_forward()
@@ -1051,6 +1058,9 @@ class Genome:
         an output through enabled connections.  A connection is active when it is
         enabled and both endpoints lie on such a path.
         """
+        if self._active_structure_cache is not None:
+            return self._active_structure_cache
+
         enabled_edges = [
             (src, conn.target, conn)
             for src in self.nodes
@@ -1090,7 +1100,7 @@ class Genome:
         hidden_nodes = [n for n in self.nodes if n.type is NodeType.HIDDEN]
         active_hidden = sum(1 for n in hidden_nodes if n in active_nodes)
         enabled_connections = len(enabled_edges)
-        return {
+        result = {
             "active_nodes": len(active_nodes),
             "active_hidden_nodes": active_hidden,
             "inactive_hidden_nodes": len(hidden_nodes) - active_hidden,
@@ -1099,6 +1109,8 @@ class Genome:
             "inactive_connections": self.connection_count - active_connections,
             "inactive_enabled_connections": enabled_connections - active_connections,
         }
+        self._active_structure_cache = result
+        return result
 
     def memory_info(self) -> dict:
         """Returns a breakdown of node/connection counts for memory profiling."""
@@ -1112,3 +1124,83 @@ class Genome:
             "max_connections": self.max_connections,
             **active,
         }
+
+    def sensitivity_analysis(
+        self,
+        test_cases: "list[tuple[list[float], list[float]]]",
+        delta: float = 0.1,
+    ) -> "list[float]":
+        """Per-input influence score via symmetric ±delta perturbation.
+
+        For each input *i* and each test case, the output vector is evaluated
+        with input *i* raised by *delta* and lowered by *delta*.  The mean
+        absolute output change (averaged over outputs and test cases) is the
+        influence score for input *i*.
+
+        Args:
+            test_cases: List of ``(inputs, expected)`` pairs.  Only the inputs
+                are used; expected values are ignored.
+            delta: Perturbation magnitude (default 0.1).
+
+        Returns:
+            List of ``n_inputs`` floats ≥ 0.  Higher = more influential.
+        """
+        n_inputs = len(self.input_nodes)
+        if not test_cases or n_inputs == 0:
+            return [0.0] * n_inputs
+
+        n_outputs = len(self.output_nodes)
+        denom = max(1, n_outputs) * max(1, len(test_cases)) * 2.0 * delta
+        scores = [0.0] * n_inputs
+
+        for inputs, _ in test_cases:
+            base = list(inputs)
+            for i in range(n_inputs):
+                perturbed = list(base)
+
+                perturbed[i] = base[i] + delta
+                self.reset()
+                out_plus = self._bfs_forward(perturbed)
+
+                perturbed[i] = base[i] - delta
+                self.reset()
+                out_minus = self._bfs_forward(perturbed)
+
+                scores[i] += sum(
+                    abs(op - om) for op, om in zip(out_plus, out_minus)
+                )
+
+        return [s / denom for s in scores]
+
+    def dead_nodes(
+        self,
+        test_cases: "list[tuple[list[float], list[float]]]",
+        threshold: float = 1e-6,
+    ) -> "set[int]":
+        """Return innovation IDs of hidden nodes that never activate.
+
+        A hidden node is considered dead if |activation| < *threshold* for
+        every test case.
+
+        Args:
+            test_cases: List of ``(inputs, expected)`` pairs.
+            threshold: Activation magnitude below which a node is "dead"
+                (default 1e-6).
+
+        Returns:
+            Set of innovation IDs (integers) of dead hidden nodes.
+        """
+        hidden = [n for n in self.nodes if n.type is NodeType.HIDDEN]
+        if not hidden or not test_cases:
+            return set()
+
+        dead = {n.innovation for n in hidden}
+        for inputs, _ in test_cases:
+            self.reset()
+            self._bfs_forward(list(inputs))
+            alive = {n.innovation for n in hidden if abs(n.value) >= threshold}
+            dead -= alive
+            if not dead:
+                break
+
+        return dead

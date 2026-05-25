@@ -86,7 +86,7 @@ def compatibility(g1: Genome, g2: Genome, only_enabled: bool = False) -> float:
 def _compat_python(g1_innov, g2_innov, g1_keys, g2_keys,
                    max1, max2, n1, n2) -> float:
     """Python path — optimised for small networks (N < _COMPAT_NUMPY_THRESHOLD)."""
-    if g1_keys == g2_keys:
+    if n1 == n2 and g1_keys == g2_keys:
         if n1 == 0:
             return 0.0
         weight_diff_sum = 0.0
@@ -100,24 +100,24 @@ def _compat_python(g1_innov, g2_innov, g1_keys, g2_keys,
     if N == 0:
         N = 1
 
-    matching_set = g1_keys & g2_keys
-    matching = 0
+    # Two-pass scan: avoids allocating an intermediate matching_set frozenset.
+    # Pass 1 — iterate g1: categorise each innovation as matching/excess/disjoint.
+    excess = disjoint = matching = 0
     weight_diff_sum = 0.0
-    for k in matching_set:
-        matching += 1
-        d = g1_innov[k].weight - g2_innov[k].weight
-        weight_diff_sum += d if d >= 0.0 else -d
+    for k in g1_keys:
+        if k in g2_keys:
+            matching += 1
+            d = g1_innov[k].weight - g2_innov[k].weight
+            weight_diff_sum += d if d >= 0.0 else -d
+        elif k > smaller_max:
+            excess += 1
+        else:
+            disjoint += 1
 
-    excess = disjoint = 0
-    for innov in g1_keys:
-        if innov not in matching_set:
-            if innov > smaller_max:
-                excess += 1
-            else:
-                disjoint += 1
-    for innov in g2_keys:
-        if innov not in matching_set:
-            if innov > smaller_max:
+    # Pass 2 — iterate g2: count innovations absent from g1.
+    for k in g2_keys:
+        if k not in g1_keys:
+            if k > smaller_max:
                 excess += 1
             else:
                 disjoint += 1

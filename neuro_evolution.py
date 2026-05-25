@@ -141,6 +141,11 @@ class NeuroEvolution:
         self._matrix_cache = None   # MatrixForwardCache, lazy-imported
         self._matrix_hits: int = 0
         self._matrix_misses: int = 0
+        # Structured logging options
+        self._log_format: str = "csv"           # "csv", "jsonlines", or "both"
+        self._tensorboard_logdir: Path | None = None
+        self._tensorboard_writer = None         # SummaryWriter, created lazily
+        self._log_callbacks: list[Callable] = []
 
     @property
     def current_genome(self) -> Genome | None:
@@ -773,6 +778,77 @@ class NeuroEvolution:
             from yane.evolution.matrix_export import MatrixForwardCache
             self._matrix_cache = MatrixForwardCache()
 
+    def set_log_format(self, format: str) -> None:
+        """Set the output format for training-run logs.
+
+        Args:
+            format: One of ``"csv"`` (default), ``"jsonlines"``, or ``"both"``.
+                ``"jsonlines"`` writes one JSON object per heartbeat (every 100
+                iterations) to ``fitness_history.jsonl`` — the full diagnostics
+                dict including all species, Lamarck, and adaptive stats.
+                ``"both"`` writes both the CSV and the JSONL file.
+        """
+        if format not in ("csv", "jsonlines", "both"):
+            raise ValueError(
+                f"format must be 'csv', 'jsonlines', or 'both'; got {format!r}"
+            )
+        self._log_format = format
+
+    def set_tensorboard_logdir(self, path: str | Path | None) -> None:
+        """Write scalar summaries to a TensorBoard log directory.
+
+        Requires ``torch`` or the standalone ``tensorboard`` package::
+
+            pip install torch          # or: pip install tensorboard
+
+        Each heartbeat (every 100 iterations) writes all numeric diagnostics
+        keys under the tag ``yane/<key>``.
+
+        Args:
+            path: Directory for SummaryWriter.  ``None`` disables TensorBoard.
+        Raises:
+            ImportError: If neither ``torch.utils.tensorboard`` nor
+                ``tensorboard`` is installed when *path* is not ``None``.
+        """
+        if path is None:
+            if self._tensorboard_writer is not None:
+                try:
+                    self._tensorboard_writer.close()
+                except Exception:
+                    pass
+            self._tensorboard_logdir = None
+            self._tensorboard_writer = None
+            return
+        self._tensorboard_logdir = Path(path)
+        # Validate that a SummaryWriter can be created now (fail fast).
+        try:
+            from torch.utils.tensorboard import SummaryWriter as _SW
+        except ImportError:
+            try:
+                from tensorboard.summary.writer.event_file_writer import EventFileWriter as _SW  # noqa: F401
+                from torch.utils.tensorboard import SummaryWriter as _SW  # type: ignore
+            except ImportError:
+                raise ImportError(
+                    "TensorBoard logging requires 'torch' or 'tensorboard'. "
+                    "Install it with:  pip install torch  (or pip install tensorboard)"
+                ) from None
+
+    def set_log_callbacks(
+        self,
+        on_generation: "Callable[[dict], None] | None" = None,
+    ) -> None:
+        """Register a callback called at every heartbeat with the full diagnostics dict.
+
+        The callback receives the same dict as ``population_memory_info()``
+        plus an ``"iteration"`` key.  It runs synchronously in the training
+        thread — keep it fast or offload to a queue.
+
+        Args:
+            on_generation: Callable ``fn(info: dict) -> None``.
+                Pass ``None`` to remove any existing callback.
+        """
+        self._log_callbacks = [on_generation] if on_generation is not None else []
+
     def set_curriculum(
         self,
         stages: list,
@@ -991,7 +1067,7 @@ class NeuroEvolution:
             if self._curriculum else _derive_run_name(fitness_fn)
         )
         self._log_run_name = name
-        from yane.util.logger import setup_logging as _setup, write_json as _wj, write_csv as _wc, log_info as _li
+        from yane.util.logger import setup_logging as _setup, write_json as _wj, write_csv as _wc, write_jsonl as _wjl, log_info as _li
         self._log_run_dir = _setup(name)
         _li("Training started  run_name=%s  pop_size=%d  max_iter=%s  min_fitness=%s",
             name, self._population_size, self.max_iterations, self.min_fitness)
@@ -1001,6 +1077,20 @@ class NeuroEvolution:
         _log_interval = max(1, self._population_size // 10)  # log ~10× per generation
         _csv_header = "iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections"
         _csv_path = self._log_run_dir / "fitness_history.csv"
+        _jsonl_path = self._log_run_dir / "fitness_history.jsonl"
+        _use_csv   = self._log_format in ("csv", "both")
+        _use_jsonl = self._log_format in ("jsonlines", "both")
+
+        # TensorBoard writer: create once per run if configured.
+        if self._tensorboard_logdir is not None:
+            try:
+                from torch.utils.tensorboard import SummaryWriter as _SW
+                self._tensorboard_writer = _SW(log_dir=str(self._tensorboard_logdir))
+            except Exception as _tb_err:
+                _li("TensorBoard init failed: %s", _tb_err)
+                self._tensorboard_writer = None
+        else:
+            self._tensorboard_writer = None
 
         self._n_evaluations_done = 0
         stop_reason: str | None = None
@@ -1029,23 +1119,39 @@ class NeuroEvolution:
                     self._adaptive_ctrl.tick(self._population, self._lamarck)
                 self._lamarck.reset_generation_budget()
 
-            # --- Periodic CSV logging ---------------------------------------
-            if iterations % _log_interval == 0:
-                mem = self.population_memory_info()
-                _wc(_csv_path, _csv_header,
-                    f"{iterations},"
-                    f"{mem.get('max_fitness', 0)},"
-                    f"{mem.get('avg_fitness', 0)},"
-                    f"{mem.get('median_fitness', 0)},"
-                    f"{mem.get('fitness_iqr', 0)},"
-                    f"{mem.get('species_count', 0)},"
-                    f"{mem.get('stagnation_count', 0)},"
-                    f"{mem.get('largest_genome_nodes', 0)},"
-                    f"{mem.get('largest_genome_connections', 0)}")
+            # --- Periodic CSV logging + heartbeat ---------------------------
+            _heartbeat_now = (iterations % 100 == 0)
+            _csv_now = (iterations % _log_interval == 0)
 
-            # --- Periodic heartbeat + crash-safe snapshot (every 100) -------
-            if iterations % 100 == 0:
+            if _heartbeat_now:
+                # Full diagnostics once; shared by heartbeat log and CSV.
                 mem = self.population_memory_info()
+                if _use_csv and _csv_now:
+                    _wc(_csv_path, _csv_header,
+                        f"{iterations},"
+                        f"{mem.get('max_fitness', 0)},"
+                        f"{mem.get('avg_fitness', 0)},"
+                        f"{mem.get('median_fitness', 0)},"
+                        f"{mem.get('fitness_iqr', 0)},"
+                        f"{mem.get('species_count', 0)},"
+                        f"{mem.get('stagnation_count', 0)},"
+                        f"{mem.get('largest_genome_nodes', 0)},"
+                        f"{mem.get('largest_genome_connections', 0)}")
+                if _use_jsonl:
+                    _wjl(_jsonl_path, {**mem, "iteration": iterations})
+                if self._tensorboard_writer is not None:
+                    _tb = self._tensorboard_writer
+                    for _k, _v in mem.items():
+                        if isinstance(_v, (int, float)) and _v == _v:  # skip NaN
+                            try:
+                                _tb.add_scalar(f"yane/{_k}", float(_v), iterations)
+                            except Exception:
+                                pass
+                for _cb in self._log_callbacks:
+                    try:
+                        _cb({**mem, "iteration": iterations})
+                    except Exception:
+                        pass
                 _li("iter=%d  best=%.4f  avg=%.2f  species=%d  stagn=%d  nodes=%d  conns=%d",
                     iterations,
                     mem.get("max_fitness", 0.0),
@@ -1055,6 +1161,32 @@ class NeuroEvolution:
                     mem.get("largest_genome_nodes", 0),
                     mem.get("largest_genome_connections", 0))
                 self._write_crash_snapshot(iterations, mem, _li)
+            elif _csv_now and _use_csv:
+                # Cheap path: compute only the fields the CSV needs, no BFS.
+                _pop = self._population
+                _evald = _pop._evaluated
+                if _evald:
+                    _fits = [g.raw_fitness for g in _evald]
+                    _n = len(_fits)
+                    _max_fit = max(_fits)
+                    _avg_fit = sum(_fits) / _n
+                    _sorted = sorted(_fits)
+                    _med_fit = (
+                        _sorted[_n // 2]
+                        if _n % 2
+                        else (_sorted[_n // 2 - 1] + _sorted[_n // 2]) * 0.5
+                    )
+                    _iqr_fit = _compute_fitness_iqr(_evald)
+                else:
+                    _max_fit = _avg_fit = _med_fit = _iqr_fit = 0.0
+                _all_g = _evald + list(_pop._unevaluated)
+                _max_nodes = max((len(g.nodes) for g in _all_g), default=0)
+                _max_conns = max((g.connection_count for g in _all_g), default=0)
+                _wc(_csv_path, _csv_header,
+                    f"{iterations},"
+                    f"{_max_fit},{_avg_fit},{_med_fit},{_iqr_fit},"
+                    f"{_pop.species_count},{_pop.stagnation_count},"
+                    f"{_max_nodes},{_max_conns}")
 
             # --- Curriculum stage advancement --------------------------------
             _stage_advanced = False
@@ -1117,6 +1249,12 @@ class NeuroEvolution:
 
         # --- End-of-run artefacts -------------------------------------------
         self._write_run_summary(name, stop_reason, iterations, _wj, _li)
+        if self._tensorboard_writer is not None:
+            try:
+                self._tensorboard_writer.close()
+            except Exception:
+                pass
+            self._tensorboard_writer = None
 
         return iterations
 

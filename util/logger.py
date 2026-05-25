@@ -150,6 +150,12 @@ def write_csv(path: Path, header: str, row: str) -> None:
         f.write(row + "\n")
 
 
+def write_jsonl(path: Path, data: dict) -> None:
+    """Append *data* as a JSON line to *path*."""
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(data, default=str) + "\n")
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

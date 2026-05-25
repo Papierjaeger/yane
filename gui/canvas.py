@@ -864,3 +864,254 @@ class FitnessHistogram(QWidget):
 
 
 from yane.gui.quality_widgets import MapElitesHeatmap, ParetoScatter  # noqa: E402,F401
+
+
+# ---------------------------------------------------------------------------
+# SensitivityChart — horizontal bar chart of per-input influence scores
+# ---------------------------------------------------------------------------
+
+class SensitivityChart(QWidget):
+    """Horizontal bar chart showing per-input influence scores from sensitivity analysis."""
+
+    _C_BAR_POS = QColor("#89b4fa")   # blue — influence score
+    _C_ZERO    = QColor("#45475a")   # dim — zero/negligible bar
+    _C_TEXT    = QColor("#cdd6f4")
+    _C_TITLE   = QColor("#a6adc8")
+    _C_DEAD    = QColor("#f38ba8")   # red — dead-node marker
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._scores: list[float] = []
+        self._labels: list[str] = []
+        self._dead_nodes: set = set()
+        self._dead_label: str = ""
+        self.setMinimumHeight(80)
+
+    def set_data(
+        self,
+        scores: list[float],
+        labels: list[str] | None = None,
+        dead_nodes: set | None = None,
+        dead_label: str = "",
+    ) -> None:
+        self._scores = list(scores)
+        self._labels = labels or [f"I{i}" for i in range(len(scores))]
+        self._dead_nodes = dead_nodes or set()
+        self._dead_label = dead_label
+        self.update()
+
+    def clear(self) -> None:
+        self._scores = []
+        self._labels = []
+        self._dead_nodes = set()
+        self._dead_label = ""
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
+        w, h = self.width(), self.height()
+        painter.fillRect(0, 0, w, h, _C_BG)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        scores = self._scores
+        if not scores:
+            painter.setPen(self._C_TITLE)
+            painter.drawText(QRectF(0, 0, w, h),
+                             Qt.AlignmentFlag.AlignCenter,
+                             "Sensitivitätsanalyse — kein Genom geladen")
+            return
+
+        pad_l, pad_r, pad_t, pad_b = 38, 8, 18, (28 if self._dead_label else 6)
+        chart_w = max(1, w - pad_l - pad_r)
+        n = len(scores)
+        bar_h_avail = max(1, h - pad_t - pad_b)
+        bar_h = max(6, min(22, bar_h_avail // max(1, n) - 3))
+        spacing = max(2, (bar_h_avail - n * bar_h) // max(1, n + 1))
+        max_score = max(scores) if scores else 0.0
+
+        font = QFont()
+        font.setPixelSize(10)
+        painter.setFont(font)
+
+        for i, (score, label) in enumerate(zip(scores, self._labels)):
+            y = pad_t + i * (bar_h + spacing)
+            ratio = (score / max_score) if max_score > 1e-12 else 0.0
+            bw = int(chart_w * ratio)
+
+            color = self._C_BAR_POS if ratio > 0.01 else self._C_ZERO
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            if bw > 0:
+                painter.drawRoundedRect(QRectF(pad_l, y, bw, bar_h), 2, 2)
+
+            painter.setPen(self._C_TEXT)
+            painter.drawText(QRectF(0, y, pad_l - 2, bar_h),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             label)
+            if max_score > 1e-12:
+                painter.drawText(QRectF(pad_l + bw + 3, y, 50, bar_h),
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                 f"{score:.3f}")
+
+        # Dead-node summary line
+        if self._dead_label:
+            painter.setPen(self._C_DEAD)
+            painter.drawText(QRectF(0, h - pad_b + 2, w, pad_b - 2),
+                             Qt.AlignmentFlag.AlignCenter,
+                             self._dead_label)
+
+    def sizeHint(self) -> QSize:
+        n = max(1, len(self._scores))
+        return QSize(260, max(80, n * 28 + 30))
+
+
+# ---------------------------------------------------------------------------
+# MultiRunChart — overlaid fitness curves for up to 4 runs
+# ---------------------------------------------------------------------------
+
+class MultiRunChart(QWidget):
+    """Shows overlaid best-fitness curves for up to 4 runs.
+
+    Each run is one entry in ``self._runs``:
+        {"name": str, "iterations": [int, ...], "best_fitness": [float, ...]}
+    """
+
+    _COLORS = [
+        QColor("#89b4fa"),   # blue
+        QColor("#a6e3a1"),   # green
+        QColor("#fab387"),   # peach
+        QColor("#cba6f7"),   # mauve
+    ]
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._runs: list[dict] = []
+        self.setMinimumHeight(160)
+
+    def set_runs(self, runs: list[dict]) -> None:
+        self._runs = runs[:4]
+        self.update()
+
+    def clear(self) -> None:
+        self._runs = []
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
+        w, h = self.width(), self.height()
+        painter.fillRect(0, 0, w, h, _C_BG)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        runs = self._runs
+        if not runs:
+            painter.setPen(_C_TEXT)
+            painter.drawText(QRectF(0, 0, w, h),
+                             Qt.AlignmentFlag.AlignCenter,
+                             "Keine Runs geladen — Runs auswählen um Kurven anzuzeigen")
+            return
+
+        # Collect axis bounds across all runs
+        all_iter: list[int] = []
+        all_fit: list[float] = []
+        for run in runs:
+            all_iter.extend(run.get("iterations", []))
+            all_fit.extend(run.get("best_fitness", []))
+
+        if not all_iter or not all_fit:
+            return
+
+        iter_max = max(all_iter)
+        fit_min, fit_max = min(all_fit), max(all_fit)
+        if fit_max == fit_min:
+            fit_max = fit_min + 1.0
+
+        pad_l, pad_r, pad_t, pad_b = 48, 14, 14, 28
+        chart_w = max(1, w - pad_l - pad_r)
+        chart_h = max(1, h - pad_t - pad_b)
+
+        # Grid lines
+        painter.setPen(QPen(_C_GRID, 1))
+        for step in range(4):
+            gy = pad_t + step * chart_h // 3
+            painter.drawLine(pad_l, gy, w - pad_r, gy)
+
+        # Axis labels
+        font = QFont()
+        font.setPixelSize(9)
+        painter.setFont(font)
+        painter.setPen(_C_TEXT)
+        for i in range(4):
+            val = fit_max - i * (fit_max - fit_min) / 3
+            gy = int(pad_t + i * chart_h / 3)
+            painter.drawText(0, gy - 4, pad_l - 3, 12,
+                             Qt.AlignmentFlag.AlignRight, f"{val:.2f}")
+
+        # Curves
+        for run_idx, run in enumerate(runs):
+            iters = run.get("iterations", [])
+            fits  = run.get("best_fitness", [])
+            if len(iters) < 2:
+                continue
+
+            color = self._COLORS[run_idx % len(self._COLORS)]
+            pen = QPen(color, 1.8)
+            painter.setPen(pen)
+
+            points = []
+            for it, ft in zip(iters, fits):
+                px = pad_l + int(chart_w * it / iter_max) if iter_max > 0 else pad_l
+                py = pad_t + int(chart_h * (1.0 - (ft - fit_min) / (fit_max - fit_min)))
+                points.append(QPointF(px, py))
+
+            path = QPainterPath()
+            path.moveTo(points[0])
+            for pt in points[1:]:
+                path.lineTo(pt)
+            painter.drawPath(path)
+
+        # Legend
+        legend_x = pad_l + 4
+        legend_y = pad_t + 4
+        font.setPixelSize(10)
+        painter.setFont(font)
+        for run_idx, run in enumerate(runs):
+            color = self._COLORS[run_idx % len(self._COLORS)]
+            painter.setBrush(QBrush(color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(QRectF(legend_x, legend_y, 7, 7))
+            painter.setPen(color)
+            name = run.get("name", f"Run {run_idx + 1}")
+            painter.drawText(legend_x + 10, legend_y + 8, name)
+            legend_x += 12 + len(name) * 5 + 10
+
+        # X-axis iteration label
+        painter.setPen(_C_TEXT)
+        painter.drawText(QRectF(0, h - pad_b, w, pad_b),
+                         Qt.AlignmentFlag.AlignCenter,
+                         f"Iterationen (0 – {iter_max})")
+
+    def export_png(self, path: str) -> None:
+        """Render the chart to a PNG file."""
+        from PySide6.QtGui import QPixmap, QPainter as QP
+        from PySide6.QtCore import Qt as Qt_
+        px = QPixmap(self.size())
+        px.fill(Qt_.GlobalColor.transparent)
+        p = QP(px)
+        self._paint(p)
+        p.end()
+        px.save(path, "PNG")
+
+    def sizeHint(self) -> QSize:
+        return QSize(400, 220)

@@ -9,6 +9,7 @@ from yane.gui.panels.left_panel import LeftPanel
 from yane.gui.tabs.training_tab import TrainingTab
 from yane.gui.tabs.inspect_tab import InspectTab
 from yane.gui.tabs.aux_tabs import ServerTab, DebugTab
+from yane.gui.tabs.comparison_tab import ComparisonTab
 
 # ---------------------------------------------------------------------------
 # Stylesheet
@@ -123,14 +124,16 @@ class MainWindow(QMainWindow):
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
         tabs = self._tabs
-        self._training_tab = TrainingTab()
-        self._inspect_tab  = InspectTab()
-        self._server_tab   = ServerTab()
-        self._debug_tab    = DebugTab()
-        tabs.addTab(self._training_tab, "  Training  ")
-        tabs.addTab(self._inspect_tab,  "  Inspect  ")
-        tabs.addTab(self._server_tab,   "  API Server  ")
-        tabs.addTab(self._debug_tab,    "  Debug  ")
+        self._training_tab    = TrainingTab()
+        self._inspect_tab     = InspectTab()
+        self._comparison_tab  = ComparisonTab()
+        self._server_tab      = ServerTab()
+        self._debug_tab       = DebugTab()
+        tabs.addTab(self._training_tab,   "  Training  ")
+        tabs.addTab(self._inspect_tab,    "  Inspect  ")
+        tabs.addTab(self._comparison_tab, "  Vergleich  ")
+        tabs.addTab(self._server_tab,     "  API Server  ")
+        tabs.addTab(self._debug_tab,      "  Debug  ")
 
         self._training_tab.genome_updated.connect(self._left.update_genome)
         self._training_tab.genome_updated.connect(self._on_genome_for_inspect)
@@ -168,6 +171,8 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index: int) -> None:
         if self._tabs.widget(index) is self._inspect_tab:
             self._tabs.setTabText(1, "  Inspect  ")
+        elif self._tabs.widget(index) is self._comparison_tab:
+            self._comparison_tab.refresh()
 
     def closeEvent(self, event) -> None:
         w = self._training_tab._worker

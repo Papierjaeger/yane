@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from yane.gui._helpers import _label, _divider
+from yane.gui.canvas import SensitivityChart
 
 
 def _fmt_value(v: float, denormalized: bool) -> str:
@@ -358,6 +359,21 @@ class InspectTab(QWidget):
         seq_outer_layout.addWidget(self._acc_fitness_lbl)
 
         layout.addWidget(self._seq_group)
+
+        # ── Sensitivity Analysis ────────────────────────────────────────
+        self._sens_group = QGroupBox("Sensitivitätsanalyse (Input-Einfluss + Tote Knoten)")
+        sens_layout = QVBoxLayout(self._sens_group)
+        self._sensitivity_chart = SensitivityChart()
+        self._sensitivity_chart.setMinimumHeight(60)
+        sens_layout.addWidget(self._sensitivity_chart)
+        self._sens_info_lbl = _label(
+            "Analysiert den Einfluss jedes Inputs und erkennt nie-aktive Hidden-Knoten.",
+            "sectionTitle"
+        )
+        self._sens_info_lbl.setWordWrap(True)
+        sens_layout.addWidget(self._sens_info_lbl)
+        layout.addWidget(self._sens_group)
+
         layout.addStretch()
 
     # ------------------------------------------------------------------
@@ -392,6 +408,7 @@ class InspectTab(QWidget):
                 row.clear()
             self._acc_fitness_lbl.setText("")
         self._update_seq_buttons()
+        self._sensitivity_chart.clear()
 
     def update_genome(self, genome, mem: dict) -> None:
         self._pending_genome = genome
@@ -428,6 +445,7 @@ class InspectTab(QWidget):
         else:
             self._update_memory_display()
         self._update_seq_buttons()
+        self._update_sensitivity(genome)
 
     # ------------------------------------------------------------------
 
@@ -723,6 +741,31 @@ class InspectTab(QWidget):
         if not (self._example.input_scale or self._example.output_scale):
             return False
         return self.chk_denormalize.isChecked()
+
+    def _update_sensitivity(self, genome) -> None:
+        """Run sensitivity analysis and dead-node detection; update chart."""
+        tc = self._example.test_cases if self._example else None
+        if not tc or genome is None:
+            self._sensitivity_chart.clear()
+            return
+        try:
+            scores = genome.sensitivity_analysis(tc, delta=0.1)
+            dead = genome.dead_nodes(tc)
+        except Exception:
+            self._sensitivity_chart.clear()
+            return
+
+        n_inputs = self._example.n_inputs if self._example else len(scores)
+        labels = [f"I{i}" for i in range(n_inputs)]
+
+        dead_label = ""
+        if dead:
+            node_ids = ", ".join(f"#{nid}" for nid in sorted(dead))
+            dead_label = f"Tote Hidden-Knoten: {node_ids}"
+
+        self._sensitivity_chart.set_data(scores, labels, dead, dead_label)
+        # Resize chart height to number of inputs
+        self._sensitivity_chart.setMinimumHeight(max(60, len(scores) * 28 + 30))
 
     def _on_denormalize_toggled(self, _checked: bool) -> None:
         if not self._example:
