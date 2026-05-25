@@ -234,6 +234,18 @@ yane.set_adaptive_recovery(
 
 Bei Diversity-Kollaps oder festgefahrener Speziation kann YANE automatisch Gegenmaßnahmen auslösen: zusätzliche diverse Genome, Teil-Restarts der schwächsten Populationsteile oder ein temporärer Lamarck-Budget-Burst. Early Stopping greift nur konservativ, wenn lange keine Verbesserung auftritt und zusätzlich ein Diversity-/Recovery-Signal vorliegt. Diagnostics stehen unter `recovery_events`, `recovery_success_rate`, `no_improvement_generations` und `early_stop_triggered`.
 
+### Evaluation-Middleware
+
+```python
+from yane.evolution.eval_middleware import CachingMiddleware, RetryMiddleware, TimingMiddleware
+
+yane.add_eval_middleware(CachingMiddleware(maxsize=512))
+yane.add_eval_middleware(RetryMiddleware(n=3))
+yane.add_eval_middleware(TimingMiddleware())
+```
+
+Middleware wird in LIFO-Reihenfolge ausgeführt: die zuletzt hinzugefügte Schicht läuft außen. Eingebaute Middleware deckt Genome-Fitness-Caching, Retry für instabile Evaluatoren und Timing-Diagnostics ab. `clear_eval_middleware()` entfernt den Stack wieder.
+
 - `aggregation`: `"mean"` (Standard), `"median"` (robust gegen Ausreißer) oder `"min"` (konservativster Worst-Case)
 - `sigma_penalty`: zieht `sigma_penalty × Standardabweichung` vom Ergebnis ab; bestraft hochvariante Genome unabhängig von der Aggregationsmethode
 - Kosten: `n` Fitnessfunktionsaufrufe pro Genom statt 1

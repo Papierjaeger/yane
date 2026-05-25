@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Neue P0/P1-Bausteine implementiert: Self-Tuning-Speziation mit Zielbereich, Anytime-Evaluation, Adaptive Recovery System, strukturierte Evaluator-Komponenten, Populations-Analyse-API und Generationsanzeige/Logging. Offener P0-Schwerpunkt: vollstaendige GUI-/Benchmark-Ablation fuer EvaluatorSpec. Teststand: `824 passed`.
+**Aktueller Stand:** Neue P0/P1-Bausteine implementiert: Self-Tuning-Speziation mit Zielbereich, Anytime-Evaluation, Adaptive Recovery System, strukturierte Evaluator-Komponenten, Evaluation-Middleware-Basis, Populations-Analyse-API und Generationsanzeige/Logging. Offener P0-Schwerpunkt: vollstaendige GUI-/Benchmark-Ablation fuer EvaluatorSpec. Teststand: `827 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -336,24 +336,32 @@ Die Selektionsstrategie (Tournament) ist fest in `population.py` verdrahtet; kei
 - Diagnostics: aktive Strategie, Durchschnittsfitness der selektierten vs. nicht-selektierten Genome.
 - Tests: jede Strategie gibt korrekte Anzahl Genome zurueck; Fitness-Proportional ist stochastisch korrekt.
 
-### 🔲 P1 Evaluation-Middleware-Stack
+### ⚡ P1 Evaluation-Middleware-Stack
 
 Evaluatoren sind einfache Callables ohne Kompositionsmechanismus; Caching, Normierung und Noise-Injection muessen pro Evaluator manuell implementiert werden.
 
-**Aktueller Stand:** `fitness_fn` ist ein einfaches Callable `(genome) -> float`. `EvaluationRunner` fuehrt Multi-Eval und Aggregation durch, aber nur fuer das Wiederholungs-Muster (n x evaluate). Kein Middleware-Stack, kein Genome-Level-Caching, kein Timing-Wrapper. Die neuen strukturierten Evaluator-Komponenten (P0) liefern konkrete Anforderungen: Komponenten-Scores muessen sichtbar, cachebar und getrennt aggregierbar sein.
+**Aktueller Stand:** Basis implementiert in `evolution/eval_middleware.py`.
+`NeuroEvolution.add_eval_middleware()` und `clear_eval_middleware()` sind
+verfuegbar; Middleware laeuft in LIFO-Reihenfolge. Eingebaut sind
+`CachingMiddleware`, `TimingMiddleware` und `RetryMiddleware` inklusive
+Diagnostics. Offen: `ComponentMiddleware`, `CaseBatchMiddleware` und GUI-
+Anzeige fuer Komponentenwerte.
 
-- `EvalMiddleware`-Protokoll: `__call__(genome, eval_fn, ctx) -> float`.
-- Eingebaute Middleware: `CachingMiddleware(maxsize=512)` (Genome-Hash → Fitness), `NoiseMiddleware(sigma=0.05)` (Input-Perturbation), `TimingMiddleware` (Eval-Zeit pro Genom), `RetryMiddleware(n=3, aggregation="mean")`.
+- ✅ `EvalMiddleware`-Protokoll: `__call__(genome, eval_fn, ctx) -> float`.
+- ✅ Eingebaute Middleware: `CachingMiddleware(maxsize=512)` (Genome-Hash → Fitness), `TimingMiddleware` (Eval-Zeit pro Genom), `RetryMiddleware(n=3, aggregation="mean")`.
+- `NoiseMiddleware(sigma=0.05)` (Input-Perturbation).
 - `ComponentMiddleware`: fuehrt mehrere benannte Fitness-Komponenten aus und
   schreibt Rohwerte + gewichteten Gesamtwert in Diagnostics.
 - `CaseBatchMiddleware`: evaluiert feste Case-Listen (Train/Validation) mit
   konfigurierbarer Aggregation; Grundlage fuer MultiStart- und Curriculum-
   Beispiele.
-- `yane.add_eval_middleware(mw)` haengt in die Kette ein.
-- Middleware-Reihenfolge: LIFO (zuletzt hinzugefuegt = aeussere Schicht).
-- Diagnostics: Cache-Hit-Rate, Durchschnittliche Eval-Zeit, Retry-Rate,
+- ✅ `yane.add_eval_middleware(mw)` haengt in die Kette ein.
+- ✅ Middleware-Reihenfolge: LIFO (zuletzt hinzugefuegt = aeussere Schicht).
+- ⚡ Diagnostics: Cache-Hit-Rate, Durchschnittliche Eval-Zeit, Retry-Rate,
   Komponenten-Rohwerte, Komponenten-Gewichte, Case-Erfolgsraten.
-- Tests: Middleware-Reihenfolge korrekt; Komponentenwerte bleiben getrennt
+- ⚡ Tests: Middleware-Reihenfolge korrekt; Cache invalidiert bei Gewichts-/
+  Topologie-Aenderung; Retry wiederholt instabile Evaluatoren. Offen:
+  Komponentenwerte bleiben getrennt
   sichtbar; Cache nutzt Genome-Fingerprint und invalidiert bei Gewichts-/Topologie-
   Aenderung; Validation-Cases beeinflussen die Selektion nicht.
 

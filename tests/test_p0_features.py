@@ -159,6 +159,90 @@ def test_adaptive_recovery_guarded_early_stop_requires_signal():
     assert yane.stopped_early is True
 
 
+def test_eval_middleware_lifo_order_and_diagnostics():
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    calls = []
+
+    def first(genome, eval_fn, ctx):
+        calls.append("first_before")
+        value = eval_fn(genome)
+        calls.append("first_after")
+        ctx.diagnostics["first"] = True
+        return value
+
+    def second(genome, eval_fn, ctx):
+        calls.append("second_before")
+        value = eval_fn(genome)
+        calls.append("second_after")
+        ctx.diagnostics["second"] = True
+        return value
+
+    yane.add_eval_middleware(first)
+    yane.add_eval_middleware(second)
+    g = yane.population.select_for_evaluation()
+    result = yane._run_evaluations(g, lambda _g: 1.0)
+    assert result.fitness == 1.0
+    assert calls == ["second_before", "first_before", "first_after", "second_after"]
+    info = yane.population_memory_info()
+    assert info["eval_middleware"]["first"] is True
+    assert info["eval_middleware"]["second"] is True
+
+
+def test_caching_middleware_invalidates_on_weight_change():
+    from yane.evolution.eval_middleware import CachingMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    cache = CachingMiddleware(maxsize=8)
+    yane.add_eval_middleware(cache)
+    g = yane.population.select_for_evaluation()
+    from yane.core.connection import Connection
+    conn = Connection(g.output_nodes[0], innovation=yane._tracker.get_connection(
+        g.input_nodes[0].innovation,
+        g.output_nodes[0].innovation,
+    ))
+    g.input_nodes[0].connections.append(conn)
+    g._invalidate_topology()
+    calls = {"n": 0}
+
+    def fitness(_g):
+        calls["n"] += 1
+        return float(calls["n"])
+
+    assert yane._run_evaluations(g, fitness).fitness == 1.0
+    assert yane._run_evaluations(g, fitness).fitness == 1.0
+    conn.weight += 0.25
+    assert yane._run_evaluations(g, fitness).fitness == 2.0
+    assert cache.hits == 1
+    assert cache.misses == 2
+
+
+def test_retry_middleware_retries_flaky_evaluator():
+    from yane.evolution.eval_middleware import RetryMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    yane.add_eval_middleware(RetryMiddleware(n=3, aggregation="mean"))
+    g = yane.population.select_for_evaluation()
+    calls = {"n": 0}
+
+    def flaky(_g):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("temporary")
+        return 4.0
+
+    result = yane._run_evaluations(g, flaky)
+    assert result.fitness == 4.0
+    assert calls["n"] == 3
+    assert yane.population_memory_info()["eval_middleware"]["retry_count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Event System
 # ---------------------------------------------------------------------------

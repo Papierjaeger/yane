@@ -29,6 +29,7 @@ from yane.evolution.evaluation import (  # noqa: F401  (EvaluationResult re-expo
     EvaluationRunner,
     aggregate_fitnesses,
 )
+from yane.evolution.eval_middleware import EvalContext, EvalMiddleware, apply_middleware
 from yane.evolution.fitness_finalization import (
     FitnessFinalizationConfig,
     finalize_fitness_value,
@@ -110,6 +111,8 @@ class NeuroEvolution:
         self._module_insert_rate: float = 0.0
         # Multi-eval + early stopping
         self._runner = EvaluationRunner()
+        self._eval_middlewares: list[EvalMiddleware] = []
+        self._eval_middleware_diagnostics: dict = {}
         # Elitism (applied to population on configure())
         self._elite_count: int = 1
         self._species_elite_count: int = 1
@@ -566,6 +569,19 @@ class NeuroEvolution:
             promotion_frac=promotion_frac,
             aggregation=aggregation,
         )
+
+    def add_eval_middleware(self, middleware: EvalMiddleware) -> None:
+        """Add evaluation middleware.
+
+        Middleware order is LIFO: the most recently added middleware wraps the
+        existing chain and sees the evaluation first.
+        """
+        self._eval_middlewares.append(middleware)
+
+    def clear_eval_middleware(self) -> None:
+        """Remove all evaluation middleware and reset middleware diagnostics."""
+        self._eval_middlewares.clear()
+        self._eval_middleware_diagnostics = {}
 
     def set_fitness_sanitizing(
         self,
@@ -1071,6 +1087,7 @@ class NeuroEvolution:
             "anytime_max_evals": self._runner.anytime_max_evals,
             "anytime_promotion_frac": self._runner.anytime_promotion_frac,
             "anytime_aggregation": self._runner.anytime_aggregation,
+            "eval_middleware_count": len(self._eval_middlewares),
             # Lamarck
             "lamarck_mode": self._lamarck.mode,
             "lamarck_steps": self._lamarck.steps,
@@ -1602,6 +1619,9 @@ class NeuroEvolution:
                     if self._runner.anytime_promoted_variances else 0.0
                 ),
             })
+        if self._eval_middlewares:
+            info["eval_middleware_count"] = len(self._eval_middlewares)
+            info["eval_middleware"] = dict(self._eval_middleware_diagnostics)
         return info
 
     def set_target_species(
@@ -2387,6 +2407,18 @@ class NeuroEvolution:
     ) -> EvaluationResult:
         if self._matrix_forward_enabled:
             return self._run_with_matrix_forward(genome, fitness_fn)
+        if self._eval_middlewares:
+            import inspect
+            if not inspect.isgeneratorfunction(fitness_fn):
+                original_fn = fitness_fn
+
+                def _wrapped(g: Genome):
+                    ctx = EvalContext()
+                    value = apply_middleware(g, original_fn, self._eval_middlewares, ctx)
+                    self._eval_middleware_diagnostics.update(ctx.diagnostics)
+                    return value
+
+                fitness_fn = _wrapped
         return self._runner.run(genome, fitness_fn, self._population, self._lamarck)
 
     def _run_with_matrix_forward(
@@ -2412,6 +2444,18 @@ class NeuroEvolution:
         else:
             self._matrix_misses += 1
         try:
+            if self._eval_middlewares:
+                import inspect
+                if not inspect.isgeneratorfunction(fitness_fn):
+                    original_fn = fitness_fn
+
+                    def _wrapped(g: Genome):
+                        ctx = EvalContext()
+                        value = apply_middleware(g, original_fn, self._eval_middlewares, ctx)
+                        self._eval_middleware_diagnostics.update(ctx.diagnostics)
+                        return value
+
+                    fitness_fn = _wrapped
             return self._runner.run(genome, fitness_fn, self._population, self._lamarck)
         finally:
             if patched:
