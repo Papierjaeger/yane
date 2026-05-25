@@ -10,6 +10,7 @@ from yane.gui.tabs.training_tab import TrainingTab
 from yane.gui.tabs.inspect_tab import InspectTab
 from yane.gui.tabs.aux_tabs import ServerTab, DebugTab
 from yane.gui.tabs.comparison_tab import ComparisonTab
+from yane.gui.tabs.runs_tab import RunsTab
 
 # ---------------------------------------------------------------------------
 # Stylesheet
@@ -127,11 +128,13 @@ class MainWindow(QMainWindow):
         self._training_tab    = TrainingTab()
         self._inspect_tab     = InspectTab()
         self._comparison_tab  = ComparisonTab()
+        self._runs_tab        = RunsTab()
         self._server_tab      = ServerTab()
         self._debug_tab       = DebugTab()
         tabs.addTab(self._training_tab,   "  Training  ")
         tabs.addTab(self._inspect_tab,    "  Inspect  ")
         tabs.addTab(self._comparison_tab, "  Vergleich  ")
+        tabs.addTab(self._runs_tab,       "  Runs  ")
         tabs.addTab(self._server_tab,     "  API Server  ")
         tabs.addTab(self._debug_tab,      "  Debug  ")
 
@@ -173,6 +176,8 @@ class MainWindow(QMainWindow):
             self._tabs.setTabText(1, "  Inspect  ")
         elif self._tabs.widget(index) is self._comparison_tab:
             self._comparison_tab.refresh()
+        elif self._tabs.widget(index) is self._runs_tab:
+            self._runs_tab._refresh()
 
     def closeEvent(self, event) -> None:
         w = self._training_tab._worker
