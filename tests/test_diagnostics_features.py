@@ -603,7 +603,9 @@ class TestRunDatabase(unittest.TestCase):
             self.assertIn("run_log", run.artifacts)
             self.assertIn("fitness_history_csv", run.artifacts)
             self.assertIn("best_genome_pkl", run.artifacts)
-            self.assertIn("summary_json", run.artifacts)
+            # config.json and summary.json are not written when a DB is active
+            self.assertNotIn("config_json", run.artifacts)
+            self.assertNotIn("summary_json", run.artifacts)
 
     def test_diagnostics_contains_full_mem(self):
         with tempfile.TemporaryDirectory() as tmp:

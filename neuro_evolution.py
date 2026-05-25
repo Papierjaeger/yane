@@ -1271,7 +1271,8 @@ class NeuroEvolution:
         self._log_run_dir = _setup(name)
         _li("Training started  run_name=%s  pop_size=%d  max_iter=%s  min_fitness=%s",
             name, self._population_size, self.max_iterations, self.min_fitness)
-        _wj(self._log_run_dir / "config.json", self._config_dict())
+        if self._run_database is None:
+            _wj(self._log_run_dir / "config.json", self._config_dict())
 
         # --- Run tracking ----------------------------------------------------
         import uuid as _uuid
@@ -2824,22 +2825,23 @@ class NeuroEvolution:
         pkl_path = self._log_run_dir / "best_genome.pkl"
         pkl_path.write_bytes(pickle.dumps(best))
         mem = self.population_memory_info()
-        _wj(self._log_run_dir / "summary.json", {
-            "run_name": name,
-            "stop_reason": stop_reason or "manual",
-            "iterations": iterations,
-            "best_fitness": best.fitness,
-            "best_nodes": len(best.nodes),
-            "best_connections": best.connection_count,
-            "final_species_count": mem.get("species_count", 0),
-            "final_stagnation": mem.get("stagnation_count", 0),
-            "n_evaluations_done":       self._n_evaluations_done,
-            "lamarck_n_applied":        mem.get("lamarck_n_applied", 0),
-            "lamarck_n_steps_total":    mem.get("lamarck_n_steps_total", 0),
-            "lamarck_n_blocked_top_k":  mem.get("lamarck_n_blocked_top_k", 0),
-            "n_invalid_fitness":        mem.get("n_invalid_fitness", 0),
-            "n_clipped_fitness":        mem.get("n_clipped_fitness", 0),
-        })
+        if self._run_database is None:
+            _wj(self._log_run_dir / "summary.json", {
+                "run_name": name,
+                "stop_reason": stop_reason or "manual",
+                "iterations": iterations,
+                "best_fitness": best.fitness,
+                "best_nodes": len(best.nodes),
+                "best_connections": best.connection_count,
+                "final_species_count": mem.get("species_count", 0),
+                "final_stagnation": mem.get("stagnation_count", 0),
+                "n_evaluations_done":       self._n_evaluations_done,
+                "lamarck_n_applied":        mem.get("lamarck_n_applied", 0),
+                "lamarck_n_steps_total":    mem.get("lamarck_n_steps_total", 0),
+                "lamarck_n_blocked_top_k":  mem.get("lamarck_n_blocked_top_k", 0),
+                "n_invalid_fitness":        mem.get("n_invalid_fitness", 0),
+                "n_clipped_fitness":        mem.get("n_clipped_fitness", 0),
+            })
         _li("Training finished  best_fitness=%.6f  nodes=%d  connections=%d  iterations=%d  "
             "stop_reason=%s  evals=%d  lamarck_applied=%d  lamarck_blocked_top_k=%d",
             best.fitness, len(best.nodes), best.connection_count, iterations,
@@ -2857,12 +2859,10 @@ class NeuroEvolution:
                 artifacts = {
                     "log_dir": str(self._log_run_dir),
                     "run_log": str(self._log_run_dir / "run.log"),
-                    "config_json": str(self._log_run_dir / "config.json"),
                     "fitness_history_csv": str(_csv_path),
                     "fitness_history_jsonl": str(
                         self._log_run_dir / "fitness_history.jsonl"
                     ),
-                    "summary_json": str(self._log_run_dir / "summary.json"),
                     "best_genome_pkl": str(self._log_run_dir / "best_genome.pkl"),
                 }
                 self._run_database.finish_run(
