@@ -221,6 +221,19 @@ Für stochastische Umgebungen, in denen eine einzelne Episode zu verrauscht ist.
 
 `set_anytime_eval(...)` spart Evaluationsbudget: jedes Genom erhält zuerst ein kleines Budget, nur konkurrenzfähige Genome werden für zusätzliche Wiederholungen promotet. Diagnostics wie `anytime_avg_evals_per_genome`, `anytime_saved_evals` und `anytime_promotion_rate` stehen in `population_memory_info()`.
 
+### Adaptive Recovery
+
+```python
+yane.set_adaptive_recovery(
+    enabled=True,
+    strategies=["diversity_boost", "partial_restart", "lamarck_burst"],
+    cooldown=20,
+    early_stopping_patience=500,
+)
+```
+
+Bei Diversity-Kollaps oder festgefahrener Speziation kann YANE automatisch Gegenmaßnahmen auslösen: zusätzliche diverse Genome, Teil-Restarts der schwächsten Populationsteile oder ein temporärer Lamarck-Budget-Burst. Early Stopping greift nur konservativ, wenn lange keine Verbesserung auftritt und zusätzlich ein Diversity-/Recovery-Signal vorliegt. Diagnostics stehen unter `recovery_events`, `recovery_success_rate`, `no_improvement_generations` und `early_stop_triggered`.
+
 - `aggregation`: `"mean"` (Standard), `"median"` (robust gegen Ausreißer) oder `"min"` (konservativster Worst-Case)
 - `sigma_penalty`: zieht `sigma_penalty × Standardabweichung` vom Ergebnis ab; bestraft hochvariante Genome unabhängig von der Aggregationsmethode
 - Kosten: `n` Fitnessfunktionsaufrufe pro Genom statt 1

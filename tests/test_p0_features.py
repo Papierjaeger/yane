@@ -92,6 +92,73 @@ def test_neuroevolution_target_species_none_disables_tuning():
     assert yane.population_memory_info()["species_tuning_enabled"] is False
 
 
+def test_adaptive_recovery_diversity_boost_injects_genomes():
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(2, 1)
+    yane.set_adaptive_recovery(warmup=0, cooldown=2, injection_frac=0.2)
+    pop = yane.population
+    for i in range(10):
+        g = pop.select_for_evaluation()
+        pop.submit(g, 1.0 if i == 0 else 0.0)
+    before = pop._n_diversity_injection
+    mem = yane.population_memory_info()
+    mem.update({"fitness_iqr": 0.0, "generation": 10})
+    yane._tick_adaptive_recovery(mem, 100, lambda *_args: None)
+    assert pop._n_diversity_injection > before
+    assert yane.population_memory_info()["recovery_events"]
+
+
+def test_adaptive_recovery_cooldown_prevents_repeated_trigger():
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(2, 1)
+    yane.set_adaptive_recovery(warmup=0, cooldown=10, injection_frac=0.1)
+    pop = yane.population
+    for i in range(10):
+        g = pop.select_for_evaluation()
+        pop.submit(g, float(i))
+    mem = yane.population_memory_info()
+    mem.update({"fitness_iqr": 0.0, "generation": 10})
+    yane._tick_adaptive_recovery(mem, 100, lambda *_args: None)
+    yane._tick_adaptive_recovery({**mem, "generation": 11}, 110, lambda *_args: None)
+    assert len(yane._recovery_events) == 1
+
+
+def test_adaptive_recovery_escalates_after_failed_cooldown():
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(2, 1)
+    yane.set_adaptive_recovery(warmup=0, cooldown=2, strategies=["diversity_boost", "partial_restart"])
+    pop = yane.population
+    for i in range(10):
+        g = pop.select_for_evaluation()
+        pop.submit(g, 1.0 if i == 0 else 0.0)
+    mem = yane.population_memory_info()
+    mem.update({"fitness_iqr": 0.0, "generation": 10, "max_fitness": 1.0})
+    yane._tick_adaptive_recovery(mem, 100, lambda *_args: None)
+    yane._tick_adaptive_recovery({**mem, "generation": 12}, 120, lambda *_args: None)
+    assert yane._recovery_strategy_index == 1
+
+
+def test_adaptive_recovery_guarded_early_stop_requires_signal():
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(2, 1)
+    yane.set_adaptive_recovery(warmup=0, cooldown=1, early_stopping_patience=3)
+    yane._recovery_best_fitness = 0.0
+    yane._recovery_last_improvement_generation = 0
+    mem = yane.population_memory_info()
+    mem.update({"fitness_iqr": 0.0, "generation": 5, "max_fitness": 0.0})
+    reason = yane._tick_adaptive_recovery(mem, 50, lambda *_args: None)
+    assert reason is not None
+    assert yane.stopped_early is True
+
+
 # ---------------------------------------------------------------------------
 # Event System
 # ---------------------------------------------------------------------------

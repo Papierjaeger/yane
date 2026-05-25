@@ -167,6 +167,27 @@ class NeuroEvolution:
         self._last_validation_fitness: float | None = None
         # Track best fitness for "new_best" events
         self._last_best_fitness: float = -float("inf")
+        # Adaptive recovery / guarded early stop
+        self._adaptive_recovery_enabled: bool = False
+        self._recovery_strategies: list[str] = ["diversity_boost", "partial_restart", "lamarck_burst"]
+        self._recovery_cooldown: int = 20
+        self._recovery_escalate: bool = True
+        self._recovery_diversity_iqr_threshold: float = 1e-4
+        self._recovery_injection_frac: float = 0.1
+        self._recovery_early_stopping_patience: int = 500
+        self._recovery_warmup: int = 100
+        self._recovery_min_delta: float = 1e-4
+        self._recovery_events: list[dict] = []
+        self._last_recovery_generation: int = -10**9
+        self._recovery_strategy_index: int = 0
+        self._recovery_successes: int = 0
+        self._recovery_checked: int = 0
+        self._pending_recoveries: list[dict] = []
+        self._recovery_best_fitness: float = -float("inf")
+        self._recovery_last_improvement_generation: int = 0
+        self._recovery_last_lamarck_budget: int | None = None
+        self.stopped_early: bool = False
+        self.stop_reason: str = ""
 
     @property
     def current_genome(self) -> Genome | None:
@@ -417,6 +438,39 @@ class NeuroEvolution:
         """
         self._convergence_spread_eps = fitness_spread_eps
         self._convergence_min_stagnation = max(0.0, min_stagnation)
+
+    def set_adaptive_recovery(
+        self,
+        enabled: bool = True,
+        strategies: list[str] | None = None,
+        cooldown: int = 20,
+        escalate: bool = True,
+        diversity_iqr_threshold: float = 1e-4,
+        injection_frac: float = 0.1,
+        early_stopping_patience: int = 500,
+        warmup: int = 100,
+        min_delta: float = 1e-4,
+    ) -> None:
+        """Enable stagnation/diversity recovery with guarded early stopping.
+
+        Recovery is intentionally conservative: it only acts after warmup and
+        cooldown windows, and early stopping requires both long stagnation and a
+        diversity/recovery-failure signal.
+        """
+        valid = {"diversity_boost", "partial_restart", "lamarck_burst"}
+        chosen = list(strategies or ["diversity_boost", "partial_restart", "lamarck_burst"])
+        unknown = [s for s in chosen if s not in valid]
+        if unknown:
+            raise ValueError(f"Unknown recovery strategies: {unknown}")
+        self._adaptive_recovery_enabled = bool(enabled)
+        self._recovery_strategies = chosen
+        self._recovery_cooldown = max(1, int(cooldown))
+        self._recovery_escalate = bool(escalate)
+        self._recovery_diversity_iqr_threshold = max(0.0, float(diversity_iqr_threshold))
+        self._recovery_injection_frac = max(0.0, min(1.0, float(injection_frac)))
+        self._recovery_early_stopping_patience = max(1, int(early_stopping_patience))
+        self._recovery_warmup = max(0, int(warmup))
+        self._recovery_min_delta = max(0.0, float(min_delta))
 
     def set_early_stopping(self, factor: float = 1.0) -> None:
         """Enable early stopping for per-genome generator fitness functions.
@@ -999,6 +1053,15 @@ class NeuroEvolution:
             "max_evaluations": self._max_evaluations,
             "convergence_spread_eps": self._convergence_spread_eps,
             "convergence_min_stagnation": self._convergence_min_stagnation,
+            "adaptive_recovery_enabled": self._adaptive_recovery_enabled,
+            "adaptive_recovery_strategies": self._recovery_strategies,
+            "adaptive_recovery_cooldown": self._recovery_cooldown,
+            "adaptive_recovery_escalate": self._recovery_escalate,
+            "adaptive_recovery_diversity_iqr_threshold": self._recovery_diversity_iqr_threshold,
+            "adaptive_recovery_injection_frac": self._recovery_injection_frac,
+            "adaptive_recovery_early_stopping_patience": self._recovery_early_stopping_patience,
+            "adaptive_recovery_warmup": self._recovery_warmup,
+            "adaptive_recovery_min_delta": self._recovery_min_delta,
             # Evaluation
             "n_evaluations": self._runner.n_evaluations,
             "eval_aggregation": self._runner.aggregation,
@@ -1274,6 +1337,12 @@ class NeuroEvolution:
                         })
                         _li("ANOMALY [%s]: %s", _r.kind, _r.message)
                     mem.update(self._anomaly_detectors.get_diagnostics())
+                    if _reports:
+                        mem["anomaly_kinds"] = [_r.kind for _r in _reports]
+                recovery_stop = self._tick_adaptive_recovery(mem, iterations, _li)
+                if recovery_stop is not None:
+                    stop_reason = recovery_stop
+                    break
                 if mem.get("stagnation_count", 0) > 0:
                     self._event_bus.emit("stagnation", {
                         "stagnation_count": mem.get("stagnation_count", 0),
@@ -1362,9 +1431,16 @@ class NeuroEvolution:
                     time.sleep(0.5)
 
         # --- on_stop callback ------------------------------------------------
+        self.stop_reason = stop_reason or "manual"
+        self.stopped_early = bool(
+            stop_reason and (
+                stop_reason.startswith("patience")
+                or "all_strategies_exhausted" in stop_reason
+            )
+        )
         if on_stop is not None:
             try:
-                on_stop(stop_reason or "manual")
+                on_stop(self.stop_reason)
             except Exception:
                 pass
 
@@ -1487,6 +1563,27 @@ class NeuroEvolution:
             self._population._total_submitted // max(1, self._population.max_size)
         )
         info["evaluations_done"] = self._n_evaluations_done
+        if self._adaptive_recovery_enabled:
+            checked = max(1, self._recovery_checked)
+            info.update({
+                "adaptive_recovery_enabled": True,
+                "recovery_events": list(self._recovery_events),
+                "last_recovery_strategy": (
+                    self._recovery_events[-1]["strategy"] if self._recovery_events else None
+                ),
+                "recovery_success_rate": self._recovery_successes / checked,
+                "no_improvement_generations": max(
+                    0,
+                    info["generation"] - self._recovery_last_improvement_generation,
+                ),
+                "early_stop_triggered": self.stopped_early,
+                "stop_conditions_met": self._recovery_stop_conditions(info),
+                "injections_total": self._population._n_diversity_injection,
+                "last_injection_generation": (
+                    self._recovery_events[-1]["generation"]
+                    if self._recovery_events else None
+                ),
+            })
         if self._last_validation_fitness is not None:
             info["validation_fitness"] = self._last_validation_fitness
         if self._runner.anytime_enabled:
@@ -2365,6 +2462,124 @@ class NeuroEvolution:
                     return "converged"
         return None
 
+    def _recovery_stop_conditions(self, mem: dict) -> list[str]:
+        if not self._adaptive_recovery_enabled:
+            return []
+        generation = mem.get("generation", 0)
+        conditions: list[str] = []
+        no_improve = generation - self._recovery_last_improvement_generation
+        if no_improve >= self._recovery_early_stopping_patience:
+            conditions.append("patience_exhausted")
+        if mem.get("fitness_iqr", float("inf")) < self._recovery_diversity_iqr_threshold:
+            conditions.append("diversity_collapsed")
+        if self._recovery_strategy_index >= max(0, len(self._recovery_strategies) - 1):
+            conditions.append("all_strategies_exhausted")
+        return conditions
+
+    def _tick_adaptive_recovery(self, mem: dict, iterations: int, _li: Callable) -> str | None:
+        if not self._adaptive_recovery_enabled or self._population is None:
+            return None
+        generation = mem.get("generation", iterations // max(1, self._population.max_size))
+        best = float(mem.get("max_fitness", -float("inf")))
+        if best > self._recovery_best_fitness + self._recovery_min_delta:
+            self._recovery_best_fitness = best
+            self._recovery_last_improvement_generation = generation
+
+        self._settle_pending_recoveries(best, generation)
+        conditions = self._recovery_stop_conditions({**mem, "generation": generation})
+        if ("patience_exhausted" in conditions
+                and ("diversity_collapsed" in conditions or "all_strategies_exhausted" in conditions)
+                and generation >= self._recovery_warmup):
+            self.stopped_early = True
+            self.stop_reason = "_and_".join(conditions)
+            _li("Training stopped: adaptive recovery early stop  reason=%s", self.stop_reason)
+            return self.stop_reason
+
+        if generation < self._recovery_warmup:
+            return None
+        if generation - self._last_recovery_generation < self._recovery_cooldown:
+            return None
+        trigger = self._recovery_trigger(mem)
+        if trigger is None:
+            return None
+        self._apply_recovery_strategy(trigger, best, generation, _li)
+        return None
+
+    def _settle_pending_recoveries(self, best: float, generation: int) -> None:
+        remaining: list[dict] = []
+        for event in self._pending_recoveries:
+            if generation - event["generation"] < self._recovery_cooldown:
+                remaining.append(event)
+                continue
+            self._recovery_checked += 1
+            success = best > event["best_before"] + self._recovery_min_delta
+            event["success"] = success
+            if event.get("strategy") == "lamarck_burst":
+                self._lamarck.set_budget(event.get("lamarck_budget_before"))
+            if success:
+                self._recovery_successes += 1
+                if self._recovery_escalate:
+                    self._recovery_strategy_index = 0
+            elif self._recovery_escalate and self._recovery_strategies:
+                self._recovery_strategy_index = min(
+                    len(self._recovery_strategies) - 1,
+                    self._recovery_strategy_index + 1,
+                )
+        self._pending_recoveries = remaining
+
+    def _recovery_trigger(self, mem: dict) -> str | None:
+        anomaly_kinds = set(mem.get("anomaly_kinds", []))
+        if mem.get("fitness_iqr", float("inf")) < self._recovery_diversity_iqr_threshold:
+            return "diversity_collapse"
+        if anomaly_kinds.intersection({"diversity_collapse", "homogenization", "stuck_speciation"}):
+            return ",".join(sorted(anomaly_kinds))
+        stagnation = mem.get("stagnation_count", 0)
+        threshold = max(1, mem.get("stagnation_threshold", 1))
+        if mem.get("species_count", 0) <= 1 and stagnation / threshold >= 0.5:
+            return "stuck_speciation"
+        return None
+
+    def _apply_recovery_strategy(
+        self,
+        trigger: str,
+        best_before: float,
+        generation: int,
+        _li: Callable,
+    ) -> None:
+        if not self._recovery_strategies:
+            return
+        strategy = self._recovery_strategies[self._recovery_strategy_index]
+        pop = self._population
+        n = max(1, int(round(pop.max_size * self._recovery_injection_frac)))
+        event = {
+            "generation": generation,
+            "strategy": strategy,
+            "trigger": trigger,
+            "best_before": best_before,
+            "n_genomes": n,
+        }
+        if strategy == "partial_restart":
+            keep = max(1, len(pop._evaluated) - n)
+            pop.shrink_to(keep)
+            for _ in range(n):
+                pop._inject_fresh_genome()
+        elif strategy == "lamarck_burst":
+            self._recovery_last_lamarck_budget = self._lamarck.budget_per_gen
+            base = self._lamarck.budget_per_gen
+            self._lamarck.set_budget(max(pop.max_size, (base or 0) * 2, n))
+            event["lamarck_budget_before"] = base
+            event["lamarck_budget_after"] = self._lamarck.budget_per_gen
+        else:
+            for _ in range(n):
+                pop._inject_fresh_genome()
+        self._last_recovery_generation = generation
+        self._recovery_events.append(event)
+        if len(self._recovery_events) > 200:
+            self._recovery_events = self._recovery_events[-200:]
+        self._pending_recoveries.append(event)
+        _li("Adaptive recovery: strategy=%s trigger=%s generation=%d n=%d",
+            strategy, trigger, generation, n)
+
     def _write_crash_snapshot(
         self,
         iterations: int,
@@ -2568,6 +2783,18 @@ class NeuroEvolution:
             self.set_max_iterations(cfg["max_iterations"])
         if cfg.get("max_evaluations") is not None:
             self.set_max_evaluations(cfg["max_evaluations"])
+        if cfg.get("adaptive_recovery_enabled"):
+            self.set_adaptive_recovery(
+                enabled=True,
+                strategies=cfg.get("adaptive_recovery_strategies"),
+                cooldown=cfg.get("adaptive_recovery_cooldown", 20),
+                escalate=cfg.get("adaptive_recovery_escalate", True),
+                diversity_iqr_threshold=cfg.get("adaptive_recovery_diversity_iqr_threshold", 1e-4),
+                injection_frac=cfg.get("adaptive_recovery_injection_frac", 0.1),
+                early_stopping_patience=cfg.get("adaptive_recovery_early_stopping_patience", 500),
+                warmup=cfg.get("adaptive_recovery_warmup", 100),
+                min_delta=cfg.get("adaptive_recovery_min_delta", 1e-4),
+            )
 
         # Evaluation
         if cfg.get("n_evaluations") is not None:

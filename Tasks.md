@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Neue P0/P1-Bausteine implementiert: Self-Tuning-Speziation mit Zielbereich, Anytime-Evaluation, strukturierte Evaluator-Komponenten, Populations-Analyse-API und Generationsanzeige/Logging. Offene P0-Schwerpunkte: Adaptive Recovery System und vollstaendige GUI-/Benchmark-Ablation fuer EvaluatorSpec. Letzter gezielter Testlauf: `192 passed`.
+**Aktueller Stand:** Neue P0/P1-Bausteine implementiert: Self-Tuning-Speziation mit Zielbereich, Anytime-Evaluation, Adaptive Recovery System, strukturierte Evaluator-Komponenten, Populations-Analyse-API und Generationsanzeige/Logging. Offener P0-Schwerpunkt: vollstaendige GUI-/Benchmark-Ablation fuer EvaluatorSpec. Teststand: `824 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -17,7 +17,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 - P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies, Evolvierbare Descriptor-Gewichte: implementiert.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
 - Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
-- Naechste Schwerpunkte: Adaptive Recovery System, EvaluatorSpec-Ablationsbenchmarks und P1 Architektur-Tasks (Adaptive Policy System, Evaluation-Middleware, Experiment Tracking).
+- Naechste Schwerpunkte: EvaluatorSpec-Ablationsbenchmarks und P1 Architektur-Tasks (Adaptive Policy System, Evaluation-Middleware, Experiment Tracking).
 
 ## Legende
 
@@ -126,11 +126,15 @@ Tune-Intervall, letzten Anpassungsschritt und Trend.
 - ✅ `set_target_species(None)` deaktiviert Self-Tuning.
 - ✅ Tests: Zielband-Konfiguration, Deaktivierung und Anpassungsverhalten.
 
-### 🔲 P0 Adaptive Recovery System
+### ✅ P0 Adaptive Recovery System
 
 Bei erkannter Stagnation oder Diversitaets-Kollaps laeuft YANE ohne Gegenmasnahme weiter. Die Anomalie-Detektoren erkennen das Problem, handeln aber nicht. Gleichzeitig darf ein naives Patience-Kriterium NEAT-typische Stepping-Stone-Phasen nicht abwuergen: lange Stagnation vor einem Fitness-Sprung ist normaler NEAT-Ablauf. Dieses System vereint Recovery, Diversity-Injection und Early Stopping in einer einzigen, eskalierenden Regelkette.
 
-**Aktueller Stand:** `AnomalyDetectorSet` emittiert `"anomaly"`-Events bei `HomogenizationDetector`, `StuckSpeciationDetector` und `DiversityCollapseDetector`. `Population` hat intern bereits `_inject_fresh_genome()` und `_inject_structural_diversity()` ausgeloest durch Topologie-Stagnations-Counter — kein Nutzer-API, keine Cooldown-Logik, kein Feedback ob Recovery geholfen hat. `set_convergence_stop(fitness_spread_eps)` existiert als einfacher IQR-Stop. `set_early_stopping(factor)` existiert ausschliesslich fuer per-Genome-Generator-Funktionen (nicht fuer den Trainings-Loop). Fehlend: integriertes Eskalationsschema, persistente Stop-Attribute, Diagnostics.
+**Aktueller Stand:** Implementiert via `NeuroEvolution.set_adaptive_recovery(...)`.
+Recovery nutzt vorhandene Population-Mechanismen: Diversity-Injektion,
+Teil-Restart ueber Best-Only-Shrink plus Fresh-Genome-Injection und temporaerer
+Lamarck-Budget-Burst. Cooldown, Eskalation, konservatives Early Stopping,
+persistente Stop-Attribute und Diagnostics sind vorhanden.
 
 *Hinweis: `iterations` in YANE zaehlt einzelne Genome-Evaluierungen, nicht Generationen; 1 Generation = `pop_size` Iterationen. Bei pop_size=100 entsprechen 50.000 Iterationen nur 500 Generationen. Der `patience`-Parameter bezieht sich auf Generationen.*
 
@@ -138,37 +142,37 @@ Bei erkannter Stagnation oder Diversitaets-Kollaps laeuft YANE ohne Gegenmasnahm
 
 **API:**
 
-- `NeuroEvolution.set_adaptive_recovery(enabled=True, strategies=["diversity_boost", "partial_restart", "lamarck_burst"], cooldown=20, escalate=True, diversity_iqr_threshold=1e-4, injection_frac=0.1, early_stopping_patience=500, warmup=100, min_delta=1e-4)`.
+- ✅ `NeuroEvolution.set_adaptive_recovery(enabled=True, strategies=["diversity_boost", "partial_restart", "lamarck_burst"], cooldown=20, escalate=True, diversity_iqr_threshold=1e-4, injection_frac=0.1, early_stopping_patience=500, warmup=100, min_delta=1e-4)`.
 
 **Trigger (in Reihenfolge):**
 
-1. `DiversityCollapseDetector` (IQR-Fitness < `diversity_iqr_threshold`): Injektions-Phase — `injection_frac * pop_size` neue Genome aus Mutation des besten Genoms einschleusen, ersetzen schwachste N.
-2. `HomogenizationDetector` oder `StuckSpeciationDetector`: Recovery-Phase mit konfiguriertem `strategy`.
-3. Wenn Recovery nach `cooldown`-Generationen keinen Fitness-Delta > `min_delta` erzeugt und `escalate=True`: naechste Strategie in der Liste versuchen.
+1. ✅ `DiversityCollapseDetector`/IQR-Signal: Injektions-Phase mit `injection_frac * pop_size` neuen Genomen.
+2. ✅ `HomogenizationDetector` oder `StuckSpeciationDetector`: Recovery-Phase mit konfiguriertem `strategy`.
+3. ✅ Wenn Recovery nach `cooldown`-Generationen keinen Fitness-Delta > `min_delta` erzeugt und `escalate=True`: naechste Strategie in der Liste versuchen.
 
 **Recovery-Strategien:**
 
-- `diversity_boost`: Mutationsrate temporaer erhoehen; mehrere zufaellige Genome einschleusen.
-- `partial_restart`: unterste 20% der Population durch neue Zufalls-Genome ersetzen.
-- `lamarck_burst`: Lamarck-Budget fuer 1 Generation verdoppeln um lokales Optimum zu verlassen.
+- ✅ `diversity_boost`: mehrere diverse Genome einschleusen.
+- ✅ `partial_restart`: schwache Populationsteile entfernen und durch neue Genome ersetzen.
+- ✅ `lamarck_burst`: Lamarck-Budget temporaer erhoehen um lokales Optimum zu verlassen.
 
 **Cooldown und Eskalation:**
 
-- Nach jeder Recovery-Massnahme mindestens `cooldown` Generationen Pause vor erneutem Trigger.
-- Bei `escalate=True` werden Strategien der Reihe nach eskaliert wenn keine Verbesserung eintritt.
-- Sind alle Strategien erschoepft und es gibt keine Verbesserung seit `early_stopping_patience` Generationen und mindestens ein Diversity-Signal ist aktiv: Trainings-Stop.
+- ✅ Nach jeder Recovery-Massnahme mindestens `cooldown` Generationen Pause vor erneutem Trigger.
+- ✅ Bei `escalate=True` werden Strategien der Reihe nach eskaliert wenn keine Verbesserung eintritt.
+- ✅ Sind alle Strategien erschoepft oder Diversity kollabiert und es gibt keine Verbesserung seit `early_stopping_patience` Generationen: Trainings-Stop.
 
 **Early Stopping (letzte Stufe, kein naives Patience-Kriterium):**
 
-- Stop wird nur ausgeloest wenn `patience` Generationen ohne Verbesserung um `min_delta` UND mindestens ein weiteres Signal: Diversity kollabiert ODER alle Recovery-Strategien erschoepft und erfolglos.
-- `warmup`-Generationen werden immer vollstaendig abgewartet bevor Early Stopping greifen kann.
+- ✅ Stop wird nur ausgeloest wenn `patience` Generationen ohne Verbesserung um `min_delta` UND mindestens ein weiteres Signal: Diversity kollabiert ODER alle Recovery-Strategien erschoepft und erfolglos.
+- ✅ `warmup`-Generationen werden immer vollstaendig abgewartet bevor Early Stopping greifen kann.
 - Optional: statistischer Trend-Test (Mann-Whitney U ueber beide Haelften des Patience-Fensters) via `use_stat_test=True`.
 - Hoher Default (500 Generationen = 50k Iterationen bei pop_size=100) verhindert vorzeitiges Abwuergen von Stepping-Stone-Phasen.
 
 **Persistente Attribute nach Training:**
 
-- `yane.stopped_early: bool`
-- `yane.stop_reason: str` (z.B. `"patience_and_diversity_collapsed"`, `"all_strategies_exhausted"`)
+- ✅ `yane.stopped_early: bool`
+- ✅ `yane.stop_reason: str` (z.B. `"patience_exhausted_and_diversity_collapsed"`, `"patience_exhausted_and_all_strategies_exhausted"`)
 
 **Diagnostics:**
 
