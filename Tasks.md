@@ -24,9 +24,9 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 - `P0`: hoher Hebel, nah am aktuellen Code, direkt nuetzlich
 - `P1`: wichtiger Ausbau, mittlerer Aufwand
 - `P2`: experimentell, Forschungsarbeit oder groesserer Umbau
-- ✅: erledigt
+- ✓: erledigt
 - ⚡: teilweise erledigt
-- 🔲: offen
+- □: offen
 
 ---
 
