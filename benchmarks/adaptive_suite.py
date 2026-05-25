@@ -191,11 +191,15 @@ def run_one(
     cfg: Config,
     seed: int,
     max_iter: int,
+    db_path: "Path | None" = None,
 ) -> BenchRun:
     spec = PROBLEMS[problem]
     target = spec["target"]
     yane, evaluate = spec["factory"](seed, max_iter, target)
     _apply_config(yane, cfg)
+    if db_path is not None:
+        from yane.benchmarks import wire_db
+        wire_db(yane, f"adaptive/{problem}/{cfg.name}", db_path)
 
     stop_reason = ["manual"]
 
@@ -291,6 +295,10 @@ def main() -> None:
                         default=Path(__file__).parent / "results")
     parser.add_argument("--no-save", action="store_true",
                         help="Skip saving results to disk")
+    parser.add_argument("--no-db", action="store_true",
+                        help="Skip recording runs to the benchmark RunDatabase")
+    parser.add_argument("--db", type=Path, default=None,
+                        help="Path to benchmark RunDatabase (default: benchmarks/benchmark_runs.db)")
     args = parser.parse_args()
 
     if args.problem in PROBLEMS and PROBLEMS[args.problem]["has_gym"]:
@@ -308,6 +316,9 @@ def main() -> None:
         name_set = set(args.configs)
         selected_configs = [c for c in ALL_CONFIGS if c.name in name_set]
 
+    from yane.benchmarks import BENCHMARK_DB_PATH
+    db_path = None if args.no_db else (args.db or BENCHMARK_DB_PATH)
+
     runs: list[BenchRun] = []
     total = len(selected_configs) * args.seeds
     done = 0
@@ -319,7 +330,7 @@ def main() -> None:
                 end="",
                 flush=True,
             )
-            run = run_one(args.problem, cfg, seed, args.max_iter)
+            run = run_one(args.problem, cfg, seed, args.max_iter, db_path=db_path)
             runs.append(run)
             mark = "solved" if run.solved else "miss"
             print(

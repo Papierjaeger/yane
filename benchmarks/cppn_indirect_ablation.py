@@ -75,6 +75,8 @@ def _make_cppn(seed: int, max_iter: int) -> NeuroEvolution:
 
 def run_one(config: str, seed: int, max_iter: int) -> CppnRun:
     yane = _make_direct(seed, max_iter) if config == "direct" else _make_cppn(seed, max_iter)
+    from yane.benchmarks import wire_db, BENCHMARK_DB_PATH
+    wire_db(yane, f"cppn/{config}", BENCHMARK_DB_PATH)
     initial_connections = (
         yane.population._unevaluated[0].connection_count
         if yane.population and yane.population._unevaluated else 0

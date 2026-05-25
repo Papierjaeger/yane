@@ -108,6 +108,8 @@ def run_one(config: AblationConfig, seed: int, max_iter: int) -> AblationRun:
     yane.set_population_size(80)
     yane.set_min_fitness(_XOR_SOLVE_THRESHOLD)
     yane.set_max_iterations(max_iter)
+    from yane.benchmarks import wire_db, BENCHMARK_DB_PATH
+    wire_db(yane, f"descriptor_ablation/{config.name}", BENCHMARK_DB_PATH)
 
     components = _component_set(config.components)
     if components:

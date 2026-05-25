@@ -76,6 +76,8 @@ def train_cartpole(checkpoint_path: Path) -> None:
     yane.set_population_size(_POP)
     yane.set_min_fitness(_CARTPOLE_TARGET)
     yane.set_max_iterations(_CARTPOLE_MAX)
+    from yane.benchmarks import wire_db, BENCHMARK_DB_PATH
+    wire_db(yane, "warm_start/cartpole", BENCHMARK_DB_PATH)
     t0 = time.perf_counter()
     iters = yane.train(_cartpole_eval(_SEED))
     elapsed = time.perf_counter() - t0
@@ -93,6 +95,8 @@ def run_acrobot(label: str, checkpoint: Path | None) -> tuple[int, float]:
     yane.set_population_size(_POP)
     yane.set_min_fitness(_ACROBOT_TARGET)
     yane.set_max_iterations(_ACROBOT_MAX)
+    from yane.benchmarks import wire_db, BENCHMARK_DB_PATH
+    wire_db(yane, f"warm_start/acrobot_{label}", BENCHMARK_DB_PATH)
     if checkpoint is not None:
         n = yane.warm_start_from_checkpoint(checkpoint)
         print(f"  Imported {n} genomes from CartPole checkpoint "

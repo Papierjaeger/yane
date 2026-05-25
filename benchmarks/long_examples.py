@@ -285,6 +285,8 @@ def _run_once(
     snapshot_interval_s: float,
 ) -> tuple[RunRow, dict[str, Any]]:
     yane = _configure_yane(example, seed)
+    from yane.benchmarks import wire_db, BENCHMARK_DB_PATH
+    wire_db(yane, f"long/{example.name}", BENCHMARK_DB_PATH)
     if example.make_curriculum is not None and example.default_curriculum:
         yane.set_curriculum(
             example.make_curriculum(normalize=True, target_fitness=example.target_fitness)

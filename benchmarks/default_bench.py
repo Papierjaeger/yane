@@ -108,6 +108,9 @@ def _run_case(case: Case) -> dict[str, Any]:
         else:
             eval_factory = ex.make_eval
 
+        from yane.benchmarks import wire_db, BENCHMARK_DB_PATH
+        wire_db(yane, f"default/{case.example}", BENCHMARK_DB_PATH)
+
         stop = []
         t0 = time.perf_counter()
         def _on_iteration(_iteration: int, _fitness: float, _elapsed_ms: float) -> bool:

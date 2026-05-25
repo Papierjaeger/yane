@@ -231,8 +231,11 @@ DEFAULT_GATES = {
 # Runner
 # ---------------------------------------------------------------------------
 
-def _run_one(spec: BenchmarkSpec, seed: int) -> RunResult:
+def _run_one(spec: BenchmarkSpec, seed: int, db_path: Path | None = None) -> RunResult:
     yane, eval_fn, target = spec.make_yane(seed)
+    if db_path is not None:
+        from yane.benchmarks import wire_db
+        wire_db(yane, spec.name, db_path)
     stop_reason: list[str] = ["manual"]
 
     def on_stop(reason: str) -> None:
@@ -265,7 +268,11 @@ def _run_one(spec: BenchmarkSpec, seed: int) -> RunResult:
     )
 
 
-def run_suite(fast: bool = False, verbose: bool = True) -> list[BenchmarkResult]:
+def run_suite(
+    fast: bool = False,
+    verbose: bool = True,
+    db_path: Path | None = None,
+) -> list[BenchmarkResult]:
     specs = [s for s in _SUITE if not fast or s.ci]
     results: list[BenchmarkResult] = []
 
@@ -278,7 +285,7 @@ def run_suite(fast: bool = False, verbose: bool = True) -> list[BenchmarkResult]
         for seed in range(spec.n_seeds):
             if verbose:
                 print(f"  seed {seed} … ", end="", flush=True)
-            run = _run_one(spec, seed)
+            run = _run_one(spec, seed, db_path=db_path)
             br.runs.append(run)
             if verbose:
                 status = "✓" if run.solved else "✗"
@@ -402,6 +409,14 @@ def main() -> None:
         help="Skip saving results to benchmarks/results/"
     )
     parser.add_argument(
+        "--no-db", action="store_true",
+        help="Skip recording runs to the benchmark RunDatabase"
+    )
+    parser.add_argument(
+        "--db", type=Path, default=None,
+        help="Path to benchmark RunDatabase (default: benchmarks/benchmark_runs.db)"
+    )
+    parser.add_argument(
         "--out-dir", type=Path, default=None,
         help="Directory for result JSON files (default: benchmarks/results/)"
     )
@@ -411,7 +426,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    results = run_suite(fast=args.fast, verbose=True)
+    from yane.benchmarks import BENCHMARK_DB_PATH
+    db_path = None if args.no_db else (args.db or BENCHMARK_DB_PATH)
+    results = run_suite(fast=args.fast, verbose=True, db_path=db_path)
     print_summary(results)
 
     if not args.no_save:

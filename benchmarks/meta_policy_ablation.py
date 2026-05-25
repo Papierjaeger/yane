@@ -62,6 +62,8 @@ def run_one(config: MetaPolicyConfig, seed: int, max_iter: int) -> MetaPolicyRun
     yane.set_population_size(80)
     yane.set_min_fitness(_XOR_SOLVE_THRESHOLD)
     yane.set_max_iterations(max_iter)
+    from yane.benchmarks import wire_db, BENCHMARK_DB_PATH
+    wire_db(yane, f"meta_policy/{config.mode}", BENCHMARK_DB_PATH)
 
     if config.mode == "fixed":
         yane.set_interspecies_crossover(0.02)
