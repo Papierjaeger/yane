@@ -25,7 +25,7 @@ def _fmt_list(vs: list[float], scale: list[float] | None, denormalized: bool) ->
     return "[" + ", ".join(_fmt_value(v, denormalized) for v in vs) + "]"
 
 
-_TOL_NORMALIZED = 0.05   # average per-output error implied by typical target_fitness values
+_TOL_NORMALIZED = 0.5    # per-output threshold: prediction is in the correct half of [0,1]
 
 
 class _TestCaseRow:
@@ -128,6 +128,7 @@ class _SequenceStepRow:
         self._output_scale  = output_scale
         self._denormalized  = denormalized
         self._delta: float | None = None
+        self._correct: bool | None = None
 
         row = QWidget()
         rlay = QHBoxLayout(row)
@@ -179,6 +180,7 @@ class _SequenceStepRow:
             self._delta_lbl.setText(f"{norm_delta:.3f}")
             correct = norm_delta < _TOL_NORMALIZED * len(self._expected)
         self._delta = norm_delta
+        self._correct = correct
         tick, color = ("✓", "#a6e3a1") if correct else ("✗", "#f38ba8")
         self._tick.setText(tick)
         self._tick.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
@@ -186,6 +188,7 @@ class _SequenceStepRow:
 
     def clear(self) -> None:
         self._delta = None
+        self._correct = None
         self._out_lbl.setText("—")
         self._delta_lbl.setText("—")
         self._tick.setText("?")
@@ -591,9 +594,9 @@ class InspectTab(QWidget):
         total   = sum(deltas)
         correct = sum(1 for r in self._test_rows if r._correct)
         n       = len(self._test_rows)
-        self._test_sum_lbl.setText(
-            f"Σ Δ: {total:.4f}  |  {correct}/{n} correct"
-        )
+        denorm  = bool(self._test_rows and self._test_rows[0]._denormalized)
+        fmt     = f"{total:.2f}" if denorm else f"{total:.4f}"
+        self._test_sum_lbl.setText(f"Σ Δ: {fmt}  |  {correct}/{n} correct")
 
     def _update_acc_fitness(self) -> None:
         if not self._seq_rows:
@@ -603,8 +606,7 @@ class InspectTab(QWidget):
             self._acc_fitness_lbl.setText("")
             return
         total   = sum(deltas)
-        correct = sum(1 for r in self._seq_rows
-                      if r._delta is not None and r._delta < _TOL_NORMALIZED)
+        correct = sum(1 for r in self._seq_rows if r._correct)
         done    = len(deltas)
         self._acc_fitness_lbl.setText(
             f"Σ Δ: {total:.4f}  |  Fitness: {-total:.4f}  |  "
