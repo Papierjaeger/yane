@@ -594,6 +594,64 @@ class TestRunDatabase(unittest.TestCase):
             ne.set_run_database(None)
             self.assertIsNone(ne.get_run_database())
 
+    def test_artifacts_contain_log_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, _db_path = self._make_ne_and_train(tmp)
+            db = ne.get_run_database()
+            run = db.load_run(ne.get_active_run_id())
+            self.assertIn("log_dir", run.artifacts)
+            self.assertIn("run_log", run.artifacts)
+            self.assertIn("fitness_history_csv", run.artifacts)
+            self.assertIn("best_genome_pkl", run.artifacts)
+            self.assertIn("summary_json", run.artifacts)
+
+    def test_diagnostics_contains_full_mem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, _db_path = self._make_ne_and_train(tmp)
+            db = ne.get_run_database()
+            run = db.load_run(ne.get_active_run_id())
+            diag = run.diagnostics
+            # Full mem dict has many more fields than the old 6-field version.
+            self.assertIn("species_count", diag)
+            self.assertIn("pop_max", diag)
+            self.assertIn("max_fitness", diag)
+            self.assertGreater(len(diag), 10)
+
+    def test_schema_migration_adds_artifacts_column(self):
+        """Opening an old DB without artifacts_json column should not crash."""
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "old.db"
+            # Create a DB without artifacts_json (simulates pre-migration schema).
+            conn = sqlite3.connect(str(db_path))
+            conn.executescript("""
+                CREATE TABLE experiments (
+                    experiment_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    tags_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE runs (
+                    run_id TEXT PRIMARY KEY,
+                    experiment_id TEXT,
+                    name TEXT NOT NULL,
+                    seed INTEGER,
+                    config_json TEXT NOT NULL DEFAULT '{}',
+                    fitness_history_json TEXT NOT NULL DEFAULT '[]',
+                    diagnostics_json TEXT NOT NULL DEFAULT '{}',
+                    start_time TEXT NOT NULL,
+                    end_time TEXT,
+                    stop_reason TEXT
+                );
+            """)
+            conn.commit()
+            conn.close()
+            # Opening with RunDatabase should migrate without error.
+            from yane.util.run_database import RunDatabase
+            rdb = RunDatabase(db_path)
+            runs = rdb.list_runs()
+            self.assertEqual(runs, [])
+
 
 # ---------------------------------------------------------------------------
 # P1 — Selektionsstrategie als Plugin

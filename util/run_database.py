@@ -49,6 +49,7 @@ class Run:
     start_time: str
     end_time: str | None
     stop_reason: str | None
+    artifacts: dict = field(default_factory=dict)
 
     @property
     def final_best(self) -> float | None:
@@ -106,6 +107,7 @@ class RunDatabase:
                 config_json          TEXT NOT NULL DEFAULT '{}',
                 fitness_history_json TEXT NOT NULL DEFAULT '[]',
                 diagnostics_json     TEXT NOT NULL DEFAULT '{}',
+                artifacts_json       TEXT NOT NULL DEFAULT '{}',
                 start_time           TEXT NOT NULL,
                 end_time             TEXT,
                 stop_reason          TEXT,
@@ -114,6 +116,15 @@ class RunDatabase:
             CREATE INDEX IF NOT EXISTS idx_runs_experiment ON runs (experiment_id);
             CREATE INDEX IF NOT EXISTS idx_runs_name       ON runs (name);
         """)
+        # Migrate existing databases that pre-date the artifacts_json column.
+        existing = {
+            row[1]
+            for row in self._db.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "artifacts_json" not in existing:
+            self._db.execute(
+                "ALTER TABLE runs ADD COLUMN artifacts_json TEXT NOT NULL DEFAULT '{}'"
+            )
         self._db.commit()
 
     # ── Experiment management ───────────────────────────────────────────────
@@ -195,16 +206,18 @@ class RunDatabase:
         fitness_history: list[dict],
         diagnostics: dict,
         stop_reason: str | None,
+        artifacts: dict | None = None,
     ) -> None:
         """Update the run row when training finishes."""
         self._db.execute(
             "UPDATE runs"
             " SET fitness_history_json = ?, diagnostics_json = ?,"
-            "     end_time = ?, stop_reason = ?"
+            "     artifacts_json = ?, end_time = ?, stop_reason = ?"
             " WHERE run_id = ?",
             (
                 json.dumps(fitness_history),
                 json.dumps(diagnostics),
+                json.dumps(artifacts or {}),
                 _now(),
                 stop_reason,
                 run_id,
@@ -296,6 +309,7 @@ class RunDatabase:
             config=json.loads(row["config_json"]),
             fitness_history=json.loads(row["fitness_history_json"]),
             diagnostics=json.loads(row["diagnostics_json"]),
+            artifacts=json.loads(row["artifacts_json"] or "{}"),
             start_time=row["start_time"],
             end_time=row["end_time"],
             stop_reason=row["stop_reason"],

@@ -2852,19 +2852,25 @@ class NeuroEvolution:
                 from yane.util.run_database import load_fitness_history_from_csv
                 _csv_path = self._log_run_dir / "fitness_history.csv"
                 fitness_history = load_fitness_history_from_csv(_csv_path)
-                diagnostics = {
-                    "best_fitness": best.fitness,
-                    "best_nodes": len(best.nodes),
-                    "best_connections": best.connection_count,
-                    "iterations": iterations,
-                    "n_evaluations_done": self._n_evaluations_done,
-                    "final_species_count": mem.get("species_count", 0),
+                # Sanitise mem dict: convert non-JSON-serialisable values to str.
+                diagnostics = json.loads(json.dumps(mem, default=str))
+                artifacts = {
+                    "log_dir": str(self._log_run_dir),
+                    "run_log": str(self._log_run_dir / "run.log"),
+                    "config_json": str(self._log_run_dir / "config.json"),
+                    "fitness_history_csv": str(_csv_path),
+                    "fitness_history_jsonl": str(
+                        self._log_run_dir / "fitness_history.jsonl"
+                    ),
+                    "summary_json": str(self._log_run_dir / "summary.json"),
+                    "best_genome_pkl": str(self._log_run_dir / "best_genome.pkl"),
                 }
                 self._run_database.finish_run(
                     run_id=self._active_run_id,
                     fitness_history=fitness_history,
                     diagnostics=diagnostics,
                     stop_reason=stop_reason or "manual",
+                    artifacts=artifacts,
                 )
             except Exception:
                 pass
