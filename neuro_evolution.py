@@ -2854,6 +2854,13 @@ class NeuroEvolution:
                 from yane.util.run_database import load_fitness_history_from_csv
                 _csv_path = self._log_run_dir / "fitness_history.csv"
                 fitness_history = load_fitness_history_from_csv(_csv_path)
+                # Ensure the final best is recorded accurately — the last CSV
+                # heartbeat may predate the true final improvement.
+                if not fitness_history or fitness_history[-1].get("best_fitness") != best.fitness:
+                    fitness_history.append({
+                        "iteration": iterations,
+                        "best_fitness": best.fitness,
+                    })
                 # Sanitise mem dict: convert non-JSON-serialisable values to str.
                 diagnostics = json.loads(json.dumps(mem, default=str))
                 artifacts = {
