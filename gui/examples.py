@@ -761,6 +761,7 @@ class ExampleConfig:
         default_lamarck_steps: int = 0,
         default_config: dict | None = None,
         default_adaptive_policies: dict | None = None,
+        action_display_fn: "Callable[[list[float]], str] | None" = None,
     ) -> None:
         self.name = name
         self.description = description
@@ -793,6 +794,9 @@ class ExampleConfig:
         self.default_lamarck_steps = default_lamarck_steps
         self.default_config = _gui_defaults(**(default_config or {}))
         self.default_adaptive_policies = _adaptive_defaults(**(default_adaptive_policies or {}))
+        # Optional callable: (network_outputs: list[float]) -> str
+        # When set, the Inspect tab shows the interpreted action next to raw outputs.
+        self.action_display_fn: "Callable[[list[float]], str] | None" = action_display_fn
 
 
 def _pi_make_curriculum(
@@ -954,6 +958,14 @@ def load_examples() -> list[ExampleConfig]:
         ),
     ]
 
+    # ── Action display helpers for Gym examples ────────────────────────────────
+    def _action_cartpole(outs): return ["← Links", "→ Rechts"][outs.index(max(outs))]
+    def _action_acrobot(outs): return ["+CCW", "⊘ Kein Drehmoment", "-CW"][outs.index(max(outs))]
+    def _action_mountaincar_d(outs): return ["← Links", "⊘ Kein Antrieb", "→ Rechts"][outs.index(max(outs))]
+    def _action_lunarlander(outs): return [
+        "⊘ Keine", "← Links", "▲ Haupt", "→ Rechts"][outs.index(max(outs))]
+    def _action_cartpole_2(outs): return f"{'← Links' if outs.index(max(outs)) == 0 else '→ Rechts'} (raw: {outs[0]:.3f} | {outs[1]:.3f})"
+
     try:
         import gymnasium  # noqa: F401
         examples += [
@@ -971,6 +983,7 @@ def load_examples() -> list[ExampleConfig]:
                 default_target_species=4,
                 default_config=_CLASSIC_CONTROL_DEFAULTS,
                 default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
+                action_display_fn=_action_cartpole,
             ),
             ExampleConfig(
                 name="Acrobot",
@@ -986,6 +999,7 @@ def load_examples() -> list[ExampleConfig]:
                 default_target_species=5,
                 default_config=_CLASSIC_CONTROL_DEFAULTS,
                 default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
+                action_display_fn=_action_acrobot,
             ),
             ExampleConfig(
                 name="MountainCar (Continuous)",
@@ -1001,6 +1015,7 @@ def load_examples() -> list[ExampleConfig]:
                 default_target_species=4,
                 default_config=_CLASSIC_CONTROL_DEFAULTS,
                 default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
+                action_display_fn=lambda outs: f"Drehmoment: {outs[0]:.4f}",
             ),
             ExampleConfig(
                 name="MountainCar (Discrete)",
@@ -1016,6 +1031,7 @@ def load_examples() -> list[ExampleConfig]:
                 default_target_species=4,
                 default_config=_CLASSIC_CONTROL_DEFAULTS,
                 default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
+                action_display_fn=_action_mountaincar_d,
             ),
             ExampleConfig(
                 name="Pendulum",
@@ -1057,6 +1073,7 @@ def load_examples() -> list[ExampleConfig]:
                     "sigma_penalty": 0.05,
                 },
                 default_adaptive_policies=_LARGE_CONTROL_ADAPTIVE,
+                action_display_fn=_action_lunarlander,
             ),
             ExampleConfig(
                 name="BipedalWalker",

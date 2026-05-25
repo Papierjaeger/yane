@@ -295,6 +295,20 @@ class InspectTab(QWidget):
         self._output_labels: list[QLabel] = []
         manual_layout.addWidget(self._output_group)
 
+        # Interpreted action (shown only when example provides action_display_fn)
+        self._action_row = QWidget()
+        action_row_layout = QHBoxLayout(self._action_row)
+        action_row_layout.setContentsMargins(0, 0, 0, 0)
+        action_row_layout.addWidget(_label("Aktion:", "sectionTitle"))
+        self._action_lbl = QLabel("—")
+        self._action_lbl.setStyleSheet(
+            "font-family: monospace; font-size: 13px; font-weight: bold; color: #cdd6f4;"
+        )
+        action_row_layout.addWidget(self._action_lbl)
+        action_row_layout.addStretch()
+        self._action_row.setVisible(False)
+        manual_layout.addWidget(self._action_row)
+
         # Memory state display (hidden until memory nodes exist)
         self._memory_group = QGroupBox("Memory state")
         self._memory_form  = QFormLayout(self._memory_group)
@@ -382,6 +396,8 @@ class InspectTab(QWidget):
         self._example = example
         has_scales = bool(example and (example.input_scale or example.output_scale))
         self._denorm_row.setVisible(has_scales)
+        has_action = bool(example and getattr(example, "action_display_fn", None))
+        self._action_row.setVisible(has_action)
         self._rebuild_test_rows()
         self._rebuild_input_widgets(
             example.n_inputs  if example else 0,
@@ -727,9 +743,17 @@ class InspectTab(QWidget):
                     lbl.setText(_fmt_value(v, True))
                 else:
                     lbl.setText(f"{v:.5f}")
+            # Show interpreted action if example provides action_display_fn
+            action_fn = getattr(self._example, "action_display_fn", None) if self._example else None
+            if action_fn is not None and self._action_row.isVisible():
+                try:
+                    self._action_lbl.setText(action_fn(list(outputs)))
+                except Exception:
+                    self._action_lbl.setText("—")
         except Exception as e:
             for lbl in self._output_labels:
                 lbl.setText(f"Error: {e}")
+            self._action_lbl.setText("—")
         self._update_memory_display()
 
     # ── Denormalize toggle ─────────────────────────────────────────────

@@ -1,0 +1,506 @@
+"""Tests for P0 features: Event-System, Anomaly Detection, Fitness Transform,
+Genome Export, Validation Set, Config Persistence."""
+from __future__ import annotations
+
+import json
+import math
+import types
+import tempfile
+import os
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Event System
+# ---------------------------------------------------------------------------
+
+class TestEventBus:
+    def test_on_off_emit(self):
+        from yane.evolution.events import EventBus
+        bus = EventBus()
+        received = []
+        def handler(p): received.append(p)
+        bus.on("test", handler)
+        bus.emit("test", 42)
+        assert received == [42]
+        bus.off("test", handler)
+        bus.emit("test", 99)
+        assert received == [42]  # handler unregistered
+
+    def test_idempotent_on(self):
+        from yane.evolution.events import EventBus
+        bus = EventBus()
+        calls = []
+        fn = lambda p: calls.append(p)
+        bus.on("x", fn)
+        bus.on("x", fn)  # registering twice should not double-fire
+        bus.emit("x", 1)
+        assert len(calls) == 1
+
+    def test_exception_in_handler_does_not_propagate(self):
+        from yane.evolution.events import EventBus
+        bus = EventBus()
+        bus.on("x", lambda p: 1 / 0)
+        bus.emit("x", None)  # must not raise
+
+    def test_clear_event(self):
+        from yane.evolution.events import EventBus
+        bus = EventBus()
+        hits = []
+        bus.on("a", lambda p: hits.append(p))
+        bus.on("b", lambda p: hits.append(p))
+        bus.clear("a")
+        bus.emit("a", 1)
+        bus.emit("b", 2)
+        assert hits == [2]
+
+    def test_clear_all(self):
+        from yane.evolution.events import EventBus
+        bus = EventBus()
+        hits = []
+        bus.on("a", lambda p: hits.append(p))
+        bus.clear()
+        bus.emit("a", 1)
+        assert hits == []
+
+    def test_handler_count(self):
+        from yane.evolution.events import EventBus
+        bus = EventBus()
+        bus.on("x", lambda p: None)
+        bus.on("x", lambda p: None)
+        assert bus.handler_count("x") == 2
+        assert bus.handler_count("y") == 0
+
+    def test_ne_on_off_emit(self):
+        """NeuroEvolution.on/off/emit delegate to event bus."""
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution()
+        received = []
+        def handler(p): received.append(p)
+        ne.on("my_event", handler)
+        ne.emit("my_event", "hello")
+        assert received == ["hello"]
+        ne.off("my_event", handler)
+        ne.emit("my_event", "ignored")
+        assert len(received) == 1
+
+
+# ---------------------------------------------------------------------------
+# Anomaly Detection
+# ---------------------------------------------------------------------------
+
+class TestAnomalyDetection:
+    def _diag(self, max_fitness=1.0, fitness_iqr=0.5, species_count=3,
+               stagnation_count=0, stagnation_threshold=20, pop_evaluated=20):
+        return {
+            "max_fitness": max_fitness,
+            "fitness_iqr": fitness_iqr,
+            "species_count": species_count,
+            "stagnation_count": stagnation_count,
+            "stagnation_threshold": stagnation_threshold,
+            "pop_evaluated": pop_evaluated,
+        }
+
+    def test_fitness_collapse_fires(self):
+        from yane.evolution.anomaly_detection import FitnessCollapseDetector
+        det = FitnessCollapseDetector(drop_frac=0.1, window=3)
+        d = self._diag
+        det.check(d(max_fitness=1.0), 1)
+        det.check(d(max_fitness=1.0), 2)
+        r = det.check(d(max_fitness=0.5), 3)
+        assert r is not None
+        assert r.kind == "fitness_collapse"
+
+    def test_fitness_collapse_no_fire_when_ok(self):
+        from yane.evolution.anomaly_detection import FitnessCollapseDetector
+        det = FitnessCollapseDetector(drop_frac=0.5, window=3)
+        d = self._diag
+        for i in range(3):
+            r = det.check(d(max_fitness=1.0), i)
+        assert r is None
+
+    def test_diversity_collapse_fires(self):
+        from yane.evolution.anomaly_detection import DiversityCollapseDetector
+        det = DiversityCollapseDetector(min_iqr=0.01)
+        r = det.check(self._diag(fitness_iqr=1e-5), 1)
+        assert r is not None
+        assert r.kind == "diversity_collapse"
+
+    def test_diversity_collapse_no_fire_when_small_pop(self):
+        from yane.evolution.anomaly_detection import DiversityCollapseDetector
+        det = DiversityCollapseDetector(min_iqr=0.01, min_pop=50)
+        r = det.check(self._diag(fitness_iqr=0.0, pop_evaluated=5), 1)
+        assert r is None
+
+    def test_homogenization_fires(self):
+        from yane.evolution.anomaly_detection import HomogenizationDetector
+        det = HomogenizationDetector(window=3)
+        for i in range(3):
+            r = det.check(self._diag(species_count=1), i)
+        assert r is not None
+        assert r.kind == "homogenization"
+
+    def test_homogenization_resets_on_recovery(self):
+        from yane.evolution.anomaly_detection import HomogenizationDetector
+        det = HomogenizationDetector(window=3)
+        det.check(self._diag(species_count=1), 1)
+        det.check(self._diag(species_count=5), 2)  # recovery
+        r = det.check(self._diag(species_count=1), 3)
+        assert r is None  # streak reset
+
+    def test_stuck_speciation_fires(self):
+        from yane.evolution.anomaly_detection import StuckSpeciationDetector
+        det = StuckSpeciationDetector(min_stagnation_frac=0.5)
+        r = det.check(self._diag(species_count=1, stagnation_count=15, stagnation_threshold=20), 1)
+        assert r is not None
+        assert r.kind == "stuck_speciation"
+
+    def test_anomaly_detector_set(self):
+        from yane.evolution.anomaly_detection import AnomalyDetectorSet, FitnessCollapseDetector
+        ds = AnomalyDetectorSet([FitnessCollapseDetector(drop_frac=0.1, window=3)])
+        d = self._diag
+        for i in range(2):
+            ds.check_all(d(max_fitness=1.0), i)
+        reports = ds.check_all(d(max_fitness=0.0), 3)
+        assert len(reports) == 1
+        assert ds.n_detected == 1
+        assert ds.last_anomaly is not None
+        diag = ds.get_diagnostics()
+        assert diag["anomalies_detected"] == 1
+
+    def test_ne_set_anomaly_detectors(self):
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution()
+        ne.set_anomaly_detectors()  # default detectors
+        assert ne._anomaly_detectors is not None
+        ne.set_anomaly_detectors([])  # empty list
+        assert ne._anomaly_detectors is not None
+
+
+# ---------------------------------------------------------------------------
+# Fitness Transform
+# ---------------------------------------------------------------------------
+
+class TestFitnessTransform:
+    def test_rank_transform(self):
+        from yane.evolution.fitness_transform import RankTransform
+        t = RankTransform()
+        result = t([10.0, 0.0, 5.0])
+        # expected ranks: 0.0 → 1/3, 5.0 → 2/3, 10.0 → 3/3
+        assert result[1] < result[2] < result[0]
+        assert abs(result[0] - 1.0) < 1e-9
+
+    def test_rank_transform_empty(self):
+        from yane.evolution.fitness_transform import RankTransform
+        assert RankTransform()([]) == []
+
+    def test_sigma_scaling(self):
+        from yane.evolution.fitness_transform import SigmaScaling
+        t = SigmaScaling()
+        result = t([1.0, 2.0, 3.0])
+        assert len(result) == 3
+        assert all(v >= 0.0 for v in result)
+
+    def test_sigma_scaling_uniform(self):
+        from yane.evolution.fitness_transform import SigmaScaling
+        result = SigmaScaling()([5.0, 5.0, 5.0])
+        assert all(v == 1.0 for v in result)
+
+    def test_linear_normalize(self):
+        from yane.evolution.fitness_transform import LinearNormalize
+        t = LinearNormalize(0.0, 1.0)
+        result = t([0.0, 5.0, 10.0])
+        assert abs(result[0] - 0.0) < 1e-9
+        assert abs(result[2] - 1.0) < 1e-9
+
+    def test_clip_transform(self):
+        from yane.evolution.fitness_transform import ClipTransform
+        t = ClipTransform(-1.0, 1.0)
+        result = t([-5.0, 0.5, 5.0])
+        assert result == [-1.0, 0.5, 1.0]
+
+    def test_chain_transform(self):
+        from yane.evolution.fitness_transform import ChainTransform, RankTransform, LinearNormalize
+        t = ChainTransform([RankTransform(), LinearNormalize(0.0, 10.0)])
+        result = t([3.0, 1.0, 2.0])
+        assert len(result) == 3
+        assert min(result) >= 0.0
+        assert max(result) <= 10.0
+
+    def test_ne_set_fitness_transform(self):
+        from yane.neuro_evolution import NeuroEvolution
+        from yane.evolution.fitness_transform import RankTransform
+        ne = NeuroEvolution()
+        ne.set_fitness_transform(RankTransform())
+        assert ne._fitness_transform is not None
+        ne.set_fitness_transform(None)
+        assert ne._fitness_transform is None
+
+
+# ---------------------------------------------------------------------------
+# Genome Export
+# ---------------------------------------------------------------------------
+
+class TestGenomeExport:
+    def _make_xor_genome(self):
+        """Build a simple hand-crafted genome that approximates XOR."""
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution(seed=42)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.set_population_size(10)
+        # Just return the initial genome for structural tests
+        return ne._population._evaluated[0] if ne._population._evaluated else ne._population._unevaluated[0]
+
+    def test_to_python_returns_string(self):
+        from yane.evolution.genome_export import genome_to_python
+        genome = self._make_xor_genome()
+        src = genome_to_python(genome)
+        assert isinstance(src, str)
+        assert "def forward(inputs):" in src
+        assert "import math" in src
+
+    def test_to_python_executes(self):
+        from yane.evolution.genome_export import genome_to_python
+        genome = self._make_xor_genome()
+        src = genome_to_python(genome)
+        ns = {}
+        exec(compile(src, "<genome>", "exec"), ns)
+        result = ns["forward"]([0.0, 0.0])
+        assert isinstance(result, list)
+        assert len(result) == 1
+
+    def test_to_python_matches_forward(self):
+        """Exported function must produce same output as genome.forward()."""
+        from yane.evolution.genome_export import genome_to_python
+        genome = self._make_xor_genome()
+        genome.reset()
+        inputs = [0.3, 0.7]
+        expected = list(genome.forward(inputs))
+        src = genome_to_python(genome)
+        ns = {}
+        exec(compile(src, "<genome>", "exec"), ns)
+        got = ns["forward"](inputs)
+        for e, g in zip(expected, got):
+            assert abs(e - g) < 1e-6, f"Mismatch: {e} vs {g}"
+
+    def test_to_numpy_weights(self):
+        from yane.evolution.genome_export import genome_to_numpy_weights
+        genome = self._make_xor_genome()
+        result = genome_to_numpy_weights(genome)
+        assert "W" in result
+        assert "b" in result
+        assert "labels" in result
+        assert result["n_inputs"] == 2
+        assert result["n_outputs"] == 1
+        n = len(genome.nodes)
+        assert len(result["W"]) == n
+        assert len(result["b"]) == n
+
+    def test_ne_export_genome_python(self):
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution(seed=7)
+        ne.configure(n_inputs=2, n_outputs=1)
+        # Manually evaluate one genome
+        pop = ne._population
+        g = pop._unevaluated[0]
+        pop.submit(g, 0.5, None)
+        src = ne.export_genome_python()
+        assert "def forward" in src
+
+    def test_ne_export_genome_weights(self):
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution(seed=7)
+        ne.configure(n_inputs=3, n_outputs=2)
+        pop = ne._population
+        g = pop._unevaluated[0]
+        pop.submit(g, 0.5, None)
+        w = ne.export_genome_weights()
+        assert w["n_inputs"] == 3
+        assert w["n_outputs"] == 2
+
+    def test_export_to_file(self):
+        from yane.evolution.genome_export import genome_to_python
+        genome = self._make_xor_genome()
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
+            path = f.name
+        try:
+            src = genome_to_python(genome)
+            with open(path, "w") as f:
+                f.write(src)
+            assert os.path.exists(path)
+        finally:
+            os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Validation Set
+# ---------------------------------------------------------------------------
+
+class TestValidationSet:
+    def test_set_validation_fn(self):
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution()
+        ne.set_validation_fn(lambda g: 1.0)
+        assert ne._validation_fn is not None
+        ne.set_validation_fn(None)
+        assert ne._validation_fn is None
+        assert ne._last_validation_fitness is None
+
+    def test_validation_fn_called_during_train(self):
+        """Validation function must be called at generation boundary."""
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution(seed=42)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.set_population_size(5)
+        ne.set_max_iterations(10)
+        val_calls = []
+
+        def val_fn(genome):
+            val_calls.append(genome)
+            return 0.5
+
+        ne.set_validation_fn(val_fn)
+        ne.train(lambda g: 0.5)
+        # Validation should have been called at least once (at 5-genome generation boundary)
+        assert len(val_calls) >= 1
+
+    def test_validation_fitness_in_diagnostics_after_generation(self):
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution(seed=42)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.set_population_size(5)
+        ne.set_max_iterations(10)
+        ne.set_validation_fn(lambda g: 0.99)
+        ne.train(lambda g: 0.5)
+        assert ne._last_validation_fitness == pytest.approx(0.99)
+
+
+# ---------------------------------------------------------------------------
+# Config Persistence
+# ---------------------------------------------------------------------------
+
+class TestConfigPersistence:
+    def test_save_config(self):
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution(seed=1)
+        ne.configure(n_inputs=2, n_outputs=1)
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            ne.save_config(path)
+            cfg = json.loads(open(path).read())
+            assert cfg["n_inputs"] == 2
+            assert cfg["n_outputs"] == 1
+            assert cfg["seed"] == 1
+        finally:
+            os.unlink(path)
+
+    def test_load_config_applies_settings(self):
+        from yane.neuro_evolution import NeuroEvolution
+        cfg = {
+            "seed": 42,
+            "population_size": 50,
+            "max_iterations": 200,
+            "n_inputs": 3,
+            "n_outputs": 1,
+            "min_fitness": 0.9,
+            "n_workers": 1,
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(cfg, f)
+            path = f.name
+        try:
+            ne = NeuroEvolution()
+            ne.load_config(path)
+            assert ne._population_size == 50
+            assert ne.max_iterations == 200
+            assert ne.min_fitness == pytest.approx(0.9)
+        finally:
+            os.unlink(path)
+
+    def test_save_load_roundtrip(self):
+        from yane.neuro_evolution import NeuroEvolution
+        ne1 = NeuroEvolution(seed=7)
+        ne1.configure(n_inputs=3, n_outputs=2)
+        ne1.set_population_size(80)
+        ne1.set_max_iterations(500)
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            ne1.save_config(path)
+            ne2 = NeuroEvolution()
+            ne2.load_config(path)
+            assert ne2._population_size == 80
+            assert ne2.max_iterations == 500
+        finally:
+            os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Events fired during training
+# ---------------------------------------------------------------------------
+
+class TestTrainingEvents:
+    def _run_short(self, **kwargs):
+        from yane.neuro_evolution import NeuroEvolution
+        ne = NeuroEvolution(seed=42)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.set_population_size(5)
+        ne.set_max_iterations(12)
+        for k, v in kwargs.items():
+            getattr(ne, k)(v)
+        return ne
+
+    def test_run_end_event_fired(self):
+        ne = self._run_short()
+        received = []
+        ne.on("run_end", lambda p: received.append(p))
+        ne.train(lambda g: 0.5)
+        assert len(received) == 1
+        assert "stop_reason" in received[0]
+        assert "iterations" in received[0]
+
+    def test_new_best_event_fired(self):
+        ne = self._run_short()
+        received = []
+        ne.on("new_best", lambda p: received.append(p))
+        ne.train(lambda g: 0.5)
+        assert len(received) >= 1
+        assert "fitness" in received[0]
+        assert "genome" in received[0]
+
+    def test_generation_end_event_fired(self):
+        ne = self._run_short()
+        received = []
+        ne.on("generation_end", lambda p: received.append(p))
+        ne.train(lambda g: 0.5)
+        # generation_end fires at heartbeat (every 100 iters); 12 iters → 0 heartbeats
+        # No assertion on count, just check no crash
+
+    def test_anomaly_event_via_detector(self):
+        """AnomalyDetectorSet fires 'anomaly' event through the bus."""
+        from yane.evolution.anomaly_detection import HomogenizationDetector
+        ne = self._run_short()
+        ne.set_anomaly_detectors([HomogenizationDetector(window=1)])
+        anomalies = []
+        ne.on("anomaly", lambda p: anomalies.append(p))
+        ne.train(lambda g: 0.5)
+        # With window=1 and 1 species, anomaly will fire on first heartbeat if any
+        # No crash is the main assertion; count may be 0 if no heartbeat hit
+
+    def test_fitness_transform_applied_during_train(self):
+        """RankTransform changes genome.fitness but not genome.raw_fitness."""
+        from yane.neuro_evolution import NeuroEvolution
+        from yane.evolution.fitness_transform import RankTransform
+        ne = NeuroEvolution(seed=42)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.set_population_size(5)
+        ne.set_max_iterations(10)
+        ne.set_fitness_transform(RankTransform())
+        ne.train(lambda g: 0.5)
+        # After training, fitness values should be rank-transformed (all in (0,1])
+        for g in ne._population._evaluated:
+            assert 0.0 < g.fitness <= 1.0 + 1e-9

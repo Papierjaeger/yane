@@ -9,6 +9,23 @@ from yane.evolution.descriptors import AdaptiveFitnessComponentWeights, FitnessC
 from yane.evolution.meta_adaptive import MetaAdaptivePolicyEvolver, PolicyGeneBounds, PolicyGenes
 from yane.evolution.modularity import ModuleBlueprint, ModuleLibrary, module_crossover
 from yane.evolution.indirect_encoding import CPPNGenome, Substrate, hyperneat_substrate, generate_genome_from_cppn
+from yane.evolution.events import EventBus
+from yane.evolution.anomaly_detection import (
+    AnomalyReport,
+    FitnessCollapseDetector,
+    DiversityCollapseDetector,
+    HomogenizationDetector,
+    StuckSpeciationDetector,
+    AnomalyDetectorSet,
+)
+from yane.evolution.fitness_transform import (
+    RankTransform,
+    SigmaScaling,
+    LinearNormalize,
+    ClipTransform,
+    ChainTransform,
+)
+from yane.evolution.genome_export import genome_to_python, genome_to_numpy_weights
 
 __all__ = [
     "NeuroEvolution",
@@ -34,4 +51,22 @@ __all__ = [
     "Substrate",
     "hyperneat_substrate",
     "generate_genome_from_cppn",
+    # Event system
+    "EventBus",
+    # Anomaly detection
+    "AnomalyReport",
+    "FitnessCollapseDetector",
+    "DiversityCollapseDetector",
+    "HomogenizationDetector",
+    "StuckSpeciationDetector",
+    "AnomalyDetectorSet",
+    # Fitness transforms
+    "RankTransform",
+    "SigmaScaling",
+    "LinearNormalize",
+    "ClipTransform",
+    "ChainTransform",
+    # Genome export
+    "genome_to_python",
+    "genome_to_numpy_weights",
 ]

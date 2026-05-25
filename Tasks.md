@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0- und P1-Tasks abgeschlossen. Teststand: `742 passed`.
+**Aktueller Stand:** Alle P0-Tasks abgeschlossen. Teststand: `813 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -16,7 +16,8 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 - Remote/Distributed Evaluation: HTTP-Protokoll, Client/Worker, Retry/Cancel, Benchmark: implementiert.
 - P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies, Evolvierbare Descriptor-Gewichte: implementiert.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
-- Naechster Schwerpunkt: Benutzerfreundlichkeit, Deployment, Anpassungsfaehigkeit.
+- Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
+- Naechster Schwerpunkt: P1-Tasks (Landscape-Viz, Selektionsstrategie, Generationsreport, Eval-Middleware).
 
 ## Legende
 
@@ -33,7 +34,151 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ---
 
-### 🔲 P0 Genome-Export (Python-Funktion / ONNX)
+### ✅ P0 Event-System / Observer-Muster
+
+Die Evolution hat kein entkoppeltes Benachrichtigungssystem; GUI, Logging und externe Integrationen greifen direkt auf interne Zustände zu.
+
+- `yane.on(event, fn)` und `yane.off(event, fn)`: Callbacks fuer `"generation_end"`, `"new_best"`, `"species_created"`, `"species_extinct"`, `"stagnation"`, `"run_end"`.
+- Callback-Parameter: vollstaendiges Diagnostics-Dict, Generations-Index, bestes Genom.
+- Interne Nutzung: GUI-Worker, CSV-Logger und Adaptive Controller werden auf dieses System umgestellt.
+- `yane.emit(event, payload)`: oeffentliche API fuer benutzerdefinierte Events aus Evaluatoren heraus.
+- Schwacher Referenz-Mechanismus (`weakref`) damit registrierte GUI-Objekte keine Memory-Leaks verursachen.
+
+### ✅ P0 Online-Anomalie-Detektion
+
+Problematische Trainingslaeufe (Fitness-Einbruch, Diversitaets-Kollaps) werden erst im Nachhinein erkannt.
+
+- Detektoren als leichtgewichtige Klassen mit `check(diagnostics) -> AnomalyReport | None`:
+  - `FitnessCollapseDetector`: Best-Fitness faellt mehr als X% in N Generationen.
+  - `DiversityCollapseDetector`: Durchschnittliche genetische Distanz unterschreitet Schwelle.
+  - `HomogenizationDetector`: Anteil identischer Topologien ueberschreitet Schwelle.
+  - `StuckSpeciationDetector`: Species-Anzahl konstant 1 fuer N Generationen ohne Verbesserung.
+- `yane.set_anomaly_detectors([...])` oder `add_anomaly_detector(detector)`.
+- GUI: farbiger Warnhinweis in der Statuszeile; Anomalie-Log im Diagnostics-Tab.
+- Diagnostics: `anomalies_detected` (Zaehler) und `last_anomaly` (Event + Generation) in `population_memory_info()`.
+
+### ✅ P0 Fitness-Transformer-API
+
+Fitness-Shaping (Ranking, Clipping, Normierung) ist ueber mehrere Stellen im Code verstreut und nicht benutzerdefiniert austauschbar.
+
+- `yane.set_fitness_transform(fn)`: Callable `(raw_fitnesses: list[float]) -> list[float]` wird nach jeder Evaluationsrunde angewendet.
+- Eingebaute Transformer: `RankTransform`, `SigmaScaling`, `LinearNormalize(lo, hi)`, `ClipTransform(min, max)`.
+- Transformer-Kette: `yane.set_fitness_transform(ChainTransform([RankTransform(), SigmaScaling()]))`.
+- Diagnostics: Transformer-Name und Input/Output-Range per Generation.
+- Bestehende Fitness-Sanitizer und Normierungs-Code wird auf diese API umgestellt.
+
+---
+
+### 🔲 P1 Fitness-Landscape-Visualisierung (PCA / t-SNE)
+
+Konvergenzverhalten und Populationsstruktur sind nur ueber Zahlen erkennbar; die geometrische Verteilung im Genotyp-Raum ist unsichtbar.
+
+- Genome einer Generation als Feature-Vektoren kodieren (Gewichtsvektor + Verbindungsmaske).
+- PCA (2 Komponenten, ohne externe Deps) und optionales t-SNE (via `scikit-learn` falls installiert) zur Projektion.
+- GUI: interaktive Scatter-Punktwolke im Diagnostics-Tab; Farbe = Fitness, Form = Species, Groesse = Komplexitaet.
+- Hover-Tooltip mit Genome-ID, Species, Fitness, Nodes/Connections.
+- Export: Snapshot als PNG; alle Projektionspunkte als CSV.
+- Benchmark: Visualisierung auf XOR-Lauf zeigt Species-Cluster klar getrennt.
+
+### 🔲 P1 Selektionsstrategie als Plugin
+
+Die Selektionsstrategie (Tournament) ist fest in `population.py` verdrahtet; kein Austausch ohne Code-Aenderung.
+
+- `SelectionStrategy`-Protokoll: `select(population, n) -> list[Genome]`.
+- Eingebaute Strategien: `TournamentSelection(k=3)`, `ElitistSelection(top_frac=0.2)`, `FitnessProportional()`, `NoveltyOnlySelection()`, `RankSelection()`.
+- `NeuroEvolution.set_selection_strategy(strategy)`.
+- Per-Species-Ueberschreibung: `set_selection_strategy(strategy, species_id=...)`.
+- Diagnostics: aktive Strategie, Durchschnittsfitness der selektierten vs. nicht-selektierten Genome.
+- Tests: jede Strategie gibt korrekte Anzahl Genome zurueck; Fitness-Proportional ist stochastisch korrekt.
+
+### 🔲 P1 Generationsreport / Run-Postmortem
+
+Nach einem Trainingslauf gibt es keine strukturierte Zusammenfassung; Erkenntnisse muessen manuell aus Logs und CSV herausgezogen werden.
+
+- `yane.export_run_report(path, format="html"|"json"|"md")`: generiert Bericht nach `run_end`.
+- Inhalte: Fitness-Kurve (SVG-Inline fuer HTML), beste Genome (Topologie + Score), Mutations-Attribution, Anomalie-Log, Konfiguration, Laufzeit.
+- HTML-Report ist self-contained (kein externer CSS/JS); JSON-Report ist maschinenlesbar.
+- GUI: „Report exportieren"-Button im Diagnostics-Tab; oeffnet gespeicherte Datei im Browser.
+- `yane.set_report_autosave(path_template="{date}_{example}_report.html")`.
+
+### 🔲 P1 Evaluation-Middleware-Stack
+
+Evaluatoren sind einfache Callables ohne Kompositionsmechanismus; Caching, Normierung und Noise-Injection muessen pro Evaluator manuell implementiert werden.
+
+- `EvalMiddleware`-Protokoll: `__call__(genome, eval_fn, ctx) -> float`.
+- Eingebaute Middleware: `CachingMiddleware(maxsize=512)` (Genome-Hash → Fitness), `NoiseMiddleware(sigma=0.05)` (Input-Perturbation), `TimingMiddleware` (Eval-Zeit pro Genom), `RetryMiddleware(n=3, aggregation="mean")`.
+- `yane.add_eval_middleware(mw)` haengt in die Kette ein.
+- Middleware-Reihenfolge: LIFO (zuletzt hinzugefuegt = aeussere Schicht).
+- Diagnostics: Cache-Hit-Rate, Durchschnittliche Eval-Zeit, Retry-Rate.
+
+### 🔲 P1 Populations-Filter und -Aggregatoren API
+
+Analyse von Populationszustaenden erfordert direkten Zugriff auf interne Listen; keine saubere funktionale API.
+
+- `population.filter(fn: Genome -> bool) -> list[Genome]`: selektiert Genome nach Praedikat.
+- `population.map(fn: Genome -> T) -> list[T]`: transformiert Genome zu beliebigen Werten.
+- `population.reduce(fn: (acc, Genome) -> acc, init) -> acc`: Fold ueber Population.
+- `population.group_by(fn: Genome -> K) -> dict[K, list[Genome]]`: Gruppierung (z. B. nach Species oder Aktivierungstyp).
+- `population.top_k(k, key=lambda g: g.fitness) -> list[Genome]`.
+- Alle Methoden docstring-frei, aber mit Typ-Annotationen; kein Overhead wenn nicht verwendet.
+- Tests: Filter, Map, Group-by auf kleiner Test-Population; Top-k-Reihenfolge korrekt.
+
+### 🔲 P1 Connection-Weight-Histogramm und Gewichtsgesundheit
+
+Pathologien wie Vanishing/Exploding Weights oder symmetrische Gewichtsverteilungen sind in den Diagnostics unsichtbar.
+
+- Pro Generation: Gewichtsverteilung der gesamten Population als Histogramm (20 Bins, -5 bis +5).
+- Kennzahlen: Mean, Std, 5./95.-Perzentil, Anteil toter Gewichte (|w| < 0.01), Anteil saturierter Gewichte (|w| > 4.9).
+- GUI: Histogramm-Widget im Diagnostics-Tab (aktualisiert sich waehrend Training).
+- Warnung wenn Std < 0.05 (Kollaps) oder > 3.0 (Explosion) fuer N aufeinanderfolgende Generationen.
+- Export: Gewichtsmatrix des besten Genoms als `.npy` (NumPy-Format) fuer externe Analyse.
+
+---
+
+### 🔲 P2 Genome-Codec-Protokoll (austauschbare Serialisierung)
+
+Das Checkpoint-Format ist fest auf Pickle festgelegt; alternative Formate (JSON, MessagePack, komprimiertes Binaerformat) sind nicht einsteckbar.
+
+- `GenomeCodec`-Protokoll: `encode(genome) -> bytes`, `decode(bytes) -> Genome`.
+- Eingebaute Codecs: `PickleCodec` (Standard, bestehend), `JsonCodec` (menschenlesbar, nur einfache Genome), `MsgpackCodec` (kompakt, schnell).
+- `yane.set_checkpoint_codec(codec)`.
+- Checkpoint-Datei enthaelt Codec-Kennung im Header; Ladelogik waehlt automatisch den richtigen Codec.
+- Migration: `yane.migrate_checkpoint(path, target_codec)` konvertiert bestehende Pickles.
+- Tests: Round-trip encode → decode fuer alle Codecs auf Standard-Genomen.
+
+### 🔲 P2 Konfigurationsversionierung und Kompatibilitaets-Check
+
+Checkpoints enthalten die Population, aber nicht den vollstaendigen Zustand der Konfiguration; spaeters Nachladen kann zu stillem Fehlverhalten fuehren.
+
+- Jede `ExperimentPreset` erhaelt einen deterministischen Konfigurations-Hash (SHA-256 ueber kanonisches JSON).
+- Beim `load_checkpoint()`: Hash wird mit dem gespeicherten verglichen; bei Abweichung erscheint strukturierter Diff der geaenderten Felder.
+- `CompatibilityLevel`: `EXACT` (identisch), `COMPATIBLE` (nur unkritische Felder geaendert), `BREAKING` (Inputs/Outputs/Topologie-Constraints geaendert).
+- GUI: Warn-Dialog bei `BREAKING`; Checkpoint-Metadaten zeigen Konfig-Hash und Aenderungs-Diff.
+- CLI: `python -m yane.checkpoint --diff old.pkl new.pkl` zeigt Konfigurations-Unterschiede.
+
+### 🔲 P2 Differenzierbare Topologie-Suche (DARTS-Lite)
+
+NEAT sucht Topologien diskret durch Mutation; differenzierbare Relaxation erlaubt gradienten-basierte Architektursuche.
+
+- Kontinuierliche Relaxation: Kanten-Gewichte mit Gating-Sigmoid; niedrige Gates werden nach N Schritten geprunt.
+- `DARTSOptimizer`: wechselt ab zwischen Lamarck-Schritt (Gewichte) und Architektur-Gradient (Gates).
+- Nur fuer Feed-Forward-Genome ohne Memory-Nodes.
+- `NeuroEvolution.set_darts_mode(enabled=True, prune_threshold=0.1)`.
+- Benchmark: DARTS-Lite vs. Standard-NEAT auf Symbolic-Regression-Task.
+
+### 🔲 P2 Intrinsische Belohnung / Curiosity-Modul
+
+Sparse-Reward-Umgebungen (z. B. Maze) liefern keine nutzbare Fitness-Information; Curiosity kann die Exploration antreiben.
+
+- `CuriosityModule`: haelt ein kleines Vorhersage-Netz (auch ein YANE-Genom), das naechste Observations vorhersagt.
+- Intrinsischer Reward = Vorhersagefehler; wird zur externen Fitness addiert (gewichtet, konfigurierbar).
+- Das Vorhersage-Netz wird per Lamarck parallel zur Haupt-Population trainiert.
+- `yane.set_curiosity(enabled=True, weight=0.3, network_size=8)`.
+- Benchmark: Curiosity vs. kein Curiosity auf einem Sparse-Reward-Maze (eigene minimale Implementierung).
+
+---
+
+### ✅ P0 Genome-Export (Python-Funktion / to_numpy_weights)
 
 Trainierte Genome sollten ohne YANE-Abhaengigkeit einsetzbar sein.
 
@@ -43,7 +188,7 @@ Trainierte Genome sollten ohne YANE-Abhaengigkeit einsetzbar sein.
 - `genome.to_numpy_weights()` → kompakte Weight-Matrix fuer einfaches Deployment.
 - Regressionstest: exportierte Funktion gibt fuer alle Test-Cases dieselben Werte wie `genome.forward()`.
 
-### 🔲 P0 Gym-Inspect verbessern (Aktion + Reward anzeigen)
+### ✅ P0 Gym-Inspect verbessern (Aktion + Reward anzeigen)
 
 Inspect zeigt bei Gym-Beispielen rohe Netzwerkausgaben, nicht die interpretierte Aktion.
 
@@ -52,7 +197,7 @@ Inspect zeigt bei Gym-Beispielen rohe Netzwerkausgaben, nicht die interpretierte
 - Render-Frame im Inspect anzeigen, wenn die Umgebung `render_mode="rgb_array"` unterstuetzt.
 - `ExampleConfig`: optionales `action_display_fn` fuer benutzerdefinierte Aktionsdarstellung.
 
-### 🔲 P0 Validierungs-Set-Unterstuetzung
+### ✅ P0 Validierungs-Set-Unterstuetzung
 
 Overfitting ist auf Datensatz-Beispielen nicht erkennbar, weil Training- und Test-Daten identisch sind.
 
@@ -61,7 +206,7 @@ Overfitting ist auf Datensatz-Beispielen nicht erkennbar, weil Training- und Tes
 - GUI: Validierungs-Fitness als zweite Linie im Fitness-Chart; Warnung wenn Val-Fitness deutlich schlechter als Train-Fitness.
 - Fuer Regression-/Dataset-Beispiele: Train/Val-Split automatisch aus den Test-Cases generieren.
 
-### 🔲 P0 Vollstaendige Konfigurationspersistenz
+### ✅ P0 Vollstaendige Konfigurationspersistenz
 
 Presets speichern nur einen Teil der Einstellungen; viele GUI-Felder (Pop-Groesse, Target, Memory-Checkbox usw.) werden nicht persistiert.
 

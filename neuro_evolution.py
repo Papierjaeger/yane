@@ -41,6 +41,10 @@ from yane.evolution.operator_scheduler import OperatorScheduler
 from yane.evolution.descriptors import AdaptiveFitnessComponentWeights, FitnessComponent
 from yane.evolution.meta_adaptive import MetaAdaptivePolicyEvolver, PolicyGeneBounds, PolicyGenes
 from yane.evolution.modularity import ModuleLibrary
+from yane.evolution.events import EventBus
+from yane.evolution.fitness_transform import (  # noqa: F401  (re-exported for users)
+    RankTransform, SigmaScaling, LinearNormalize, ClipTransform, ChainTransform,
+)
 
 # Re-export for gui/worker.py backwards compatibility
 _aggregate_fitnesses = aggregate_fitnesses
@@ -146,6 +150,17 @@ class NeuroEvolution:
         self._tensorboard_logdir: Path | None = None
         self._tensorboard_writer = None         # SummaryWriter, created lazily
         self._log_callbacks: list[Callable] = []
+        # Event system
+        self._event_bus: EventBus = EventBus()
+        # Anomaly detection (None = disabled)
+        self._anomaly_detectors = None
+        # Fitness transform applied at each generation boundary (None = disabled)
+        self._fitness_transform = None
+        # Validation (None = disabled)
+        self._validation_fn: Callable | None = None
+        self._last_validation_fitness: float | None = None
+        # Track best fitness for "new_best" events
+        self._last_best_fitness: float = -float("inf")
 
     @property
     def current_genome(self) -> Genome | None:
@@ -1105,6 +1120,17 @@ class NeuroEvolution:
             iterations += 1
             self._n_evaluations_done += self._runner.n_evaluations
 
+            # --- "new_best" event -------------------------------------------
+            if self._population._evaluated:
+                _cur_best = self._population.get_best()
+                if _cur_best.raw_fitness > self._last_best_fitness:
+                    self._last_best_fitness = _cur_best.raw_fitness
+                    self._event_bus.emit("new_best", {
+                        "genome": _cur_best,
+                        "fitness": _cur_best.raw_fitness,
+                        "iteration": iterations,
+                    })
+
             # Tick adaptive components once per generation
             if iterations % _gen_size == 0:
                 if self._fitness_component_weights is not None:
@@ -1118,6 +1144,24 @@ class NeuroEvolution:
                 if self._adaptive_ctrl_enabled:
                     self._adaptive_ctrl.tick(self._population, self._lamarck)
                 self._lamarck.reset_generation_budget()
+                # Apply fitness transform to all evaluated genomes
+                if self._fitness_transform is not None:
+                    _evald = self._population._evaluated
+                    if _evald:
+                        _raw = [g.raw_fitness for g in _evald]
+                        try:
+                            _tf = self._fitness_transform(_raw)
+                            for _g, _f in zip(_evald, _tf):
+                                _g.fitness = _f
+                        except Exception:
+                            pass
+                # Run validation on best genome
+                if self._validation_fn is not None:
+                    try:
+                        _vbest = self._population.get_best()
+                        self._last_validation_fitness = self._validation_fn(_vbest)
+                    except Exception:
+                        pass
 
             # --- Periodic CSV logging + heartbeat ---------------------------
             _heartbeat_now = (iterations % 100 == 0)
@@ -1161,6 +1205,24 @@ class NeuroEvolution:
                     mem.get("largest_genome_nodes", 0),
                     mem.get("largest_genome_connections", 0))
                 self._write_crash_snapshot(iterations, mem, _li)
+                # Add validation and anomaly diagnostics to mem
+                if self._last_validation_fitness is not None:
+                    mem["validation_fitness"] = self._last_validation_fitness
+                if self._anomaly_detectors is not None:
+                    _reports = self._anomaly_detectors.check_all(mem, iterations)
+                    for _r in _reports:
+                        self._event_bus.emit("anomaly", {
+                            "kind": _r.kind, "message": _r.message,
+                            "iteration": _r.iteration, "value": _r.value,
+                        })
+                        _li("ANOMALY [%s]: %s", _r.kind, _r.message)
+                    mem.update(self._anomaly_detectors.get_diagnostics())
+                if mem.get("stagnation_count", 0) > 0:
+                    self._event_bus.emit("stagnation", {
+                        "stagnation_count": mem.get("stagnation_count", 0),
+                        "iteration": iterations,
+                    })
+                self._event_bus.emit("generation_end", {**mem, "iteration": iterations})
             elif _csv_now and _use_csv:
                 # Cheap path: compute only the fields the CSV needs, no BFS.
                 _pop = self._population
@@ -1249,6 +1311,10 @@ class NeuroEvolution:
 
         # --- End-of-run artefacts -------------------------------------------
         self._write_run_summary(name, stop_reason, iterations, _wj, _li)
+        self._event_bus.emit("run_end", {
+            "stop_reason": stop_reason or "manual",
+            "iterations": iterations,
+        })
         if self._tensorboard_writer is not None:
             try:
                 self._tensorboard_writer.close()
@@ -2274,6 +2340,166 @@ class NeuroEvolution:
         """Force Python to return freed heap pages to the OS. Call periodically."""
         gc.collect()
         _return_memory_to_os()
+
+    # ── Event system ────────────────────────────────────────────────────────
+
+    def on(self, event: str, fn: Callable) -> None:
+        """Register *fn* as a handler for training *event*.
+
+        Built-in events: ``"generation_end"``, ``"new_best"``, ``"stagnation"``,
+        ``"run_end"``, ``"anomaly"``.  Custom events can be emitted via ``emit()``.
+        """
+        self._event_bus.on(event, fn)
+
+    def off(self, event: str, fn: Callable) -> None:
+        """Unregister *fn* from *event*."""
+        self._event_bus.off(event, fn)
+
+    def emit(self, event: str, payload=None) -> None:
+        """Emit a custom event (e.g. from inside a fitness function)."""
+        self._event_bus.emit(event, payload)
+
+    # ── Anomaly detection ────────────────────────────────────────────────────
+
+    def set_anomaly_detectors(self, detectors=None) -> None:
+        """Enable anomaly detection during training.
+
+        Args:
+            detectors: List of detector instances (FitnessCollapseDetector, etc.)
+                       or None to use DEFAULT_DETECTORS (all four built-in detectors).
+
+        Detectors are checked at every heartbeat (every 100 iterations).
+        Detected anomalies are logged and emitted as ``"anomaly"`` events.
+        Diagnostics are added to ``population_memory_info()`` under
+        ``"anomalies_detected"`` and ``"last_anomaly"``.
+        """
+        from yane.evolution.anomaly_detection import AnomalyDetectorSet, DEFAULT_DETECTORS
+        self._anomaly_detectors = AnomalyDetectorSet(
+            detectors if detectors is not None else DEFAULT_DETECTORS
+        )
+
+    # ── Fitness transform ────────────────────────────────────────────────────
+
+    def set_fitness_transform(self, transform) -> None:
+        """Set a fitness transform applied at each generation boundary.
+
+        *transform* is any callable ``(list[float]) -> list[float]`` that maps
+        the raw fitness values of all evaluated genomes to transformed values.
+        The transformed values replace ``genome.fitness`` (used for selection);
+        ``genome.raw_fitness`` remains unchanged (used for stop conditions).
+
+        Built-in transforms: ``RankTransform``, ``SigmaScaling``,
+        ``LinearNormalize``, ``ClipTransform``, ``ChainTransform``.
+
+        Pass ``None`` to disable (default).
+        """
+        self._fitness_transform = transform
+
+    # ── Validation ───────────────────────────────────────────────────────────
+
+    def set_validation_fn(self, fn: Callable | None) -> None:
+        """Register a validation function run on the best genome each generation.
+
+        *fn* has the same signature as a fitness function: ``fn(genome) -> float``.
+        The result is stored separately and logged in ``population_memory_info()``
+        under ``"validation_fitness"`` — it is never used for selection.
+
+        Pass ``None`` to disable.
+        """
+        self._validation_fn = fn
+        self._last_validation_fitness = None
+
+    # ── Config persistence ────────────────────────────────────────────────────
+
+    def save_config(self, path) -> None:
+        """Write the full configuration as JSON to *path*."""
+        import json
+        Path(path).write_text(json.dumps(self._config_dict(), indent=2))
+
+    def load_config(self, path) -> None:
+        """Restore numeric training parameters from a JSON config file.
+
+        Only pre-configure parameters are applied (population size, iteration
+        limits, Lamarck settings, etc.).  Call ``configure()`` after this to
+        rebuild the population with the restored settings.
+        """
+        import json
+        cfg = json.loads(Path(path).read_text())
+
+        # Reproducibility
+        if cfg.get("seed") is not None:
+            self.set_seed(cfg["seed"])
+
+        # Population
+        if cfg.get("population_size") is not None:
+            self.set_population_size(cfg["population_size"])
+        if cfg.get("n_workers") is not None:
+            self.set_n_workers(cfg["n_workers"])
+
+        # Stopping criteria
+        if cfg.get("min_fitness") is not None:
+            self.set_min_fitness(cfg["min_fitness"])
+        if cfg.get("max_iterations") is not None:
+            self.set_max_iterations(cfg["max_iterations"])
+        if cfg.get("max_evaluations") is not None:
+            self.set_max_evaluations(cfg["max_evaluations"])
+
+        # Evaluation
+        if cfg.get("n_evaluations") is not None:
+            self._runner.n_evaluations = cfg["n_evaluations"]
+        if cfg.get("eval_aggregation") is not None:
+            self._runner.aggregation = cfg["eval_aggregation"]
+
+        # Lamarck — use the public API to avoid touching read-only properties
+        lamarck_mode = cfg.get("lamarck_mode") or "hill_climbing"
+        lamarck_steps = cfg.get("lamarck_steps") or 0
+        lamarck_sigma = cfg.get("lamarck_sigma") or 1.0
+        if lamarck_steps and lamarck_steps > 0:
+            self.set_lamarck(
+                n_steps=lamarck_steps,
+                sigma=lamarck_sigma,
+                mode=lamarck_mode,
+            )
+
+        # Complexity penalty
+        np_val = cfg.get("complexity_penalty_nodes", 0.0) or 0.0
+        cp_val = cfg.get("complexity_penalty_connections", 0.0) or 0.0
+        if np_val or cp_val:
+            self.set_complexity_penalty(np_val, cp_val)
+
+        # Elitism
+        ec = cfg.get("elite_count")
+        sec = cfg.get("species_elite_count")
+        if ec is not None or sec is not None:
+            self.set_elitism(
+                ec if ec is not None else self._elite_count,
+                sec if sec is not None else self._species_elite_count,
+            )
+
+    # ── Genome export ─────────────────────────────────────────────────────────
+
+    def export_genome_python(self, path: str | None = None) -> str:
+        """Export the best genome as a standalone Python function.
+
+        Returns the source string and optionally writes it to *path*.
+        The generated function requires only ``import math``.
+        """
+        from yane.evolution.genome_export import genome_to_python
+        self._ensure_configured()
+        src = genome_to_python(self._population.get_best())
+        if path is not None:
+            Path(path).write_text(src)
+        return src
+
+    def export_genome_weights(self) -> dict:
+        """Return the best genome's weight matrix and bias vector.
+
+        Returns a dict with keys ``"W"`` (N×N list), ``"b"`` (N list),
+        ``"labels"``, ``"n_inputs"``, ``"n_outputs"``.
+        """
+        from yane.evolution.genome_export import genome_to_numpy_weights
+        self._ensure_configured()
+        return genome_to_numpy_weights(self._population.get_best())
 
     def _ensure_configured(self) -> None:
         if not self.is_configured:
