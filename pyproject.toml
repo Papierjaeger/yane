@@ -9,11 +9,16 @@ requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "PySide6",
-    "gymnasium",
+    "gymnasium[mujoco]",
     "fastapi",
     "uvicorn[standard]",
     "pydantic",
     "psutil",
+]
+
+[project.optional-dependencies]
+atari = [
+    "gymnasium[atari]",
 ]
 
 [tool.setuptools.packages.find]

@@ -776,6 +776,8 @@ Hinweis: Dieses Beispiel ist deutlich größer als die kleinen Dataset-Beispiele
 ## 13. GUI-/Gymnasium-Beispiele
 
 Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importierbar ist.
+MuJoCo-Beispiele benötigen zusätzlich die MuJoCo-Extras (`gymnasium[mujoco]`).
+Atari-Beispiele benötigen zusätzlich ALE (`gymnasium[atari]`) und lokal verfügbare ROMs.
 
 ### 13.1 CartPole
 
@@ -870,7 +872,54 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
   - Gas: `output[1]`, geklemmt auf `[0, 1]`
   - Brake: `output[2]`, geklemmt auf `[0, 1]`
 
-### 13.9 Blackjack
+### 13.9 MuJoCo
+
+Alle Gymnasium-MuJoCo-v5-Umgebungen sind als GUI-Beispiele verfügbar:
+
+| Beispiel | Environment | Inputs | Outputs |
+|---|---|---:|---:|
+| Ant | `Ant-v5` | 105 | 8 |
+| HalfCheetah | `HalfCheetah-v5` | 17 | 6 |
+| Hopper | `Hopper-v5` | 11 | 3 |
+| Humanoid | `Humanoid-v5` | 348 | 17 |
+| Humanoid Standup | `HumanoidStandup-v5` | 348 | 17 |
+| Inverted Double Pendulum | `InvertedDoublePendulum-v5` | 11 | 1 |
+| Inverted Pendulum | `InvertedPendulum-v5` | 4 | 1 |
+| Pusher | `Pusher-v5` | 23 | 7 |
+| Reacher | `Reacher-v5` | 11 | 2 |
+| Swimmer | `Swimmer-v5` | 8 | 2 |
+| Walker2D | `Walker2d-v5` | 17 | 6 |
+
+- Kategorie: `MuJoCo`
+- Rendering: `rgb_array`
+- Actions: kontinuierliche `Box`-Actions
+- Action-Skalierung: Genome-Outputs werden auf `[0, 1]` geklemmt und pro Dimension
+  auf `env.action_space.low/high` skaliert
+- Standard-Fitness: Environment-Reward, höher ist besser
+- Laufzeiten: Pusher 100 Schritte, Reacher 50 Schritte, alle anderen 1000 Schritte
+
+### 13.10 Atari
+
+Alle registrierten ALE-Atari-v5-Spiele aus der Gymnasium-/ALE-Liste werden als
+GUI-Beispiele erzeugt.
+
+- Environment-Namespace: `ALE/<Spiel>-v5`
+- Beispiele heißen in der GUI `Atari: <Spiel>`
+- Inputs: 224
+- Outputs: 18
+- Beobachtung: Grayscale-Screen
+- Vorverarbeitung: Downsampling von `210x160` auf `14x16`, danach Normalisierung
+  auf `[0, 1]`
+- Actions: voller Atari-Action-Space mit 18 Aktionen (`full_action_space=True`)
+- Frameskip: 4
+- Trainings-Cap: 1000 Steps, Demo-Cap: 10000 Steps
+- Fitness: Environment-Reward, höher ist besser
+
+Die einheitliche 18-Output-Konfiguration macht alle Atari-Spiele transfer- und
+vergleichbar, auch wenn einzelne Spiele nur eine Teilmenge der Atari-Aktionen
+sinnvoll nutzen.
+
+### 13.11 Blackjack
 
 - Environment: `Blackjack-v1`
 - Inputs:
@@ -883,7 +932,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - `target_fitness=-0.05`
 - Fitness: durchschnittlicher Reward über 500 Episoden, in Demo 20 Episoden
 
-### 13.10 Cliff Walking
+### 13.12 Cliff Walking
 
 - Environment: `CliffWalking-v1`
 - Grid: `4x12`
@@ -901,7 +950,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
   - Bonus für neue beste Distanz
   - großer Bonus bei Zielerreichung
 
-### 13.11 Frozen Lake
+### 13.13 Frozen Lake
 
 - Environment: `FrozenLake-v1`
 - `is_slippery=False`
@@ -916,7 +965,7 @@ Die folgenden Beispiele werden in der GUI nur geladen, wenn `gymnasium` importie
 - Fitness: Mittelwert über 20 Episoden, in Demo 5 Episoden
 - Reward-Shaping: `0.1` pro Schritt näher ans Ziel
 
-### 13.12 Taxi
+### 13.14 Taxi
 
 - Environment: `Taxi-v4`
 - Inputs:

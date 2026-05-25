@@ -18,7 +18,13 @@ Das Projekt enthält:
 pip install -r requirements.txt
 ```
 
-Abhängigkeiten: `numpy`, `PySide6`, `gymnasium`, `fastapi`, `uvicorn`, `pydantic`, `psutil`
+Abhängigkeiten: `numpy`, `PySide6`, `gymnasium[mujoco]`, `fastapi`, `uvicorn`, `pydantic`, `psutil`
+
+Optional für Atari/ALE-Beispiele:
+
+```bash
+pip install "gymnasium[atari]"
+```
 
 ## Schnellstart
 
@@ -464,7 +470,7 @@ Für manuelle Parallelisierung. Optional kann ein Ergebnis auch `(genome, fitnes
 
 MNIST ist nur als Skript verfügbar (`python -m yane.examples.MNIST`), nicht in der GUI; die Spalte „Hidden Nodes in GUI" entfällt daher.
 
-Weitere GUI-Beispiele sind CartPole, Acrobot, MountainCar (Continuous), MountainCar (Discrete), Pendulum, LunarLander, BipedalWalker, CarRacing, Blackjack, Cliff Walking, Frozen Lake und Taxi. Details stehen in [TECHNISCHE_DOKUMENTATION.md](TECHNISCHE_DOKUMENTATION.md).
+Weitere GUI-Beispiele sind CartPole, Acrobot, MountainCar (Continuous), MountainCar (Discrete), Pendulum, LunarLander, BipedalWalker, CarRacing, alle MuJoCo-v5-Umgebungen, alle ALE-Atari-v5-Umgebungen, Blackjack, Cliff Walking, Frozen Lake und Taxi. Details stehen in [TECHNISCHE_DOKUMENTATION.md](TECHNISCHE_DOKUMENTATION.md).
 
 ## Technische Dokumentation
 

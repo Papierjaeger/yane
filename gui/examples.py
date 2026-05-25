@@ -143,25 +143,30 @@ def _make_continuous_action_eval(
     early_stop: float | None = None,
     max_steps: int = 1000,
 ):
-    """Generic factory for envs with Box action space in [-1, 1].
+    """Generic factory for envs with finite Box action spaces.
 
-    Sigmoid genome outputs [0, 1] are scaled to [-1, 1] per output.
+    Genome outputs are clamped to [0, 1] and scaled per dimension to the
+    environment's action-space bounds.
     """
     def make(render_callback=None, step_callback=None, demo=False):
+        import numpy as np
         import gymnasium as gym
         env = gym.make(env_id, disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None,
                        max_episode_steps=max_steps if not demo else None)
         _hooks = _make_step_hooks(step_callback, render_callback)
+        action_low = np.asarray(env.action_space.low[:n_outputs], dtype=np.float64)
+        action_high = np.asarray(env.action_space.high[:n_outputs], dtype=np.float64)
+        action_span = action_high - action_low
 
         def evaluate(genome: Genome) -> float:
             state, _ = env.reset(); genome.reset()
             total = 0.0
             done = False
             while not done:
-                raw = genome.forward(state)
-                # Clamp to [-1, 1] — LINEAR-activated outputs could otherwise blow up.
-                action = [max(-1.0, min(1.0, r * 2.0 - 1.0)) for r in raw[:n_outputs]]
+                raw = np.asarray(genome.forward(state)[:n_outputs], dtype=np.float64)
+                normalized = np.clip(raw, 0.0, 1.0)
+                action = (action_low + normalized * action_span).astype(env.action_space.dtype)
                 state, reward, terminated, truncated, _ = env.step(action)
                 total += reward
                 done = terminated or truncated
@@ -595,6 +600,77 @@ def _make_carracing_eval(grid: int = 12, max_steps: int = 500):
     return make
 
 
+def _downsample_grayscale(obs, grid_h: int, grid_w: int):
+    """Downsample an Atari screen to a small flattened [0, 1] vector."""
+    import numpy as np
+    arr = np.asarray(obs)
+    if arr.ndim == 3:
+        arr = arr.mean(axis=2)
+    h, w = arr.shape[:2]
+    if h % grid_h == 0 and w % grid_w == 0:
+        small = arr.reshape(grid_h, h // grid_h, grid_w, w // grid_w).mean(axis=(1, 3))
+    else:
+        rows = np.linspace(0, h, grid_h + 1, dtype=int)
+        cols = np.linspace(0, w, grid_w + 1, dtype=int)
+        small = np.empty((grid_h, grid_w), dtype=np.float64)
+        for r in range(grid_h):
+            for c in range(grid_w):
+                cell = arr[rows[r]:rows[r + 1], cols[c]:cols[c + 1]]
+                small[r, c] = cell.mean() if cell.size else 0.0
+    return (small.flatten() / 255.0).tolist()
+
+
+def _make_atari_eval(
+    env_id: str,
+    grid_h: int = 14,
+    grid_w: int = 16,
+    max_steps: int = 1000,
+):
+    """Generic ALE/Atari evaluator.
+
+    Uses grayscale observations downsampled from 210x160 to 14x16 inputs.
+    The full Atari 18-action space is enabled so all games share one output
+    shape and can be generated from metadata.
+    """
+    def make(render_callback=None, step_callback=None, demo=False):
+        import gymnasium as gym
+        try:
+            import ale_py
+            gym.register_envs(ale_py)
+        except Exception:
+            pass
+        env = gym.make(
+            env_id,
+            disable_env_checker=True,
+            render_mode="rgb_array" if render_callback else None,
+            obs_type="grayscale",
+            full_action_space=True,
+            frameskip=4,
+        )
+        _hooks = _make_step_hooks(step_callback, render_callback)
+
+        def evaluate(genome: Genome) -> float:
+            obs, _ = env.reset(); genome.reset()
+            total = 0.0
+            done = False
+            steps = 0
+            cap = 10_000 if demo else max_steps
+            while not done and steps < cap:
+                inputs = _downsample_grayscale(obs, grid_h, grid_w)
+                out = genome.forward(inputs)
+                action = out.index(max(out))
+                obs, reward, terminated, truncated, _ = env.step(action)
+                total += reward
+                done = terminated or truncated
+                steps += 1
+                if _hooks: _hooks(total, env)
+            return total
+
+        evaluate._env = env
+        return evaluate
+    return make
+
+
 def _make_acrobot_eval(max_steps: int = 500):
     """Returns make(render_callback, step_callback, demo) → eval_fn.
 
@@ -903,6 +979,71 @@ _LARGE_CONTROL_ADAPTIVE = _adaptive_defaults(
     module_library=True,
     module_insert_rate=0.01,
 )
+_MUJOCO_CONTROL_DEFAULTS = _gui_defaults(
+    n_workers=0,
+    multi_eval=1,
+    matrix_forward=False,
+    fitness_shaping=True,
+    quality_diversity=True,
+    quality_diversity_descriptor="Behavior",
+    fitness_components=False,
+    normalize=True,
+    early_stop_factor=0.5,
+    elite_global=2,
+    elite_species=1,
+)
+_MUJOCO_CONTROL_ADAPTIVE = _adaptive_defaults(
+    adaptive_controller=True,
+    operator_scheduler=True,
+    interspecies_mode="Adaptiv",
+    interspecies_min_rate=0.01,
+    interspecies_max_rate=0.2,
+    module_library=True,
+    module_insert_rate=0.01,
+)
+_ATARI_CONTROL_DEFAULTS = _gui_defaults(
+    n_workers=0,
+    multi_eval=1,
+    matrix_forward=False,
+    fitness_shaping=True,
+    quality_diversity=True,
+    quality_diversity_descriptor="Behavior",
+    fitness_components=False,
+    normalize=True,
+    early_stop_factor=0.0,
+    elite_global=2,
+    elite_species=1,
+)
+_ATARI_CONTROL_ADAPTIVE = _adaptive_defaults(
+    adaptive_controller=True,
+    operator_scheduler=True,
+    interspecies_mode="Adaptiv",
+    interspecies_min_rate=0.01,
+    interspecies_max_rate=0.2,
+    module_library=True,
+    module_insert_rate=0.01,
+)
+
+_ATARI_GAMES = [
+    "Adventure", "AirRaid", "Alien", "Amidar", "Assault", "Asterix", "Asteroids",
+    "Atlantis", "Atlantis2", "Backgammon", "BankHeist", "BasicMath", "BattleZone",
+    "BeamRider", "Berzerk", "Blackjack", "Bowling", "Boxing", "Breakout",
+    "Carnival", "Casino", "Centipede", "ChopperCommand", "CrazyClimber",
+    "Crossbow", "Darkchambers", "Defender", "DemonAttack", "DonkeyKong",
+    "DoubleDunk", "Earthworld", "ElevatorAction", "Enduro", "Entombed", "Et",
+    "FishingDerby", "FlagCapture", "Freeway", "Frogger", "Frostbite", "Galaxian",
+    "Gopher", "Gravitar", "Hangman", "HauntedHouse", "Hero", "HumanCannonball",
+    "IceHockey", "Jamesbond", "JourneyEscape", "Kaboom", "Kangaroo",
+    "KeystoneKapers", "KingKong", "Klax", "Koolaid", "Krull", "KungFuMaster",
+    "LaserGates", "LostLuggage", "MarioBros", "MiniatureGolf", "MontezumaRevenge",
+    "MrDo", "MsPacman", "NameThisGame", "Othello", "Pacman", "Phoenix", "Pitfall",
+    "Pitfall2", "Pong", "Pooyan", "PrivateEye", "Qbert", "Riverraid",
+    "RoadRunner", "Robotank", "Seaquest", "SirLancelot", "Skiing", "Solaris",
+    "SpaceInvaders", "SpaceWar", "StarGunner", "Superman", "Surround", "Tennis",
+    "Tetris", "TicTacToe3D", "TimePilot", "Trondead", "Turmoil", "Tutankham",
+    "UpNDown", "Venture", "VideoCheckers", "VideoChess", "VideoCube",
+    "VideoPinball", "WizardOfWor", "WordZapper", "YarsRevenge", "Zaxxon",
+]
 
 
 class ExampleConfig:
@@ -1141,6 +1282,15 @@ def load_examples() -> list[ExampleConfig]:
     def _action_lunarlander(outs): return [
         "⊘ Keine", "← Links", "▲ Haupt", "→ Rechts"][outs.index(max(outs))]
     def _action_cartpole_2(outs): return f"{'← Links' if outs.index(max(outs)) == 0 else '→ Rechts'} (raw: {outs[0]:.3f} | {outs[1]:.3f})"
+    def _action_continuous(outs):
+        return " | ".join(f"a{i}: {out:.3f}" for i, out in enumerate(outs))
+    _atari_actions = [
+        "NOOP", "FIRE", "UP", "RIGHT", "LEFT", "DOWN", "UPRIGHT", "UPLEFT",
+        "DOWNRIGHT", "DOWNLEFT", "UPFIRE", "RIGHTFIRE", "LEFTFIRE",
+        "DOWNFIRE", "UPRIGHTFIRE", "UPLEFTFIRE", "DOWNRIGHTFIRE",
+        "DOWNLEFTFIRE",
+    ]
+    def _action_atari(outs): return _atari_actions[outs.index(max(outs))]
 
     try:
         import gymnasium  # noqa: F401
@@ -1297,6 +1447,234 @@ def load_examples() -> list[ExampleConfig]:
                     "interspecies_max_rate": 0.25,
                     "meta_adaptive": True,
                 },
+            ),
+            *[
+                ExampleConfig(
+                    name=f"Atari: {game}",
+                    description=(
+                        f"ALE Atari {game} with grayscale screen downsampled to 14x16 "
+                        "(224 inputs, 18 outputs)."
+                    ),
+                    n_inputs=224, n_outputs=18,
+                    max_nodes=100, max_connections=700,
+                    n_initial_hidden=12,
+                    make_eval=_make_atari_eval(f"ALE/{game}-v5", grid_h=14, grid_w=16, max_steps=1000),
+                    target_fitness=100.0,
+                    category="Atari",
+                    supports_render=True,
+                    stateful=False,
+                    default_population=320,
+                    default_target_species=12,
+                    default_config=_ATARI_CONTROL_DEFAULTS,
+                    default_adaptive_policies=_ATARI_CONTROL_ADAPTIVE,
+                    action_display_fn=_action_atari,
+                )
+                for game in _ATARI_GAMES
+            ],
+            ExampleConfig(
+                name="Ant",
+                description="MuJoCo quadruped locomotion (105 inputs, 8 continuous outputs).",
+                n_inputs=105, n_outputs=8,
+                max_nodes=90, max_connections=650,
+                n_initial_hidden=12,
+                make_eval=_make_continuous_action_eval("Ant-v5", n_outputs=8, early_stop=-500, max_steps=1000),
+                target_fitness=3000,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=360,
+                default_target_species=12,
+                default_config=_MUJOCO_CONTROL_DEFAULTS,
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="HalfCheetah",
+                description="MuJoCo planar running task (17 inputs, 6 continuous outputs).",
+                n_inputs=17, n_outputs=6,
+                max_nodes=70, max_connections=420,
+                n_initial_hidden=8,
+                make_eval=_make_continuous_action_eval("HalfCheetah-v5", n_outputs=6, early_stop=-500, max_steps=1000),
+                target_fitness=3000,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=320,
+                default_target_species=10,
+                default_config=_MUJOCO_CONTROL_DEFAULTS,
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Hopper",
+                description="MuJoCo one-legged hopping task (11 inputs, 3 continuous outputs).",
+                n_inputs=11, n_outputs=3,
+                max_nodes=60, max_connections=300,
+                n_initial_hidden=6,
+                make_eval=_make_continuous_action_eval("Hopper-v5", n_outputs=3, early_stop=-200, max_steps=1000),
+                target_fitness=2500,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=280,
+                default_target_species=9,
+                default_config=_MUJOCO_CONTROL_DEFAULTS,
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Humanoid",
+                description="MuJoCo full-body locomotion (348 inputs, 17 continuous outputs).",
+                n_inputs=348, n_outputs=17,
+                max_nodes=140, max_connections=1400,
+                n_initial_hidden=24,
+                make_eval=_make_continuous_action_eval("Humanoid-v5", n_outputs=17, early_stop=-500, max_steps=1000),
+                target_fitness=5000,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=500,
+                default_target_species=16,
+                default_config={
+                    **_MUJOCO_CONTROL_DEFAULTS,
+                    "multi_eval": 1,
+                    "matrix_forward": False,
+                },
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Humanoid Standup",
+                description="MuJoCo humanoid stand-up task (348 inputs, 17 continuous outputs).",
+                n_inputs=348, n_outputs=17,
+                max_nodes=140, max_connections=1400,
+                n_initial_hidden=24,
+                make_eval=_make_continuous_action_eval("HumanoidStandup-v5", n_outputs=17, early_stop=0, max_steps=1000),
+                target_fitness=100000,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=500,
+                default_target_species=16,
+                default_config={
+                    **_MUJOCO_CONTROL_DEFAULTS,
+                    "matrix_forward": False,
+                },
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Inverted Double Pendulum",
+                description="MuJoCo double-pendulum balance task (11 inputs, 1 continuous output).",
+                n_inputs=11, n_outputs=1,
+                max_nodes=50, max_connections=220,
+                n_initial_hidden=4,
+                make_eval=_make_continuous_action_eval("InvertedDoublePendulum-v5", n_outputs=1, early_stop=0, max_steps=1000),
+                target_fitness=9000,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=220,
+                default_target_species=7,
+                default_config={
+                    **_MUJOCO_CONTROL_DEFAULTS,
+                    "matrix_forward": True,
+                    "early_stop_factor": 0.0,
+                },
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Inverted Pendulum",
+                description="MuJoCo cart-pole balance task (4 inputs, 1 continuous output).",
+                n_inputs=4, n_outputs=1,
+                max_nodes=30, max_connections=120,
+                n_initial_hidden=3,
+                make_eval=_make_continuous_action_eval("InvertedPendulum-v5", n_outputs=1, early_stop=0, max_steps=1000),
+                target_fitness=1000,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=180,
+                default_target_species=5,
+                default_config={
+                    **_MUJOCO_CONTROL_DEFAULTS,
+                    "matrix_forward": True,
+                    "early_stop_factor": 0.0,
+                },
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Pusher",
+                description="MuJoCo robotic arm pushing task (23 inputs, 7 continuous outputs).",
+                n_inputs=23, n_outputs=7,
+                max_nodes=80, max_connections=520,
+                n_initial_hidden=10,
+                make_eval=_make_continuous_action_eval("Pusher-v5", n_outputs=7, early_stop=-200, max_steps=100),
+                target_fitness=-50,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=340,
+                default_target_species=11,
+                default_config=_MUJOCO_CONTROL_DEFAULTS,
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Reacher",
+                description="MuJoCo two-joint reaching task (11 inputs, 2 continuous outputs).",
+                n_inputs=11, n_outputs=2,
+                max_nodes=50, max_connections=220,
+                n_initial_hidden=4,
+                make_eval=_make_continuous_action_eval("Reacher-v5", n_outputs=2, early_stop=-50, max_steps=50),
+                target_fitness=-5,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=220,
+                default_target_species=7,
+                default_config={
+                    **_MUJOCO_CONTROL_DEFAULTS,
+                    "matrix_forward": True,
+                },
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Swimmer",
+                description="MuJoCo planar swimming task (8 inputs, 2 continuous outputs).",
+                n_inputs=8, n_outputs=2,
+                max_nodes=50, max_connections=220,
+                n_initial_hidden=4,
+                make_eval=_make_continuous_action_eval("Swimmer-v5", n_outputs=2, early_stop=-100, max_steps=1000),
+                target_fitness=300,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=240,
+                default_target_species=8,
+                default_config=_MUJOCO_CONTROL_DEFAULTS,
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
+            ),
+            ExampleConfig(
+                name="Walker2D",
+                description="MuJoCo planar biped walking task (17 inputs, 6 continuous outputs).",
+                n_inputs=17, n_outputs=6,
+                max_nodes=70, max_connections=420,
+                n_initial_hidden=8,
+                make_eval=_make_continuous_action_eval("Walker2d-v5", n_outputs=6, early_stop=-200, max_steps=1000),
+                target_fitness=3000,
+                category="MuJoCo",
+                supports_render=True,
+                stateful=False,
+                default_population=320,
+                default_target_species=10,
+                default_config=_MUJOCO_CONTROL_DEFAULTS,
+                default_adaptive_policies=_MUJOCO_CONTROL_ADAPTIVE,
+                action_display_fn=_action_continuous,
             ),
             ExampleConfig(
                 name="Blackjack",

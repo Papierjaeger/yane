@@ -1,7 +1,9 @@
 # requires Python >= 3.10 (match/case syntax)
 numpy
 PySide6
-gymnasium
+gymnasium[mujoco]
+# Optional Atari/ALE runtime:
+# gymnasium[atari]
 fastapi
 uvicorn[standard]
 pydantic

@@ -922,7 +922,7 @@ class TrainingTab(QWidget):
 
 
     # Category display order
-    _CATEGORY_ORDER = ["Dataset", "Toy Text", "Classic Control", "Box2D", "Pixel", "Sonstiges"]
+    _CATEGORY_ORDER = ["Dataset", "Toy Text", "Classic Control", "Box2D", "MuJoCo", "Pixel", "Atari", "Sonstiges"]
 
     def _build_example_combo(self) -> None:
         """Populate the combo box with group headers and indented example names."""
