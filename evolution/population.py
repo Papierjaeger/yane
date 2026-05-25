@@ -43,7 +43,7 @@ class Population:
         max_size: int = 100,
         initial_genome: Genome | None = None,
         tracker=None,
-        target_species: int = 5,
+        target_species: int | None = 5,
     ) -> None:
         self.max_size = max_size
         # Elitism: how many top genomes to protect from pruning globally and per species.
@@ -89,7 +89,17 @@ class Population:
         # Adaptive global species threshold (replaces per-genome thresholds).
         # Step size 0.005 is small relative to the actual δ distribution
         # ([0, ~0.15] for bootstrap genomes) to avoid oscillation.
-        self._target_species: int = target_species
+        self._target_species: int = target_species if target_species is not None else 0
+        self._species_tuning_enabled: bool = target_species is not None
+        self._target_species_min: int | None = None
+        self._target_species_max: int | None = None
+        self._compat_tune_interval: int = 1
+        self._compat_tune_counter: int = 0
+        self._compat_threshold_min: float = 0.01
+        self._compat_threshold_max: float = 1.5
+        self._compat_integral: float = 0.0
+        self._dbg_last_adj_step: float = 0.0
+        self._dbg_adj_trend: list[float] = []
         self._compat_threshold: float = 0.2
         # Speciation metric: "topology" (default) or "topology_no_disabled"
         self._speciation_metric: str = "topology"
@@ -237,6 +247,16 @@ class Population:
         self.__dict__.setdefault("_operator_scheduler", None)
         self.__dict__.setdefault("_module_library", None)
         self.__dict__.setdefault("_module_insert_rate", 0.0)
+        self.__dict__.setdefault("_target_species_min", None)
+        self.__dict__.setdefault("_target_species_max", None)
+        self.__dict__.setdefault("_species_tuning_enabled", True)
+        self.__dict__.setdefault("_compat_tune_interval", 1)
+        self.__dict__.setdefault("_compat_tune_counter", 0)
+        self.__dict__.setdefault("_compat_threshold_min", 0.01)
+        self.__dict__.setdefault("_compat_threshold_max", 1.5)
+        self.__dict__.setdefault("_compat_integral", 0.0)
+        self.__dict__.setdefault("_dbg_last_adj_step", 0.0)
+        self.__dict__.setdefault("_dbg_adj_trend", [])
 
     def __getstate__(self) -> dict:
         state = self.__dict__.copy()
@@ -489,6 +509,34 @@ class Population:
         """Return up to k best evaluated genomes, sorted by fitness descending."""
         return sorted(self._evaluated, key=_fitness_key, reverse=True)[:k]
 
+    def filter(self, fn) -> list[Genome]:
+        """Return evaluated genomes for which ``fn(genome)`` is truthy."""
+        return [g for g in self._evaluated if fn(g)]
+
+    def map(self, fn) -> list:
+        """Apply ``fn`` to every evaluated genome and return the results."""
+        return [fn(g) for g in self._evaluated]
+
+    def reduce(self, fn, init):
+        """Fold evaluated genomes from left to right."""
+        acc = init
+        for genome in self._evaluated:
+            acc = fn(acc, genome)
+        return acc
+
+    def group_by(self, fn) -> dict:
+        """Group evaluated genomes by a caller supplied key function."""
+        groups: dict = {}
+        for genome in self._evaluated:
+            groups.setdefault(fn(genome), []).append(genome)
+        return groups
+
+    def top_k(self, k: int, key=None) -> list[Genome]:
+        """Return the top-k evaluated genomes according to ``key``."""
+        if key is None:
+            key = _fitness_key
+        return nlargest(max(0, k), self._evaluated, key=key)
+
     def worst_fitness(self) -> float | None:
         """Return the fitness of the worst evaluated genome, or None if pool is empty."""
         if not self._evaluated:
@@ -696,6 +744,12 @@ class Population:
             return max(2, int(self.max_size ** 0.5))
         return self._target_species
 
+    def _target_species_band(self) -> tuple[int, int]:
+        if self._target_species_min is not None and self._target_species_max is not None:
+            return self._target_species_min, self._target_species_max
+        target = self._effective_target_species()
+        return target, target
+
     def _assign_one_genome(self, genome: Genome) -> None:
         """Assign a single genome to its species immediately after evaluation.
 
@@ -874,13 +928,31 @@ class Population:
         # and causing wild oscillation between sp=1 and sp=many.
         n = len(self._species)
         self._dbg_last_adj_n = n
-        _step = max(0.001, 0.3 / max(1, self.max_size))
-        if n > self._effective_target_species():
-            self._compat_threshold = min(1.5, self._compat_threshold + _step)
-            self._dbg_adj_count += 1
-        elif n < self._effective_target_species():
-            self._compat_threshold = max(0.01, self._compat_threshold - _step)
-            self._dbg_adj_count += 1
+        self._compat_tune_counter += 1
+        self._dbg_last_adj_step = 0.0
+        interval = max(1, self._compat_tune_interval)
+        if self._species_tuning_enabled and self._compat_tune_counter % interval == 0:
+            lo_target, hi_target = self._target_species_band()
+            error = 0
+            if n > hi_target:
+                error = n - hi_target
+            elif n < lo_target:
+                error = n - lo_target
+            if error != 0:
+                self._compat_integral = max(-10.0, min(10.0, self._compat_integral + error))
+                proportional = max(0.001, 0.3 / max(1, self.max_size)) * interval
+                integral = max(0.0002, 0.03 / max(1, self.max_size)) * interval
+                step = proportional * error + integral * self._compat_integral
+                new_threshold = self._compat_threshold + step
+                self._compat_threshold = max(
+                    self._compat_threshold_min,
+                    min(self._compat_threshold_max, new_threshold),
+                )
+                self._dbg_last_adj_step = step
+                self._dbg_adj_trend.append(step)
+                if len(self._dbg_adj_trend) > 50:
+                    self._dbg_adj_trend = self._dbg_adj_trend[-50:]
+                self._dbg_adj_count += 1
 
     def _compute_shared_fitness(self) -> None:
         # No parsimony penalty: even a tiny coefficient causes evolution to

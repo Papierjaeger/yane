@@ -27,6 +27,7 @@ class EvaluationResult:
     stopped_early: bool = False
     early_stop_reason: str = ""     # "threshold", or "" if not stopped
     raw_fitnesses: list[float] = dataclasses.field(default_factory=list)
+    n_fitness_calls: int = 1
 
 
 def _is_vector_fitness(value) -> bool:
@@ -79,6 +80,16 @@ class EvaluationRunner:
         self.early_stopping_factor: float | None = None
         self.n_early_stopped: int = 0
         self.early_stopping_n: int | None = None
+        self.anytime_enabled: bool = False
+        self.anytime_min_evals: int = 1
+        self.anytime_max_evals: int = 5
+        self.anytime_promotion_frac: float = 0.3
+        self.anytime_aggregation: str = "mean"
+        self.anytime_total_genomes: int = 0
+        self.anytime_promoted: int = 0
+        self.anytime_total_calls: int = 0
+        self.anytime_saved_calls: int = 0
+        self.anytime_promoted_variances: list[float] = []
 
     def configure_multi_eval(
         self,
@@ -94,6 +105,54 @@ class EvaluationRunner:
         self.n_evaluations = n
         self.aggregation = aggregation
         self.sigma_penalty = max(0.0, sigma_penalty)
+
+    def configure_anytime_eval(
+        self,
+        enabled: bool = True,
+        min_evals: int = 1,
+        max_evals: int = 5,
+        promotion_frac: float = 0.3,
+        aggregation: str = "mean",
+    ) -> None:
+        """Configure adaptive per-genome evaluation budgeting.
+
+        Each genome receives ``min_evals`` measurements. Only genomes whose
+        provisional score is competitive with the current evaluated pool are
+        promoted to ``max_evals``. In early warm-up, promotion stays permissive
+        until enough evaluated genomes exist to form a quantile threshold.
+        """
+        if min_evals < 1:
+            raise ValueError(f"min_evals must be >= 1, got {min_evals}")
+        if max_evals < min_evals:
+            raise ValueError(
+                f"max_evals must be >= min_evals, got {max_evals} < {min_evals}"
+            )
+        valid = ("mean", "median", "min", "max")
+        if aggregation not in valid:
+            raise ValueError(f"aggregation must be one of {valid}, got {aggregation!r}")
+        self.anytime_enabled = bool(enabled)
+        self.anytime_min_evals = int(min_evals)
+        self.anytime_max_evals = int(max_evals)
+        self.anytime_promotion_frac = max(0.0, min(1.0, float(promotion_frac)))
+        self.anytime_aggregation = aggregation
+
+    def _aggregate_anytime(self, values: list[float]) -> float:
+        if self.anytime_aggregation == "max":
+            return max(values)
+        return aggregate_fitnesses(values, self.anytime_aggregation, self.sigma_penalty)
+
+    def _should_promote(self, provisional: float, population: Population) -> bool:
+        if self.anytime_promotion_frac >= 1.0:
+            return True
+        if self.anytime_promotion_frac <= 0.0:
+            return False
+        evaluated = population._evaluated
+        if len(evaluated) < max(4, int(1.0 / max(1e-9, self.anytime_promotion_frac))):
+            return True
+        scores = sorted(g.fitness for g in evaluated)
+        cutoff_index = int((1.0 - self.anytime_promotion_frac) * (len(scores) - 1))
+        threshold = scores[max(0, min(len(scores) - 1, cutoff_index))]
+        return provisional >= threshold
 
     def run(
         self,
@@ -172,6 +231,23 @@ class EvaluationRunner:
             if not stopped_early and episode_count > 0 and self.early_stopping_n is None:
                 self.early_stopping_n = episode_count
             fitness = aggregate_fitnesses(raw, self.aggregation, self.sigma_penalty) if raw else 0.0
+        elif self.anytime_enabled:
+            raw = [fitness_fn(genome) for _ in range(self.anytime_min_evals)]
+            provisional = self._aggregate_anytime(raw)
+            promoted = self._should_promote(float(provisional), population)
+            if promoted:
+                extra = self.anytime_max_evals - self.anytime_min_evals
+                if extra > 0:
+                    raw.extend(fitness_fn(genome) for _ in range(extra))
+                self.anytime_promoted += 1
+                if len(raw) > 1:
+                    self.anytime_promoted_variances.append(statistics.pvariance(raw))
+                    if len(self.anytime_promoted_variances) > 500:
+                        self.anytime_promoted_variances = self.anytime_promoted_variances[-500:]
+            fitness = self._aggregate_anytime(raw)
+            self.anytime_total_genomes += 1
+            self.anytime_total_calls += len(raw)
+            self.anytime_saved_calls += max(0, self.anytime_max_evals - len(raw))
         elif self.n_evaluations <= 1:
             fitness = fitness_fn(genome)
         else:
@@ -218,4 +294,5 @@ class EvaluationRunner:
             stopped_early=stopped_early,
             early_stop_reason=early_stop_reason,
             raw_fitnesses=raw,
+            n_fitness_calls=len(raw) if raw else 1,
         )

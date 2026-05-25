@@ -855,9 +855,11 @@ class TrainingTab(QWidget):
         prog_form_layout.setSpacing(3)
         prog_form_layout.setContentsMargins(0, 0, 0, 0)
         self.lbl_iter    = _label("—", "statValue")
+        self.lbl_evals   = _label("—", "statValue")
         self.lbl_fitness = _label("—", "statValue")
         self.lbl_speed   = _label("—", "statValue")
-        prog_form_layout.addRow("Iteration:",      self.lbl_iter)
+        prog_form_layout.addRow("Generation:",     self.lbl_iter)
+        prog_form_layout.addRow("Evaluations:",    self.lbl_evals)
         prog_form_layout.addRow("Current / Best:", self.lbl_fitness)
         prog_form_layout.addRow("Speed:",          self.lbl_speed)
         prog_layout.addWidget(prog_form)
@@ -1448,7 +1450,7 @@ class TrainingTab(QWidget):
             self.dspin_target.value() if self.dspin_target.value() > -1e9 else "none",
         )
         self._log_csv_path = log_dir / "fitness_history.csv"
-        self._log_csv_header = "iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections"
+        self._log_csv_header = "generation,iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections,validation_fitness"
         self._log_csv_interval = max(1, self.spin_pop.value() // 10)
 
     def start_training(self) -> None:
@@ -1547,7 +1549,9 @@ class TrainingTab(QWidget):
         iter_s = iteration / elapsed if elapsed > 0 else 0.0
         mins, secs = divmod(int(elapsed), 60)
         elapsed_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
-        self.lbl_iter.setText(str(iteration))
+        generation = mem.get("generation", iteration // max(1, self.spin_pop.value()))
+        self.lbl_iter.setText(str(generation))
+        self.lbl_evals.setText(str(iteration))
         self.lbl_fitness.setText(f"{fitness:.4f}   /   {best_genome.fitness:.4f}")
         self.lbl_speed.setText(f"{iter_s:.1f} iter/s   {elapsed_str}")
         self.chart.add_point(fitness)
@@ -1558,6 +1562,7 @@ class TrainingTab(QWidget):
             try:
                 from yane.util.logger import write_csv
                 write_csv(csv_path, self._log_csv_header,
+                    f"{generation},"
                     f"{iteration},"
                     f"{mem.get('max_fitness', 0)},"
                     f"{mem.get('avg_fitness', 0)},"
@@ -1566,7 +1571,8 @@ class TrainingTab(QWidget):
                     f"{mem.get('species_count', 0)},"
                     f"{mem.get('stagnation_count', 0)},"
                     f"{mem.get('largest_genome_nodes', 0)},"
-                    f"{mem.get('largest_genome_connections', 0)}")
+                    f"{mem.get('largest_genome_connections', 0)},"
+                    f"{mem.get('validation_fitness', '')}")
             except Exception as _e:
                 from yane.util.logger import log_warning
                 log_warning("CSV write failed at iteration %d: %s", iteration, _e)

@@ -157,8 +157,8 @@ class TestPiCurriculum(unittest.TestCase):
             self.i += 1
             return [value]
 
-    def test_pi_default_target_is_perfect_fitness(self):
-        self.assertEqual(PI_TARGET_FITNESS, 0.0)
+    def test_pi_default_target_allows_small_long_run_tolerance(self):
+        self.assertEqual(PI_TARGET_FITNESS, -0.05)
 
     def test_pi_curriculum_targets_scale_from_gui_target(self):
         targets = make_pi_curriculum_targets(-0.5, PI_DECIMAL_PLACES)

@@ -12,6 +12,87 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
+# Adaptive Evaluation Budgeting
+# ---------------------------------------------------------------------------
+
+def test_anytime_eval_promotes_competitive_genomes():
+    from yane.evolution.evaluation import EvaluationRunner
+    from yane.evolution.lamarck_refiner import LamarckRefiner
+    from yane.evolution.population import Population
+    from yane.core.genome import Genome
+
+    pop = Population(max_size=10, initial_genome=Genome())
+    runner = EvaluationRunner()
+    runner.configure_anytime_eval(True, min_evals=1, max_evals=3, promotion_frac=0.5)
+    calls = {"n": 0}
+
+    def fitness(_genome):
+        calls["n"] += 1
+        return 10.0
+
+    result = runner.run(pop.select_for_evaluation(), fitness, pop, LamarckRefiner())
+    assert result.n_fitness_calls == 3
+    assert calls["n"] == 3
+    assert runner.anytime_promoted == 1
+
+
+def test_anytime_eval_skips_extra_calls_for_weak_genome():
+    from yane.evolution.evaluation import EvaluationRunner
+    from yane.evolution.lamarck_refiner import LamarckRefiner
+    from yane.evolution.population import Population
+    from yane.core.genome import Genome
+
+    pop = Population(max_size=10, initial_genome=Genome())
+    for score in [10.0, 9.0, 8.0, 7.0, 6.0]:
+        g = pop.select_for_evaluation()
+        pop.submit(g, score)
+    runner = EvaluationRunner()
+    runner.configure_anytime_eval(True, min_evals=1, max_evals=4, promotion_frac=0.2)
+    result = runner.run(pop.select_for_evaluation(), lambda _g: 0.0, pop, LamarckRefiner())
+    assert result.n_fitness_calls == 1
+    assert runner.anytime_saved_calls == 3
+
+
+def test_structured_evaluator_components_encode_and_score_policy():
+    from yane.evolution.evaluator_components import GraphPolicyScore, StateEncoder
+
+    encoder = StateEncoder(mode="mixed", sizes=(2, 3), scales=(1.0, 2.0))
+    assert encoder.output_dim == 7
+    assert encoder.encode((1, 2)) == [0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+
+    transitions = {
+        0: {0: [(1.0, 1, 0.0, False)], 1: [(1.0, 0, -10.0, False)]},
+        1: {0: [(1.0, 1, 0.0, False)], 1: [(1.0, 2, 1.0, True)]},
+        2: {0: [(1.0, 2, 0.0, True)], 1: [(1.0, 2, 0.0, True)]},
+    }
+    scorer = GraphPolicyScore(transitions, n_actions=2, terminal_reward=0.0)
+    assert scorer.action_score(1, 1) > scorer.action_score(1, 0)
+    assert scorer.action_score(0, 1) < 0.0
+
+
+def test_neuroevolution_target_species_band_diagnostics():
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.set_target_species(n_min=3, n_max=6, tune_interval=4)
+    yane.configure(2, 1)
+    info = yane.population_memory_info()
+    assert info["target_species_min"] == 3
+    assert info["target_species_max"] == 6
+    assert info["compat_tune_interval"] == 4
+    assert info["species_tuning_enabled"] is True
+
+
+def test_neuroevolution_target_species_none_disables_tuning():
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.set_target_species(None)
+    yane.configure(2, 1)
+    assert yane.population_memory_info()["species_tuning_enabled"] is False
+
+
+# ---------------------------------------------------------------------------
 # Event System
 # ---------------------------------------------------------------------------
 

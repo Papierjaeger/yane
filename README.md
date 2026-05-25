@@ -203,18 +203,23 @@ YANE misst automatisch, wie lange die Bewertung eines Genoms dauert. Daraus ents
 ```python
 yane.set_population_size(100)   # Standard: 100
 yane.set_target_species(5)      # Standard: 5
+yane.set_target_species(n_min=4, n_max=8, tune_interval=10)
 ```
 
 - `set_population_size(n)`: Größe der Population.
 - `set_target_species(n)`: Zielanzahl Species; der Kompatibilitätsschwellwert wird automatisch angepasst. Höhere Werte schützen mehr strukturelle Nischen (besonders nützlich für XOR-artige Aufgaben).
+- `set_target_species(n_min=..., n_max=...)`: hält die Species-Anzahl in einem Zielbereich; `set_target_species(None)` deaktiviert das automatische Tuning.
 
 ### Mehrfachbewertung
 
 ```python
 yane.set_multi_eval(n=5, aggregation="mean", sigma_penalty=0.0)
+yane.set_anytime_eval(min_evals=1, max_evals=5, promotion_frac=0.3)
 ```
 
 Für stochastische Umgebungen, in denen eine einzelne Episode zu verrauscht ist. YANE bewertet jedes Genom `n`-mal und aggregiert die Ergebnisse.
+
+`set_anytime_eval(...)` spart Evaluationsbudget: jedes Genom erhält zuerst ein kleines Budget, nur konkurrenzfähige Genome werden für zusätzliche Wiederholungen promotet. Diagnostics wie `anytime_avg_evals_per_genome`, `anytime_saved_evals` und `anytime_promotion_rate` stehen in `population_memory_info()`.
 
 - `aggregation`: `"mean"` (Standard), `"median"` (robust gegen Ausreißer) oder `"min"` (konservativster Worst-Case)
 - `sigma_penalty`: zieht `sigma_penalty × Standardabweichung` vom Ergebnis ab; bestraft hochvariante Genome unabhängig von der Aggregationsmethode

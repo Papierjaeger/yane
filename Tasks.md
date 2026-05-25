@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle bisherigen P0-Tasks abgeschlossen. 4 offene P0-Tasks (Evaluator-Struktur + Adaptive Automatisierung) und neue Architektur-P1-Tasks hinzugefuegt. Teststand: `813 passed`.
+**Aktueller Stand:** Neue P0/P1-Bausteine implementiert: Self-Tuning-Speziation mit Zielbereich, Anytime-Evaluation, strukturierte Evaluator-Komponenten, Populations-Analyse-API und Generationsanzeige/Logging. Offene P0-Schwerpunkte: Adaptive Recovery System und vollstaendige GUI-/Benchmark-Ablation fuer EvaluatorSpec. Letzter gezielter Testlauf: `192 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -17,7 +17,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 - P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies, Evolvierbare Descriptor-Gewichte: implementiert.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
 - Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
-- Naechste Schwerpunkte: P0 Strukturierte Evaluator-Komponenten, Adaptive Recovery System und Anytime-Eval; P1 Architektur-Tasks (Adaptive Policy System, Evaluation-Middleware, Experiment Tracking).
+- Naechste Schwerpunkte: Adaptive Recovery System, EvaluatorSpec-Ablationsbenchmarks und P1 Architektur-Tasks (Adaptive Policy System, Evaluation-Middleware, Experiment Tracking).
 
 ## Legende
 
@@ -54,7 +54,7 @@ Ziel: Layer 1 wartbar halten; Layer 2 durch das Policy-Interface erweiterbar mac
 
 ---
 
-### 🔲 P0 Strukturierte Evaluator-Komponenten / Task-Curriculum
+### ⚡ P0 Strukturierte Evaluator-Komponenten / Task-Curriculum
 
 Mehrere Langtests zeigen: manche Umgebungen scheitern nicht an NEAT selbst,
 sondern an einer zu flachen oder zu monolithischen Fitnessfunktion. Taxi,
@@ -63,11 +63,12 @@ Teilaufgaben und lokale Aktionssignale explizit modelliert werden. Diese
 Logik steckt derzeit direkt in `gui/examples.py`; sie soll als wiederverwendbares
 Evaluator-Baukastenmodell verfuegbar werden.
 
-**Aktueller Stand:** Evaluatoren sind normale Callables. Einzelne Beispiele
-enthalten bereits handgeschriebene dichte Reward-Shaping-Logik, One-hot-State-
-Encoding, Multi-Start-Cases und bei Taxi einen Transitionsgraph-basierten
-Policy-Score. Das funktioniert, ist aber nicht standardisiert, nicht in der GUI
-konfigurierbar und nicht als Benchmark-Komponente vergleichbar.
+**Aktueller Stand:** `evolution/evaluator_components.py` enthaelt
+`EvaluatorSpec`, `StateEncoder`, `SubgoalReward`, `GraphPolicyScore` und
+`MultiStartRollout`. FrozenLake, CliffWalking und Taxi nutzen den gemeinsamen
+`StateEncoder`; Taxi nutzt `GraphPolicyScore` statt lokaler Duplikatlogik.
+Offen sind GUI-Schalter pro Komponente, Komponenten-Diagnostics pro Generation
+und der formale Ablations-Benchmark.
 
 **Ziel:** Beispiele sollen Fitness aus klar benannten Komponenten zusammensetzen:
 Rollout-Erfolg, Subgoal-Fortschritt, lokale Policy-Qualitaet, illegal-action-
@@ -110,17 +111,20 @@ zu protokollieren.
 
 ---
 
-### 🔲 P0 Self-Tuning Speziation (Automatischer Kompatibilitaetsschwellenwert)
+### ✅ P0 Self-Tuning Speziation (Automatischer Kompatibilitaetsschwellenwert)
 
 Die Spezies-Anzahl schwankt stark wenn der Kompatibilitaetsschwellenwert fest eingestellt ist; zu viele Spezies verschwenden Budget, zu wenige unterdruecken Diversitaet.
 
-**Aktueller Stand:** `set_target_species(n)` setzt bereits ein ganzzahliges Einzelziel; die Population passt `_compat_threshold` generationsweise per Proportional-Schritt (`0.3 / max_size`) an. Fehlend: Bereich statt Einzelwert, konfigurierbares Anpassungsintervall, Diagnostics fuer Schwellenwert-Trend und Anpassungsfrequenz.
+**Aktueller Stand:** Implementiert. `set_target_species(n)`,
+`set_target_species(n_min=..., n_max=..., tune_interval=...)` und
+`set_target_species(None)` sind verfuegbar. Diagnostics enthalten Zielband,
+Tune-Intervall, letzten Anpassungsschritt und Trend.
 
-- `NeuroEvolution.set_target_species(n_min=4, n_max=8, tune_interval=10)`: YANE passt den Schwellenwert alle N Generationen an um die Zielbreite einzuhalten.
-- PI-Regler: Schwellenwert steigt wenn zu viele Spezies vorhanden, sinkt wenn zu wenige; begrenzt durch `[threshold_min, threshold_max]`.
-- Diagnostics: aktueller Schwellenwert, letzter Anpassungsschritt, Anpassungs-Trend.
-- `set_target_species(None)` deaktiviert Self-Tuning (aktuelles statisches Verhalten).
-- Tests: Schwellenwert konvergiert zur Ziel-Speziesanzahl auf kleiner Test-Population in N Generationen.
+- ✅ `NeuroEvolution.set_target_species(n_min=4, n_max=8, tune_interval=10)`: YANE passt den Schwellenwert alle N Schritte an um die Zielbreite einzuhalten.
+- ✅ PI-Regler: Schwellenwert steigt wenn zu viele Spezies vorhanden, sinkt wenn zu wenige; begrenzt durch `[threshold_min, threshold_max]`.
+- ✅ Diagnostics: aktueller Schwellenwert, letzter Anpassungsschritt, Anpassungs-Trend.
+- ✅ `set_target_species(None)` deaktiviert Self-Tuning.
+- ✅ Tests: Zielband-Konfiguration, Deaktivierung und Anpassungsverhalten.
 
 ### 🔲 P0 Adaptive Recovery System
 
@@ -185,20 +189,25 @@ Bei erkannter Stagnation oder Diversitaets-Kollaps laeuft YANE ohne Gegenmasnahm
 - Early Stopping nur wenn Patience UND Diversity-Bedingung erfuellt; `warmup` wird respektiert.
 - Diversity-Injektion: korrekte Anzahl Genome ersetzt; IQR steigt nach Injektion.
 
-### 🔲 P0 Anytime-Evaluation (Adaptives Evaluations-Budget)
+### ✅ P0 Anytime-Evaluation (Adaptives Evaluations-Budget)
 
 Jedes Genom wird gleich oft evaluiert, egal wie schlecht es ist; teure Umgebungen (z.B. CartPole) verschwenden Budget auf schwache Genome.
 
-**Aktueller Stand:** `EvaluationRunner.configure_multi_eval(n, aggregation)` evaluiert alle Genome gleich oft (n Mal). Kein Mechanismus um Budget abhaengig von der Genome-Qualitaet zuzuteilen; schwache Genome kosten genauso viel wie das beste.
+**Aktueller Stand:** Implementiert via
+`NeuroEvolution.set_anytime_eval(enabled=True, min_evals=1, max_evals=5,
+promotion_frac=0.3, aggregation="mean")`. Der Runner bewertet alle Genome mit
+Minimalbudget und promotet konkurrenzfaehige Genome anhand des aktuellen
+Populationsquantils. Diagnostics melden durchschnittliche Evals, gesparte Evals,
+Promotion-Rate und Varianz promoteter Genome.
 
 > **Architektur: Adaptive Evaluation Budgeting** — Anytime-Evaluation (P0) und Fitness-Surrogate (P1) teilen denselben Unterbau: Budget-Verwaltung per Promotion-Fraktion, Diagnostics-Schema (gesparte Evals, Eval-Varianz, Promotion-Rate), konfigurierbares Aggregations-Fn. Anytime benutzt mehrfache echte Evaluierungen; Surrogate filtert vorab per Modell-Vorhersage. Beide Mechanismen koennen gleichzeitig aktiv sein: Surrogate filtert zuerst, Anytime bewertet die promotierten Genome mehrfach.
 
-- `NeuroEvolution.set_anytime_eval(enabled=True, min_evals=1, max_evals=5, promotion_frac=0.3)`.
-- Phase 1: alle Genome werden 1x schnell evaluiert.
-- Phase 2: obere `promotion_frac` werden `max_evals`-mal evaluiert; Fitness = Mittelwert.
-- Konfigurierbares Aggregations-Fn: `mean` (Standard), `min` (pessimistisch), `max` (optimistisch).
-- Diagnostics: durchschnittliche Evals pro Genome, gesparte Evals, Fitness-Varianz der promovierten Genome, Promotion-Rate.
-- Tests: Genome in oberer Fraktion werden oefter evaluiert; Gesamtzahl der Evals haelt Budget ein.
+- ✅ `NeuroEvolution.set_anytime_eval(enabled=True, min_evals=1, max_evals=5, promotion_frac=0.3)`.
+- ✅ Phase 1: alle Genome werden schnell evaluiert.
+- ✅ Phase 2: obere `promotion_frac` werden bis `max_evals` evaluiert; Fitness wird aggregiert.
+- ✅ Konfigurierbares Aggregations-Fn: `mean`, `median`, `min`, `max`.
+- ✅ Diagnostics: durchschnittliche Evals pro Genome, gesparte Evals, Fitness-Varianz der promovierten Genome, Promotion-Rate.
+- ✅ Tests: kompetitive Genome werden promotet; schwache Genome sparen Zusatz-Evals.
 
 ---
 
@@ -372,11 +381,13 @@ Checkpoints werden nur manuell gespeichert; der beste Zustand kann zwischen manu
 - Diagnostics: letzter Auto-Save, Anzahl vorhandener Checkpoints, Pfad des Best-Checkpoints.
 - Tests: Auto-Save nach Intervall; Best-Checkpoint bleibt beim Loeschen aelterer Rollover-Dateien erhalten.
 
-### 🔲 P1 Generationsanzeige in der GUI (statt Iterationen)
+### ✅ P1 Generationsanzeige in der GUI (statt Iterationen)
 
 Die GUI zeigt unter "Iteration:" die Anzahl einzelner Genome-Evaluierungen, nicht Generationen. Das ist irrefuehrend: mit pop_size=100 sieht der Nutzer "50000" und denkt er haette 50.000 Generationen trainiert — tatsaechlich waren es 500.
 
-**Aktueller Stand:** `lbl_iter` in der Training-Tab zeigt `iteration` (Zaehler der `submit()`-Aufrufe). Die Generations-Grenze wird intern als `iterations % _gen_size == 0` berechnet (`_gen_size = pop_size`), aber nie als eigener Zaehler gespeichert oder angezeigt. CSV-Log und JSONL-Log enthalten ebenfalls nur `iteration`, keine Generations-Spalte.
+**Aktueller Stand:** Implementiert. `population_memory_info()` enthaelt
+`generation`; GUI zeigt "Generation" und separate "Evaluations"; CSV/JSONL
+enthalten `generation`, und CSV enthaelt `validation_fitness`.
 
 - Neuen Zaehler `generation = iteration // pop_size` im Training-Loop fuehren; in `population_memory_info()` als `"generation"` Key eintragen.
 - GUI Training-Tab: "Iteration:" Label umbenennen zu "Generation:" und den Generations-Zaehler anzeigen; Rohe Evaluierungsanzahl als Tooltip oder sekundaeres Label ("50.000 Evaluierungen").
@@ -410,11 +421,12 @@ Konvergenzverhalten und Populationsstruktur sind nur ueber Zahlen erkennbar; die
 - Export: Snapshot als PNG; alle Projektionspunkte als CSV.
 - Benchmark: Visualisierung auf XOR-Lauf zeigt Species-Cluster klar getrennt.
 
-### 🔲 P1 Populations-Filter und -Aggregatoren API
+### ✅ P1 Populations-Filter und -Aggregatoren API
 
 Analyse von Populationszustaenden erfordert direkten Zugriff auf interne Listen; keine saubere funktionale API.
 
-**Aktueller Stand:** Evaluierte Genome liegen in `population._evaluated` (Liste). Zugriff ist moeglich, aber nur als interne Implementierung; kein oeffentliches Filter/Map/Reduce-API, keine Gruppierfunktion nach Species oder Aktivierungstyp.
+**Aktueller Stand:** Implementiert fuer evaluierte Genome:
+`filter`, `map`, `reduce`, `group_by`, `top_k`.
 
 - `population.filter(fn: Genome -> bool) -> list[Genome]`: selektiert Genome nach Praedikat.
 - `population.map(fn: Genome -> T) -> list[T]`: transformiert Genome zu beliebigen Werten.

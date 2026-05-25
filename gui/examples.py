@@ -4,6 +4,7 @@ import time
 from typing import Callable
 
 from yane.core.genome import Genome
+from yane.evolution.evaluator_components import GraphPolicyScore, StateEncoder
 
 # Dataset examples — import make_eval and metadata directly from each example
 # package so there is exactly one implementation (no duplication).
@@ -215,10 +216,10 @@ def _make_cliffwalking_eval(max_steps: int = 200):
     Inputs: [Zeile/3, Spalte/11]. Belohnung: -1/Schritt, -100 Klippe.
     Reward-Shaping: Bonus für Annäherung an das Ziel (Zeile=3, Spalte=11).
     """
+    encoder = StateEncoder(mode="mixed", sizes=(4, 12), scales=(3.0, 11.0))
+
     def _inputs(row: int, col: int) -> list[float]:
-        row_hot = [1.0 if i == row else 0.0 for i in range(4)]
-        col_hot = [1.0 if i == col else 0.0 for i in range(12)]
-        return row_hot + col_hot + [row / 3.0, col / 11.0]
+        return encoder.encode((row, col))
 
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
@@ -287,10 +288,10 @@ def _make_frozenlake_eval(n_episodes: int = 20):
     Reward-Shaping: Bonus für Annäherung an das Ziel pro Schritt.
     Fitness = mittlere Belohnung über n_episodes.
     """
+    encoder = StateEncoder(mode="mixed", sizes=(4, 4), scales=(3.0, 3.0))
+
     def _inputs(row: int, col: int) -> list[float]:
-        row_hot = [1.0 if i == row else 0.0 for i in range(4)]
-        col_hot = [1.0 if i == col else 0.0 for i in range(4)]
-        return row_hot + col_hot + [row / 3.0, col / 3.0]
+        return encoder.encode((row, col))
 
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
@@ -345,14 +346,10 @@ def _make_taxi_eval(max_steps: int = 500):
     Reward-Shaping: Bonus für Annäherung an Fahrgast oder Zielort.
     Belohnung: +20 Abgabe, -10 illegale Aktion, -1/Schritt.
     """
+    encoder = StateEncoder(mode="mixed", sizes=(5, 5, 5, 4), scales=(4.0, 4.0, 4.0, 3.0))
+
     def _inputs(row: int, col: int, pass_loc: int, dest: int) -> list[float]:
-        row_hot = [1.0 if i == row else 0.0 for i in range(5)]
-        col_hot = [1.0 if i == col else 0.0 for i in range(5)]
-        pass_hot = [1.0 if i == pass_loc else 0.0 for i in range(5)]
-        dest_hot = [1.0 if i == dest else 0.0 for i in range(4)]
-        return row_hot + col_hot + pass_hot + dest_hot + [
-            row / 4.0, col / 4.0, pass_loc / 4.0, dest / 3.0,
-        ]
+        return encoder.encode((row, col, pass_loc, dest))
 
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
@@ -377,21 +374,8 @@ def _make_taxi_eval(max_steps: int = 500):
         ]
 
         transitions = env.unwrapped.P
-        n_states = env.observation_space.n
-        dist = [float("inf")] * n_states
-        changed = True
-        while changed:
-            changed = False
-            for state in range(n_states):
-                best = dist[state]
-                for action in range(env.action_space.n):
-                    _prob, next_state, reward, done = transitions[state][action][0]
-                    candidate = 0.0 if done and reward > 0 else dist[next_state] + 1.0
-                    if candidate < best:
-                        best = candidate
-                if best < dist[state]:
-                    dist[state] = best
-                    changed = True
+        policy_score = GraphPolicyScore(transitions, env.action_space.n, terminal_reward=0.0)
+        dist = policy_score.distances
 
         policy_probe_states = [
             env.unwrapped.encode(row, col, pass_loc, dest)
@@ -401,18 +385,6 @@ def _make_taxi_eval(max_steps: int = 500):
             for dest in range(4)
             if dist[env.unwrapped.encode(row, col, pass_loc, dest)] < float("inf")
         ]
-
-        def _policy_action_score(state: int, action: int) -> float:
-            _prob, next_state, reward, done = transitions[state][action][0]
-            if done and reward > 0:
-                return 6.0
-            if reward == -10:
-                return -3.0
-            if dist[next_state] < dist[state]:
-                return 3.0
-            if dist[next_state] == dist[state]:
-                return -0.25
-            return -1.5
 
         def _subgoal(pass_loc: int, dest: int) -> tuple[int, int]:
             if pass_loc < 4:
@@ -456,7 +428,7 @@ def _make_taxi_eval(max_steps: int = 500):
                 row, col, pass_loc, dest = _decode(probe_state)
                 out = genome.forward(_inputs(row, col, pass_loc, dest))
                 action = out.index(max(out))
-                policy_total += _policy_action_score(probe_state, action)
+                policy_total += policy_score.action_score(probe_state, action)
             total += 45.0 * (policy_total / len(policy_probe_states))
             for row0, col0, pass0, dest0 in cases:
                 env.reset()

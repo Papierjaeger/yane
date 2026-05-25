@@ -77,6 +77,12 @@ class NeuroEvolution:
         self._resource_guard = ResourceGuard()
         self._resource_check_interval: int = 50  # check psutil every N iters (was 1 = ~5% overhead)
         self._population_size: int = 100
+        self._target_species: int | None = 5
+        self._target_species_min: int | None = None
+        self._target_species_max: int | None = None
+        self._compat_tune_interval: int = 1
+        self._compat_threshold_min: float = 0.01
+        self._compat_threshold_max: float = 1.5
         self._adaptive_pop_enabled: bool = False
         self._adaptive_pop_min: int = 100
         self._adaptive_pop_max: int = 100
@@ -254,7 +260,9 @@ class NeuroEvolution:
             max_size=self._population_size,
             initial_genome=initial,
             tracker=tracker,
+            target_species=self._target_species,
         )
+        self._apply_speciation_tuning_config(self._population)
         self._population.elite_count = self._elite_count
         self._population.species_elite_count = self._species_elite_count
         self._population._adaptive_pop_enabled = self._adaptive_pop_enabled
@@ -326,6 +334,15 @@ class NeuroEvolution:
         self._population_size = n
         if self._population is not None:
             self._population.max_size = n
+
+    def _apply_speciation_tuning_config(self, population: Population) -> None:
+        population._target_species = self._target_species if self._target_species is not None else 0
+        population._species_tuning_enabled = self._target_species is not None
+        population._target_species_min = self._target_species_min
+        population._target_species_max = self._target_species_max
+        population._compat_tune_interval = max(1, self._compat_tune_interval)
+        population._compat_threshold_min = self._compat_threshold_min
+        population._compat_threshold_max = self._compat_threshold_max
 
     def set_adaptive_population(
         self,
@@ -473,6 +490,28 @@ class NeuroEvolution:
               aggregate manually if needed.
         """
         self._runner.configure_multi_eval(n, aggregation, sigma_penalty)
+
+    def set_anytime_eval(
+        self,
+        enabled: bool = True,
+        min_evals: int = 1,
+        max_evals: int = 5,
+        promotion_frac: float = 0.3,
+        aggregation: str = "mean",
+    ) -> None:
+        """Enable adaptive evaluation budgeting.
+
+        Weak genomes receive ``min_evals`` fitness calls. Genomes whose
+        provisional score is competitive with the current population are
+        promoted to ``max_evals`` calls and aggregated.
+        """
+        self._runner.configure_anytime_eval(
+            enabled=enabled,
+            min_evals=min_evals,
+            max_evals=max_evals,
+            promotion_frac=promotion_frac,
+            aggregation=aggregation,
+        )
 
     def set_fitness_sanitizing(
         self,
@@ -932,7 +971,10 @@ class NeuroEvolution:
             "adaptive_pop_max": self._adaptive_pop_max,
             "adaptive_pop_rate": self._adaptive_pop_rate,
             "n_workers": self._n_workers,
-            "target_species": pop._target_species if pop else None,
+            "target_species": pop._target_species if pop else self._target_species,
+            "target_species_min": pop._target_species_min if pop else self._target_species_min,
+            "target_species_max": pop._target_species_max if pop else self._target_species_max,
+            "compat_tune_interval": pop._compat_tune_interval if pop else self._compat_tune_interval,
             "compat_threshold": pop._compat_threshold if pop else None,
             "interspecies_crossover_mode": (
                 pop._interspecies_crossover_mode if pop else self._interspecies_crossover_mode
@@ -961,6 +1003,11 @@ class NeuroEvolution:
             "n_evaluations": self._runner.n_evaluations,
             "eval_aggregation": self._runner.aggregation,
             "eval_sigma_penalty": self._runner.sigma_penalty,
+            "anytime_eval_enabled": self._runner.anytime_enabled,
+            "anytime_min_evals": self._runner.anytime_min_evals,
+            "anytime_max_evals": self._runner.anytime_max_evals,
+            "anytime_promotion_frac": self._runner.anytime_promotion_frac,
+            "anytime_aggregation": self._runner.anytime_aggregation,
             # Lamarck
             "lamarck_mode": self._lamarck.mode,
             "lamarck_steps": self._lamarck.steps,
@@ -1090,7 +1137,7 @@ class NeuroEvolution:
 
         # --- Logging state ---------------------------------------------------
         _log_interval = max(1, self._population_size // 10)  # log ~10× per generation
-        _csv_header = "iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections"
+        _csv_header = "generation,iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections,validation_fitness"
         _csv_path = self._log_run_dir / "fitness_history.csv"
         _jsonl_path = self._log_run_dir / "fitness_history.jsonl"
         _use_csv   = self._log_format in ("csv", "both")
@@ -1118,7 +1165,7 @@ class NeuroEvolution:
             fitness = self._finalize_fitness(result.fitness, result.elapsed_ms, genome)
             self._population.submit(genome, fitness, result.elapsed_ms)
             iterations += 1
-            self._n_evaluations_done += self._runner.n_evaluations
+            self._n_evaluations_done += result.n_fitness_calls
 
             # --- "new_best" event -------------------------------------------
             if self._population._evaluated:
@@ -1172,6 +1219,7 @@ class NeuroEvolution:
                 mem = self.population_memory_info()
                 if _use_csv and _csv_now:
                     _wc(_csv_path, _csv_header,
+                        f"{mem.get('generation', iterations // _gen_size)},"
                         f"{iterations},"
                         f"{mem.get('max_fitness', 0)},"
                         f"{mem.get('avg_fitness', 0)},"
@@ -1180,9 +1228,14 @@ class NeuroEvolution:
                         f"{mem.get('species_count', 0)},"
                         f"{mem.get('stagnation_count', 0)},"
                         f"{mem.get('largest_genome_nodes', 0)},"
-                        f"{mem.get('largest_genome_connections', 0)}")
+                        f"{mem.get('largest_genome_connections', 0)},"
+                        f"{mem.get('validation_fitness', '')}")
                 if _use_jsonl:
-                    _wjl(_jsonl_path, {**mem, "iteration": iterations})
+                    _wjl(_jsonl_path, {
+                        **mem,
+                        "generation": mem.get("generation", iterations // _gen_size),
+                        "iteration": iterations,
+                    })
                 if self._tensorboard_writer is not None:
                     _tb = self._tensorboard_writer
                     for _k, _v in mem.items():
@@ -1193,7 +1246,11 @@ class NeuroEvolution:
                                 pass
                 for _cb in self._log_callbacks:
                     try:
-                        _cb({**mem, "iteration": iterations})
+                        _cb({
+                            **mem,
+                            "generation": mem.get("generation", iterations // _gen_size),
+                            "iteration": iterations,
+                        })
                     except Exception:
                         pass
                 _li("iter=%d  best=%.4f  avg=%.2f  species=%d  stagn=%d  nodes=%d  conns=%d",
@@ -1245,10 +1302,12 @@ class NeuroEvolution:
                 _max_nodes = max((len(g.nodes) for g in _all_g), default=0)
                 _max_conns = max((g.connection_count for g in _all_g), default=0)
                 _wc(_csv_path, _csv_header,
+                    f"{iterations // _gen_size},"
                     f"{iterations},"
                     f"{_max_fit},{_avg_fit},{_med_fit},{_iqr_fit},"
                     f"{_pop.species_count},{_pop.stagnation_count},"
-                    f"{_max_nodes},{_max_conns}")
+                    f"{_max_nodes},{_max_conns},"
+                    f"{self._last_validation_fitness if self._last_validation_fitness is not None else ''}")
 
             # --- Curriculum stage advancement --------------------------------
             _stage_advanced = False
@@ -1424,22 +1483,76 @@ class NeuroEvolution:
         if self._matrix_forward_enabled:
             info["matrix_forward_hits"] = self._matrix_hits
             info["matrix_forward_misses"] = self._matrix_misses
+        info["generation"] = (
+            self._population._total_submitted // max(1, self._population.max_size)
+        )
+        info["evaluations_done"] = self._n_evaluations_done
+        if self._last_validation_fitness is not None:
+            info["validation_fitness"] = self._last_validation_fitness
+        if self._runner.anytime_enabled:
+            total = max(1, self._runner.anytime_total_genomes)
+            info.update({
+                "anytime_eval_enabled": True,
+                "anytime_avg_evals_per_genome": self._runner.anytime_total_calls / total,
+                "anytime_saved_evals": self._runner.anytime_saved_calls,
+                "anytime_promotion_rate": self._runner.anytime_promoted / total,
+                "anytime_promotion_frac": self._runner.anytime_promotion_frac,
+                "anytime_min_evals": self._runner.anytime_min_evals,
+                "anytime_max_evals": self._runner.anytime_max_evals,
+                "anytime_promoted_variance": (
+                    sum(self._runner.anytime_promoted_variances)
+                    / len(self._runner.anytime_promoted_variances)
+                    if self._runner.anytime_promoted_variances else 0.0
+                ),
+            })
         return info
 
-    def set_target_species(self, n: int) -> None:
-        """Set the target number of species the population tries to maintain.
+    def set_target_species(
+        self,
+        n: int | None = None,
+        *,
+        n_min: int | None = None,
+        n_max: int | None = None,
+        tune_interval: int = 1,
+        threshold_min: float = 0.01,
+        threshold_max: float = 1.5,
+    ) -> None:
+        """Set the target number or target band of species.
 
         The adaptive compatibility threshold rises/falls automatically to keep
-        the actual species count close to this target.  Higher values protect
+        the actual species count close to this target. Higher values protect
         more structural niches and help escape local optima (especially for
         XOR-like tasks where intermediate structures are temporarily worse).
 
-        Pass 0 to auto-compute from population size: ``sqrt(pop_size)``.
-        Default: 5.  For small discrete-mapping tasks (binary increment,
+        Pass ``0`` to auto-compute from population size: ``sqrt(pop_size)``.
+        Pass ``None`` to disable explicit targeting and use static threshold
+        behaviour. Use ``n_min``/``n_max`` to keep species in a range instead
+        of oscillating around one exact count.
+
+        Default: 5. For small discrete-mapping tasks (binary increment,
         XOR variants): 10–20 works significantly better.
         """
+        if n_min is not None or n_max is not None:
+            if n_min is None or n_max is None:
+                raise ValueError("n_min and n_max must be provided together")
+            if n_min < 1 or n_max < n_min:
+                raise ValueError("target species band must satisfy 1 <= n_min <= n_max")
+            self._target_species = max(1, int(round((n_min + n_max) / 2)))
+            self._target_species_min = int(n_min)
+            self._target_species_max = int(n_max)
+        elif n is None:
+            self._target_species = None
+            self._target_species_min = None
+            self._target_species_max = None
+        else:
+            self._target_species = max(1, n) if n > 0 else 0
+            self._target_species_min = None
+            self._target_species_max = None
+        self._compat_tune_interval = max(1, int(tune_interval))
+        self._compat_threshold_min = max(1e-9, float(threshold_min))
+        self._compat_threshold_max = max(self._compat_threshold_min, float(threshold_max))
         if self._population is not None:
-            self._population._target_species = max(1, n) if n > 0 else 0
+            self._apply_speciation_tuning_config(self._population)
 
     def set_speciation_metric(self, metric: str) -> None:
         """Choose the compatibility metric used for species assignment.
@@ -1467,7 +1580,7 @@ class NeuroEvolution:
 
     def get_target_species(self) -> int:
         return (self._population._target_species if self._population is not None
-                else self._config_dict().get("target_species", 5))
+                else (self._target_species if self._target_species is not None else 0))
 
     def get_elitism(self) -> tuple[int, int]:
         if self._population is not None:
@@ -1981,6 +2094,7 @@ class NeuroEvolution:
             tracker=self._tracker,
             target_species=self.get_target_species(),
         )
+        self._apply_speciation_tuning_config(self._population)
         self._population.elite_count = self._elite_count
         self._population.species_elite_count = self._species_elite_count
         self._population._adaptive_pop_enabled = self._adaptive_pop_enabled
@@ -2435,6 +2549,17 @@ class NeuroEvolution:
             self.set_population_size(cfg["population_size"])
         if cfg.get("n_workers") is not None:
             self.set_n_workers(cfg["n_workers"])
+        if "target_species_min" in cfg and cfg.get("target_species_min") is not None:
+            self.set_target_species(
+                n_min=cfg["target_species_min"],
+                n_max=cfg.get("target_species_max", cfg["target_species_min"]),
+                tune_interval=cfg.get("compat_tune_interval", 1),
+            )
+        elif "target_species" in cfg:
+            self.set_target_species(
+                cfg.get("target_species"),
+                tune_interval=cfg.get("compat_tune_interval", 1),
+            )
 
         # Stopping criteria
         if cfg.get("min_fitness") is not None:
@@ -2449,6 +2574,14 @@ class NeuroEvolution:
             self._runner.n_evaluations = cfg["n_evaluations"]
         if cfg.get("eval_aggregation") is not None:
             self._runner.aggregation = cfg["eval_aggregation"]
+        if cfg.get("anytime_eval_enabled"):
+            self.set_anytime_eval(
+                enabled=True,
+                min_evals=cfg.get("anytime_min_evals", 1),
+                max_evals=cfg.get("anytime_max_evals", 5),
+                promotion_frac=cfg.get("anytime_promotion_frac", 0.3),
+                aggregation=cfg.get("anytime_aggregation", "mean"),
+            )
 
         # Lamarck — use the public API to avoid touching read-only properties
         lamarck_mode = cfg.get("lamarck_mode") or "hill_climbing"

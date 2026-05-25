@@ -52,6 +52,32 @@ class TestPopulation(unittest.TestCase):
             pop.submit(g, f)
         self.assertAlmostEqual(pop.get_best().fitness, best_fitness)
 
+    def test_population_filter_map_reduce_group_top_k(self):
+        pop = self._make_population(max_size=10)
+        for i in range(5):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+        self.assertEqual([g.fitness for g in pop.filter(lambda g: g.fitness >= 3.0)], [3.0, 4.0])
+        self.assertEqual(pop.map(lambda g: g.fitness), [0.0, 1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(pop.reduce(lambda acc, g: acc + g.fitness, 0.0), 10.0)
+        grouped = pop.group_by(lambda g: int(g.fitness) % 2)
+        self.assertEqual(len(grouped[0]), 3)
+        self.assertEqual([g.fitness for g in pop.top_k(2)], [4.0, 3.0])
+
+    def test_target_species_band_adjusts_threshold_only_outside_band(self):
+        pop = self._make_population(max_size=10)
+        pop._target_species_min = 2
+        pop._target_species_max = 4
+        pop._compat_tune_interval = 1
+        pop._species_tuning_enabled = True
+        pop._dbg_last_adj_n = 3
+        start = pop._compat_threshold
+        # One species is below the band, so threshold should move down.
+        for i in range(5):
+            g = pop.select_for_evaluation()
+            pop.submit(g, float(i))
+        self.assertLessEqual(pop._compat_threshold, start)
+
     def test_get_best_raises_before_evaluation(self):
         pop = self._make_population()
         with self.assertRaises(RuntimeError):
