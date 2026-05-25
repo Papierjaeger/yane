@@ -201,6 +201,13 @@ class NeuroEvolution:
         self._recovery_last_lamarck_budget: int | None = None
         self.stopped_early: bool = False
         self.stop_reason: str = ""
+        # Experiment tracking (None = disabled, no overhead)
+        self._run_database = None          # RunDatabase | None
+        self._active_run_id: str | None = None
+        self._active_experiment_id: str | None = None
+        # Selection strategy (None = population uses its own default TournamentSelection)
+        self._selection_strategy = None
+        self._selection_strategies_by_species: dict = {}
 
     @property
     def current_genome(self) -> Genome | None:
@@ -335,6 +342,13 @@ class NeuroEvolution:
         self._population._qd_enabled = self._qd_enabled
         self._population._qd_archive = self._qd_archive
         self._population._qd_descriptor_fn = self._qd_descriptor_fn
+        # Apply selection strategy overrides if set before configure().
+        if self._selection_strategy is not None:
+            self._population.selection_strategy = self._selection_strategy
+        if self._selection_strategies_by_species:
+            self._population.selection_strategies_by_species = dict(
+                self._selection_strategies_by_species
+            )
 
     def set_seed(self, seed: int | None) -> None:
         """Set or clear the random seed.
@@ -1259,6 +1273,21 @@ class NeuroEvolution:
             name, self._population_size, self.max_iterations, self.min_fitness)
         _wj(self._log_run_dir / "config.json", self._config_dict())
 
+        # --- Run tracking ----------------------------------------------------
+        import uuid as _uuid
+        self._active_run_id = str(_uuid.uuid4())
+        if self._run_database is not None:
+            try:
+                self._run_database.start_run(
+                    run_id=self._active_run_id,
+                    name=name,
+                    seed=self._seed,
+                    config=self._config_dict(),
+                    experiment_id=self._active_experiment_id,
+                )
+            except Exception:
+                pass
+
         # --- Logging state ---------------------------------------------------
         _log_interval = max(1, self._population_size // 10)  # log ~10× per generation
         _csv_header = "generation,iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections,validation_fitness"
@@ -1674,6 +1703,23 @@ class NeuroEvolution:
                 "rolling_checkpoint_count": len(self._checkpoint_paths),
                 "best_checkpoint_path": self._best_checkpoint_path,
             })
+        # Selection strategy diagnostics
+        if self._population is not None:
+            strategy = self._population.selection_strategy
+            parent_fitnesses = self._population._recent_parent_fitnesses
+            all_fitnesses = [g.fitness for g in self._population._evaluated if g.fitness is not None]
+            info["selection"] = {
+                "strategy": repr(strategy),
+                "avg_parent_fitness": (
+                    sum(parent_fitnesses) / len(parent_fitnesses)
+                    if parent_fitnesses else None
+                ),
+                "avg_pool_fitness": (
+                    sum(all_fitnesses) / len(all_fitnesses)
+                    if all_fitnesses else None
+                ),
+                "n_species_overrides": len(self._population.selection_strategies_by_species),
+            }
         return info
 
     def set_target_species(
@@ -2800,6 +2846,29 @@ class NeuroEvolution:
             stop_reason or "manual", self._n_evaluations_done,
             mem.get("lamarck_n_applied", 0), mem.get("lamarck_n_blocked_top_k", 0))
 
+        # --- Persist run record to database ----------------------------------
+        if self._run_database is not None and self._active_run_id is not None:
+            try:
+                from yane.util.run_database import load_fitness_history_from_csv
+                _csv_path = self._log_run_dir / "fitness_history.csv"
+                fitness_history = load_fitness_history_from_csv(_csv_path)
+                diagnostics = {
+                    "best_fitness": best.fitness,
+                    "best_nodes": len(best.nodes),
+                    "best_connections": best.connection_count,
+                    "iterations": iterations,
+                    "n_evaluations_done": self._n_evaluations_done,
+                    "final_species_count": mem.get("species_count", 0),
+                }
+                self._run_database.finish_run(
+                    run_id=self._active_run_id,
+                    fitness_history=fitness_history,
+                    diagnostics=diagnostics,
+                    stop_reason=stop_reason or "manual",
+                )
+            except Exception:
+                pass
+
     def _enforce_memory_limit(self) -> None:
         if not self._resource_guard.process_over_limit():
             return
@@ -2905,8 +2974,10 @@ class NeuroEvolution:
         rebuild the population with the restored settings.
         """
         import json
-        cfg = json.loads(Path(path).read_text())
+        self._load_config_dict(json.loads(Path(path).read_text()))
 
+    def _load_config_dict(self, cfg: dict) -> None:
+        """Apply a config dict (as returned by _config_dict()) to this instance."""
         # Reproducibility
         if cfg.get("seed") is not None:
             self.set_seed(cfg["seed"])
@@ -2994,6 +3065,85 @@ class NeuroEvolution:
                 ec if ec is not None else self._elite_count,
                 sec if sec is not None else self._species_elite_count,
             )
+
+    # ── Experiment tracking ───────────────────────────────────────────────────
+
+    def set_run_database(self, path: str | Path) -> None:
+        """Activate run tracking: save every training run to a SQLite database.
+
+        After calling this, each ``train()`` invocation will automatically
+        record the run (config, seed, fitness history, stop reason) to
+        *path*.  Call once before the first ``train()``; subsequent calls
+        re-open the same (or a different) file.
+
+        Pass ``None`` to disable tracking again.
+        """
+        if path is None:
+            self._run_database = None
+            return
+        from yane.util.run_database import RunDatabase
+        self._run_database = RunDatabase(path)
+
+    def get_run_database(self):
+        """Return the active RunDatabase, or None if tracking is not enabled."""
+        return self._run_database
+
+    def experiment(self, name: str, tags: list[str] | None = None) -> None:
+        """Set the active experiment name for run grouping.
+
+        All subsequent ``train()`` calls will be recorded under this
+        experiment.  A ``set_run_database()`` call must precede this.
+
+        Args:
+            name: Human-readable experiment name (e.g. ``"XOR-ablation"``).
+            tags: Optional list of string tags for filtering.
+        """
+        if self._run_database is None:
+            raise RuntimeError(
+                "Call set_run_database(path) before experiment()."
+            )
+        exp = self._run_database.get_or_create_experiment(name, tags)
+        self._active_experiment_id = exp.experiment_id
+
+    def get_active_run_id(self) -> str | None:
+        """Return the run_id of the currently active (or most recent) training run."""
+        return self._active_run_id
+
+    # ── Selection strategy ────────────────────────────────────────────────────
+
+    def set_selection_strategy(
+        self,
+        strategy,
+        *,
+        species_id: int | None = None,
+    ) -> None:
+        """Set the parent selection strategy.
+
+        Args:
+            strategy: Any object implementing the ``SelectionStrategy`` protocol
+                (``pick(candidates, score) -> Genome``).  Pass ``None`` to
+                reset to the default ``TournamentSelection(k=3)``.
+            species_id: When given, the override applies only to the species
+                with this ``species_id`` (see ``Species.species_id``).
+                When ``None`` (default), the strategy applies globally.
+
+        Built-in strategies (importable from ``yane.evolution.selection_strategy``)::
+
+            TournamentSelection(k=3)   # default
+            ElitistSelection(top_frac=0.2)
+            FitnessProportional()
+            RankSelection()
+            NoveltyOnlySelection()
+        """
+        from yane.evolution.selection_strategy import TournamentSelection as _T
+        if species_id is not None:
+            self._selection_strategies_by_species[species_id] = strategy
+            if self._population is not None:
+                self._population.selection_strategies_by_species[species_id] = strategy
+        else:
+            self._selection_strategy = strategy if strategy is not None else _T(k=3)
+            if self._population is not None:
+                self._population.selection_strategy = self._selection_strategy
 
     # ── Genome export ─────────────────────────────────────────────────────────
 

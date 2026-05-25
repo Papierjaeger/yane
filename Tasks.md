@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0-Bausteine fertig. Zuletzt: vollstaendige EvaluatorSpec-Ablation fuer CliffWalking/FrozenLake/Taxi (EvaluatorSpec mit enabled_components, GUI-Komponentenschalter, per-Evaluation-Diagnostics, Ablation- und MultiStart-Tests). Offene P1-Schwerpunkte: Adaptive Policy System, Experiment Tracking (Run/SQLite/reproduce_run), Selektionsstrategie als Plugin. Teststand: `801 passed`.
+**Aktueller Stand:** Alle P0-Bausteine fertig. Zuletzt: Experiment Tracking (RunDatabase/SQLite, Run-Objekt, reproduce_run, experiment() Kontext, 10 neue Tests) und Selektionsstrategie als Plugin (SelectionStrategy-Protokoll, TournamentSelection/ElitistSelection/FitnessProportional/RankSelection/NoveltyOnlySelection, per-Species-Override, Diagnostics, 14 neue Tests). Offene P1-Schwerpunkte: Adaptive Policy System. Teststand: `867 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -277,7 +277,7 @@ Die aktuelle Kompatibilitaets-Distanz in der NEAT-Speziation ist auf Verbindungs
 - Alte Kompatibilitaets-Berechnung mit `topology_distance` liefert identisches Ergebnis wie zuvor.
 - `ChainMetric` kombiniert Metriken korrekt mit den konfigurierten Gewichten.
 
-### ⚡ P1 Experiment Tracking / Run Database
+### ✓ P1 Experiment Tracking / Run Database
 
 Es gibt kein zentrales `Run`-Objekt. Erkenntnisse aus verschiedenen Konfigurationen muessen manuell aus CSV-Logs zusammengesetzt werden. Reproduzierbare Re-Runs sind nicht moeglich ohne manuelle Konfigurationsdokumentation.
 
@@ -326,7 +326,7 @@ class RunDatabase:
 - `compare_runs` gibt korrekte statistische Zusammenfassung ueber N Runs.
 - Ohne `set_run_database` kein Performance-Overhead (kein automatisches Tracking).
 
-### □ P1 Selektionsstrategie als Plugin
+### ✓ P1 Selektionsstrategie als Plugin
 
 Die Selektionsstrategie (Tournament) ist fest in `population.py` verdrahtet; kein Austausch ohne Code-Aenderung.
 

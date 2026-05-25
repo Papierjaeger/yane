@@ -26,6 +26,7 @@ from yane.evolution.mutation_tracking import (
     record_interspecies_success,
     record_mutation_success,
 )
+from yane.evolution.selection_strategy import SelectionStrategy, TournamentSelection
 
 # Module-level key functions — C-level attrgetter is ~2× faster than a Python
 # lambda for attribute access in max()/min()/sorted() calls.
@@ -220,6 +221,16 @@ class Population:
         self._n_qd_updates: int = 0
         self._n_qd_injections: int = 0
 
+        # Selection strategy plugin — defaults to TournamentSelection(k=3) which
+        # preserves the original behaviour exactly.
+        self.selection_strategy: SelectionStrategy = TournamentSelection(k=3)
+        # Per-species overrides: {species_id → strategy}.  Falls back to the
+        # global selection_strategy when a species has no override.
+        self.selection_strategies_by_species: dict[int, SelectionStrategy] = {}
+        # Diagnostics: rolling window of recent parent fitnesses (last 100).
+        self._recent_parent_fitnesses: list[float] = []
+        self._recent_parent_fitness_max: int = 100
+
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
         self.__dict__.setdefault("_multi_objective_enabled", False)
@@ -229,6 +240,10 @@ class Population:
         self.__dict__.setdefault("_qd_descriptor_fn", None)
         self.__dict__.setdefault("_n_qd_updates", 0)
         self.__dict__.setdefault("_n_qd_injections", 0)
+        self.__dict__.setdefault("selection_strategy", TournamentSelection(k=3))
+        self.__dict__.setdefault("selection_strategies_by_species", {})
+        self.__dict__.setdefault("_recent_parent_fitnesses", [])
+        self.__dict__.setdefault("_recent_parent_fitness_max", 100)
         self.__dict__.setdefault("_interspecies_crossover_mode", "fixed")
         self.__dict__.setdefault("_interspecies_crossover_min", 0.0)
         self.__dict__.setdefault("_interspecies_crossover_max", 0.2)
@@ -1410,15 +1425,24 @@ class Population:
 
         # Species-budget selection: choose which species spawns next (proportional
         # to avg shared fitness × stagnation_factor × youth_bonus), then run
-        # tournament within that species only.  Falls back to global pool when
+        # selection within that species only.  Falls back to global pool when
         # no species is assigned yet or the selected species has no members.
         _parent_sp = self._select_parent_species()
         _pool = (_parent_sp.members
                  if _parent_sp is not None and _parent_sp.members
                  else self._evaluated)
-        k = min(3, len(_pool))
-        candidates = random.sample(_pool, k)
-        parent = max(candidates, key=_selection_score)
+        _sp_id = _parent_sp.species_id if _parent_sp is not None else None
+        _strategy = self.selection_strategies_by_species.get(
+            _sp_id,
+            self.selection_strategy,
+        )
+        parent = _strategy.pick(_pool, _selection_score)
+
+        # Track parent fitness for diagnostics.
+        _pf = parent.fitness
+        self._recent_parent_fitnesses.append(_pf)
+        if len(self._recent_parent_fitnesses) > self._recent_parent_fitness_max:
+            self._recent_parent_fitnesses.pop(0)
 
         # Note: elite protection is handled by _prune() which never removes the
         # global best or species bests. Here, even elite parents produce mutated

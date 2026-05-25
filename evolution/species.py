@@ -8,6 +8,14 @@ if TYPE_CHECKING:
 
 _fitness_key = attrgetter('fitness')
 
+_species_counter: int = 0
+
+
+def _next_species_id() -> int:
+    global _species_counter
+    _species_counter += 1
+    return _species_counter
+
 
 class Species:
     """A group of structurally similar genomes that compete internally."""
@@ -18,6 +26,7 @@ class Species:
         spawn_count: int = 0,
         parent_id: int | None = None,
     ) -> None:
+        self.species_id: int = _next_species_id()
         self.representative = representative
         self.members: list[Genome] = []
         self.best_fitness_seen: float = float('-inf')

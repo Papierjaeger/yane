@@ -460,5 +460,279 @@ class TestRunRecord(unittest.TestCase):
             self.assertEqual(runs, [])
 
 
+# ---------------------------------------------------------------------------
+# P1 — Experiment Tracking (RunDatabase)
+# ---------------------------------------------------------------------------
+
+class TestRunDatabase(unittest.TestCase):
+
+    def _make_ne_and_train(self, tmp_dir):
+        from yane.util import logger as logmod
+        orig_root = logmod.log_root
+        logmod.log_root = Path(tmp_dir)
+        try:
+            ne = NeuroEvolution(seed=42)
+            db_path = Path(tmp_dir) / "runs.db"
+            ne.set_run_database(db_path)
+            ne.set_population_size(10)
+            ne.configure(n_inputs=2, n_outputs=1)
+            ne.set_max_iterations(30)
+            ne.train(_dummy_eval)
+            return ne, db_path
+        finally:
+            logmod.log_root = orig_root
+
+    def test_save_load_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, db_path = self._make_ne_and_train(tmp)
+            db = ne.get_run_database()
+            run_id = ne.get_active_run_id()
+            self.assertIsNotNone(run_id)
+            run = db.load_run(run_id)
+            self.assertIsNotNone(run)
+            self.assertEqual(run.run_id, run_id)
+            self.assertEqual(run.seed, 42)
+            self.assertIsNotNone(run.end_time)
+            self.assertIsNotNone(run.stop_reason)
+
+    def test_fitness_history_populated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, db_path = self._make_ne_and_train(tmp)
+            db = ne.get_run_database()
+            run = db.load_run(ne.get_active_run_id())
+            self.assertGreater(len(run.fitness_history), 0)
+            self.assertIn("iteration", run.fitness_history[0])
+
+    def test_config_saved_with_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, db_path = self._make_ne_and_train(tmp)
+            db = ne.get_run_database()
+            run = db.load_run(ne.get_active_run_id())
+            self.assertEqual(run.config.get("seed"), 42)
+
+    def test_reproduce_run_correct_config_and_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, db_path = self._make_ne_and_train(tmp)
+            db = ne.get_run_database()
+            run_id = ne.get_active_run_id()
+            ne2 = db.reproduce_run(run_id)
+            self.assertEqual(ne2._seed, 42)
+            self.assertEqual(ne2._population_size, 10)
+
+    def test_reproduce_run_missing_id_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, db_path = self._make_ne_and_train(tmp)
+            db = ne.get_run_database()
+            with self.assertRaises(KeyError):
+                db.reproduce_run("nonexistent-id")
+
+    def test_compare_runs_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from yane.util import logger as logmod
+            orig_root = logmod.log_root
+            logmod.log_root = Path(tmp)
+            try:
+                db_path = Path(tmp) / "runs.db"
+                run_ids = []
+                for _ in range(2):
+                    ne = NeuroEvolution(seed=1)
+                    ne.set_run_database(db_path)
+                    ne.set_population_size(10)
+                    ne.configure(n_inputs=2, n_outputs=1)
+                    ne.set_max_iterations(20)
+                    ne.train(_dummy_eval)
+                    run_ids.append(ne.get_active_run_id())
+
+                from yane.util.run_database import RunDatabase
+                db = RunDatabase(db_path)
+                result = db.compare_runs(run_ids)
+                self.assertEqual(result["count"], 2)
+                for r in result["runs"]:
+                    self.assertIn("final_best", r)
+                    self.assertIn("total_iterations", r)
+            finally:
+                logmod.log_root = orig_root
+
+    def test_no_overhead_without_set_run_database(self):
+        ne = NeuroEvolution()
+        self.assertIsNone(ne.get_run_database())
+        self.assertIsNone(ne.get_active_run_id())
+
+    def test_experiment_grouping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from yane.util import logger as logmod
+            orig_root = logmod.log_root
+            logmod.log_root = Path(tmp)
+            try:
+                db_path = Path(tmp) / "runs.db"
+                ne = NeuroEvolution(seed=1)
+                ne.set_run_database(db_path)
+                ne.experiment("my-exp", tags=["test"])
+                ne.set_population_size(10)
+                ne.configure(n_inputs=2, n_outputs=1)
+                ne.set_max_iterations(20)
+                ne.train(_dummy_eval)
+                exp_id = ne._active_experiment_id
+                self.assertIsNotNone(exp_id)
+                db = ne.get_run_database()
+                runs = db.list_runs(experiment_id=exp_id)
+                self.assertEqual(len(runs), 1)
+                self.assertEqual(runs[0].experiment_id, exp_id)
+            finally:
+                logmod.log_root = orig_root
+
+    def test_list_runs_without_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, db_path = self._make_ne_and_train(tmp)
+            db = ne.get_run_database()
+            runs = db.list_runs()
+            self.assertGreater(len(runs), 0)
+
+    def test_set_run_database_none_disables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ne, db_path = self._make_ne_and_train(tmp)
+            ne.set_run_database(None)
+            self.assertIsNone(ne.get_run_database())
+
+
+# ---------------------------------------------------------------------------
+# P1 — Selektionsstrategie als Plugin
+# ---------------------------------------------------------------------------
+
+class TestSelectionStrategy(unittest.TestCase):
+
+    def _make_genomes(self, n: int):
+        from yane.core.genome import Genome
+        genomes = []
+        for i in range(n):
+            g = Genome()
+            g.fitness = float(i)
+            g.shared_fitness = float(i)
+            g.selection_score = 0.0
+            genomes.append(g)
+        return genomes
+
+    def _score(self, g):
+        return g.fitness
+
+    def test_tournament_returns_one_genome(self):
+        from yane.evolution.selection_strategy import TournamentSelection
+        genomes = self._make_genomes(10)
+        strategy = TournamentSelection(k=3)
+        result = strategy.pick(genomes, self._score)
+        self.assertIn(result, genomes)
+
+    def test_tournament_single_candidate(self):
+        from yane.evolution.selection_strategy import TournamentSelection
+        genomes = self._make_genomes(1)
+        result = TournamentSelection(k=3).pick(genomes, self._score)
+        self.assertIs(result, genomes[0])
+
+    def test_elitist_picks_from_top_fraction(self):
+        from yane.evolution.selection_strategy import ElitistSelection
+        genomes = self._make_genomes(10)
+        strategy = ElitistSelection(top_frac=0.3)
+        for _ in range(20):
+            result = strategy.pick(genomes, self._score)
+            self.assertGreaterEqual(result.fitness, 7.0)
+
+    def test_fitness_proportional_stochastically_favours_high_fitness(self):
+        from yane.evolution.selection_strategy import FitnessProportional
+        genomes = self._make_genomes(10)
+        strategy = FitnessProportional()
+        counts = {id(g): 0 for g in genomes}
+        for _ in range(500):
+            result = strategy.pick(genomes, self._score)
+            counts[id(result)] += 1
+        top_count = counts[id(genomes[-1])]
+        low_count = counts[id(genomes[0])]
+        self.assertGreater(top_count, low_count)
+
+    def test_rank_selection_returns_one(self):
+        from yane.evolution.selection_strategy import RankSelection
+        genomes = self._make_genomes(5)
+        result = RankSelection().pick(genomes, self._score)
+        self.assertIn(result, genomes)
+
+    def test_rank_selection_favours_high_fitness(self):
+        from yane.evolution.selection_strategy import RankSelection
+        genomes = self._make_genomes(10)
+        strategy = RankSelection()
+        counts = {id(g): 0 for g in genomes}
+        for _ in range(500):
+            result = strategy.pick(genomes, self._score)
+            counts[id(result)] += 1
+        top_count = counts[id(genomes[-1])]
+        low_count = counts[id(genomes[0])]
+        self.assertGreater(top_count, low_count)
+
+    def test_novelty_only_returns_highest_score(self):
+        from yane.evolution.selection_strategy import NoveltyOnlySelection
+        genomes = self._make_genomes(5)
+        result = NoveltyOnlySelection().pick(genomes, self._score)
+        self.assertIs(result, genomes[-1])
+
+    def test_set_selection_strategy_on_ne(self):
+        from yane.evolution.selection_strategy import ElitistSelection
+        ne = NeuroEvolution()
+        strategy = ElitistSelection(top_frac=0.3)
+        ne.set_selection_strategy(strategy)
+        ne.configure(2, 1)
+        self.assertIs(ne._population.selection_strategy, strategy)
+
+    def test_set_selection_strategy_none_resets_to_tournament(self):
+        from yane.evolution.selection_strategy import TournamentSelection
+        ne = NeuroEvolution()
+        ne.set_selection_strategy(None)
+        ne.configure(2, 1)
+        self.assertIsInstance(ne._population.selection_strategy, TournamentSelection)
+
+    def test_set_selection_strategy_per_species(self):
+        from yane.evolution.selection_strategy import RankSelection
+        ne = NeuroEvolution()
+        strategy = RankSelection()
+        ne.set_selection_strategy(strategy, species_id=42)
+        self.assertIn(42, ne._selection_strategies_by_species)
+        self.assertIs(ne._selection_strategies_by_species[42], strategy)
+
+    def test_selection_diagnostics_in_population_memory_info(self):
+        from yane.util import logger as logmod
+        orig_root = logmod.log_root
+        with tempfile.TemporaryDirectory() as tmp:
+            logmod.log_root = Path(tmp)
+            try:
+                ne = NeuroEvolution()
+                ne.set_population_size(10)
+                ne.configure(n_inputs=2, n_outputs=1)
+                ne.set_max_iterations(30)
+                ne.train(_dummy_eval)
+                info = ne.population_memory_info()
+                self.assertIn("selection", info)
+                sel = info["selection"]
+                self.assertIn("strategy", sel)
+                self.assertIn("avg_parent_fitness", sel)
+                self.assertIn("avg_pool_fitness", sel)
+                self.assertIn("TournamentSelection", sel["strategy"])
+            finally:
+                logmod.log_root = orig_root
+
+    def test_tournament_default_preserves_behaviour(self):
+        """Default strategy is TournamentSelection(k=3) — same as original code."""
+        from yane.evolution.selection_strategy import TournamentSelection
+        ne = NeuroEvolution()
+        ne.configure(2, 1)
+        self.assertIsInstance(ne._population.selection_strategy, TournamentSelection)
+        self.assertEqual(ne._population.selection_strategy.k, 3)
+
+    def test_species_has_stable_id(self):
+        """Each Species gets a unique integer species_id."""
+        from yane.evolution.species import Species
+        from yane.core.genome import Genome
+        s1 = Species(Genome())
+        s2 = Species(Genome())
+        self.assertIsInstance(s1.species_id, int)
+        self.assertNotEqual(s1.species_id, s2.species_id)
+
+
 if __name__ == "__main__":
     unittest.main()
