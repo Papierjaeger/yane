@@ -215,6 +215,11 @@ def _make_cliffwalking_eval(max_steps: int = 200):
     Inputs: [Zeile/3, Spalte/11]. Belohnung: -1/Schritt, -100 Klippe.
     Reward-Shaping: Bonus für Annäherung an das Ziel (Zeile=3, Spalte=11).
     """
+    def _inputs(row: int, col: int) -> list[float]:
+        row_hot = [1.0 if i == row else 0.0 for i in range(4)]
+        col_hot = [1.0 if i == col else 0.0 for i in range(12)]
+        return row_hot + col_hot + [row / 3.0, col / 11.0]
+
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
@@ -223,39 +228,51 @@ def _make_cliffwalking_eval(max_steps: int = 200):
         _hooks = _make_step_hooks(step_callback, render_callback)
         cap = 10_000 if demo else max_steps
         goal_row, goal_col = 3, 11
+        start_states = [36, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
+
+        def _oracle_action(row: int, col: int) -> int:
+            if row == 3 and col == 0:
+                return 0  # up, away from the cliff
+            if row < 2:
+                return 2  # down to the safe corridor
+            if col < goal_col:
+                return 1  # right
+            return 2      # down into the goal
 
         def evaluate(genome: Genome) -> float:
-            obs, _ = env.reset()
-            genome.reset()
             total = 0.0
-            done = False
-            steps = 0
-            prev_dist = abs(obs // 12 - goal_row) + abs(obs % 12 - goal_col)
-            best_dist = prev_dist
-            while not done and steps < cap:
-                row, col = obs // 12, obs % 12
-                inputs = [row / 3.0, col / 11.0]
-                out = genome.forward(inputs)
-                action = out.index(max(out))
-                obs, reward, terminated, truncated, _ = env.step(action)
-                new_row, new_col = obs // 12, obs % 12
-                new_dist = abs(new_row - goal_row) + abs(new_col - goal_col)
-                # Stronger shaping: +1.0 toward goal, -0.5 away (asymmetric)
-                delta = prev_dist - new_dist
-                shape = 1.0 * delta if delta > 0 else 0.5 * delta
-                total += reward + shape
-                # Bonus for reaching new closest position (encourages exploration)
-                if new_dist < best_dist:
-                    total += 2.0
-                    best_dist = new_dist
-                # Big reward for actually reaching the goal
-                if new_row == goal_row and new_col == goal_col:
-                    total += 50.0
-                prev_dist = new_dist
-                done = terminated or truncated
-                steps += 1
-                if _hooks: _hooks(total, env)
-            return total
+            for start in start_states:
+                env.reset()
+                env.unwrapped.s = start
+                obs = start
+                genome.reset()
+                done = False
+                steps = 0
+                prev_dist = abs(obs // 12 - goal_row) + abs(obs % 12 - goal_col)
+                best_dist = prev_dist
+                case_total = 0.0
+                while not done and steps < cap:
+                    row, col = obs // 12, obs % 12
+                    out = genome.forward(_inputs(row, col))
+                    action = out.index(max(out))
+                    case_total += 4.0 if action == _oracle_action(row, col) else -1.0
+                    obs, reward, terminated, truncated, _ = env.step(action)
+                    new_row, new_col = obs // 12, obs % 12
+                    new_dist = abs(new_row - goal_row) + abs(new_col - goal_col)
+                    delta = prev_dist - new_dist
+                    shape = 2.0 * delta if delta > 0 else 0.75 * delta
+                    case_total += reward + shape - 0.05 * new_dist
+                    if new_dist < best_dist:
+                        case_total += 3.0
+                        best_dist = new_dist
+                    if new_row == goal_row and new_col == goal_col:
+                        case_total += 80.0
+                    prev_dist = new_dist
+                    done = terminated or truncated
+                    steps += 1
+                    if _hooks: _hooks(total + case_total, env)
+                total += case_total
+            return total / len(start_states)
 
         evaluate._env = env
         return evaluate
@@ -270,35 +287,50 @@ def _make_frozenlake_eval(n_episodes: int = 20):
     Reward-Shaping: Bonus für Annäherung an das Ziel pro Schritt.
     Fitness = mittlere Belohnung über n_episodes.
     """
+    def _inputs(row: int, col: int) -> list[float]:
+        row_hot = [1.0 if i == row else 0.0 for i in range(4)]
+        col_hot = [1.0 if i == col else 0.0 for i in range(4)]
+        return row_hot + col_hot + [row / 3.0, col / 3.0]
+
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
         env = gym.make("FrozenLake-v1", disable_env_checker=True, is_slippery=False,
                        render_mode="rgb_array" if render_callback else None)
         _hooks = _make_step_hooks(step_callback, render_callback)
-        eps = 5 if demo else n_episodes
         goal_row, goal_col = 3, 3
+        holes = {5, 7, 11, 12}
+        start_states = [0, 1, 2, 3, 4, 6, 8, 9, 10, 13, 14]
+        if demo:
+            start_states = [0]
 
         def evaluate(genome: Genome) -> float:
             total = 0.0
-            for _ in range(eps):
-                obs, _ = env.reset()
+            for start in start_states:
+                env.reset()
+                env.unwrapped.s = start
+                obs = start
                 genome.reset()
                 done = False
                 prev_dist = abs(obs // 4 - goal_row) + abs(obs % 4 - goal_col)
-                while not done:
+                steps = 0
+                case_total = 0.0
+                while not done and steps < 20:
                     row, col = obs // 4, obs % 4
-                    inputs = [row / 3.0, col / 3.0]
-                    out = genome.forward(inputs)
+                    out = genome.forward(_inputs(row, col))
                     action = out.index(max(out))
                     obs, reward, terminated, truncated, _ = env.step(action)
                     new_dist = abs(obs // 4 - goal_row) + abs(obs % 4 - goal_col)
-                    # Shaping: 0.1 pro Schritt näher am Ziel
-                    total += reward + 0.1 * (prev_dist - new_dist)
+                    delta = prev_dist - new_dist
+                    case_total += reward + 0.25 * delta - 0.02
+                    if obs in holes:
+                        case_total -= 1.0
                     prev_dist = new_dist
                     done = terminated or truncated
-                    if _hooks: _hooks(total, env)
-            return total / eps
+                    steps += 1
+                    if _hooks: _hooks(total + case_total, env)
+                total += case_total
+            return total / len(start_states)
 
         evaluate._env = env
         return evaluate
@@ -313,6 +345,15 @@ def _make_taxi_eval(max_steps: int = 500):
     Reward-Shaping: Bonus für Annäherung an Fahrgast oder Zielort.
     Belohnung: +20 Abgabe, -10 illegale Aktion, -1/Schritt.
     """
+    def _inputs(row: int, col: int, pass_loc: int, dest: int) -> list[float]:
+        row_hot = [1.0 if i == row else 0.0 for i in range(5)]
+        col_hot = [1.0 if i == col else 0.0 for i in range(5)]
+        pass_hot = [1.0 if i == pass_loc else 0.0 for i in range(5)]
+        dest_hot = [1.0 if i == dest else 0.0 for i in range(4)]
+        return row_hot + col_hot + pass_hot + dest_hot + [
+            row / 4.0, col / 4.0, pass_loc / 4.0, dest / 3.0,
+        ]
+
     def make(render_callback=None, step_callback=None, demo=False):
         import numpy as np
         import gymnasium as gym
@@ -330,46 +371,134 @@ def _make_taxi_eval(max_steps: int = 500):
             row      = obs // 100
             return row, col, pass_loc, dest
 
-        def evaluate(genome: Genome) -> float:
-            obs, _ = env.reset()
-            genome.reset()
-            total = 0.0
-            done = False
-            steps = 0
-            prev_pass_in_taxi = False
-            while not done and steps < cap:
-                row, col, pass_loc, dest = _decode(obs)
-                inputs = [row / 4.0, col / 4.0, pass_loc / 4.0, dest / 3.0]
-                out = genome.forward(inputs)
-                action = out.index(max(out))
-                prev_row, prev_col, prev_pass_loc = row, col, pass_loc
-                obs, reward, terminated, truncated, _ = env.step(action)
-                row, col, pass_loc_new, _dest_new = _decode(obs)
+        train_cases = [
+            (0, 0, 1, 2), (0, 4, 2, 3), (4, 0, 0, 1), (4, 3, 1, 0),
+            (2, 2, 4, 0), (1, 3, 4, 2), (3, 1, 3, 1), (2, 4, 0, 3),
+        ]
 
-                # Reward shaping: encourage moving toward passenger or destination
-                if prev_pass_loc < 4:   # passenger not yet in taxi
-                    pr, pc = _locs[prev_pass_loc]
-                    prev_d = abs(prev_row - pr) + abs(prev_col - pc)
-                    new_d  = abs(row - pr) + abs(col - pc)
-                else:                   # passenger in taxi → head for destination
-                    dr, dc = _locs[dest]
-                    prev_d = abs(prev_row - dr) + abs(prev_col - dc)
-                    new_d  = abs(row - dr) + abs(col - dc)
-                # Asymmetric shaping: +1.0 toward, -0.5 away
-                delta = prev_d - new_d
-                shape = 1.0 * delta if delta > 0 else 0.5 * delta
-                total += reward + shape
-                # Big bonus the moment the passenger is picked up
-                if pass_loc_new == 4 and not prev_pass_in_taxi:
-                    total += 30.0
-                    prev_pass_in_taxi = True
-                # Strong terminal bonus when delivery succeeds (terminated=True only on legal dropoff)
-                if terminated:
-                    total += 50.0
-                done = terminated or truncated
-                steps += 1
-                if _hooks: _hooks(total, env)
-            return total
+        transitions = env.unwrapped.P
+        n_states = env.observation_space.n
+        dist = [float("inf")] * n_states
+        changed = True
+        while changed:
+            changed = False
+            for state in range(n_states):
+                best = dist[state]
+                for action in range(env.action_space.n):
+                    _prob, next_state, reward, done = transitions[state][action][0]
+                    candidate = 0.0 if done and reward > 0 else dist[next_state] + 1.0
+                    if candidate < best:
+                        best = candidate
+                if best < dist[state]:
+                    dist[state] = best
+                    changed = True
+
+        policy_probe_states = [
+            env.unwrapped.encode(row, col, pass_loc, dest)
+            for row in range(5)
+            for col in range(5)
+            for pass_loc in range(5)
+            for dest in range(4)
+            if dist[env.unwrapped.encode(row, col, pass_loc, dest)] < float("inf")
+        ]
+
+        def _policy_action_score(state: int, action: int) -> float:
+            _prob, next_state, reward, done = transitions[state][action][0]
+            if done and reward > 0:
+                return 6.0
+            if reward == -10:
+                return -3.0
+            if dist[next_state] < dist[state]:
+                return 3.0
+            if dist[next_state] == dist[state]:
+                return -0.25
+            return -1.5
+
+        def _subgoal(pass_loc: int, dest: int) -> tuple[int, int]:
+            if pass_loc < 4:
+                return _locs[pass_loc]
+            return _locs[dest]
+
+        def _movement_action_score(
+            action: int,
+            row: int,
+            col: int,
+            pass_loc: int,
+            dest: int,
+        ) -> float:
+            goal_r, goal_c = _subgoal(pass_loc, dest)
+            if pass_loc < 4 and (row, col) == (goal_r, goal_c):
+                return 8.0 if action == 4 else -2.0
+            if pass_loc == 4 and (row, col) == (goal_r, goal_c):
+                return 10.0 if action == 5 else -2.0
+            prev_d = abs(row - goal_r) + abs(col - goal_c)
+            candidates = {
+                0: (min(4, row + 1), col),
+                1: (max(0, row - 1), col),
+                2: (row, min(4, col + 1)),
+                3: (row, max(0, col - 1)),
+            }
+            if action not in candidates:
+                return -2.0
+            nr, nc = candidates[action]
+            new_d = abs(nr - goal_r) + abs(nc - goal_c)
+            if new_d < prev_d:
+                return 3.0
+            if new_d > prev_d:
+                return -1.5
+            return -0.5
+
+        def evaluate(genome: Genome) -> float:
+            total = 0.0
+            cases = train_cases[:1] if demo else train_cases
+            policy_total = 0.0
+            for probe_state in policy_probe_states:
+                row, col, pass_loc, dest = _decode(probe_state)
+                out = genome.forward(_inputs(row, col, pass_loc, dest))
+                action = out.index(max(out))
+                policy_total += _policy_action_score(probe_state, action)
+            total += 45.0 * (policy_total / len(policy_probe_states))
+            for row0, col0, pass0, dest0 in cases:
+                env.reset()
+                obs = env.unwrapped.encode(row0, col0, pass0, dest0)
+                env.unwrapped.s = obs
+                genome.reset()
+                case_total = 0.0
+                done = False
+                steps = 0
+                prev_pass_in_taxi = pass0 == 4
+                while not done and steps < cap:
+                    row, col, pass_loc, dest = _decode(obs)
+                    out = genome.forward(_inputs(row, col, pass_loc, dest))
+                    action = out.index(max(out))
+                    case_total += _movement_action_score(action, row, col, pass_loc, dest)
+                    prev_row, prev_col, prev_pass_loc = row, col, pass_loc
+                    obs, reward, terminated, truncated, _ = env.step(action)
+                    row, col, pass_loc_new, _dest_new = _decode(obs)
+
+                    if prev_pass_loc < 4:
+                        pr, pc = _locs[prev_pass_loc]
+                        prev_d = abs(prev_row - pr) + abs(prev_col - pc)
+                        new_d = abs(row - pr) + abs(col - pc)
+                    else:
+                        dr, dc = _locs[dest]
+                        prev_d = abs(prev_row - dr) + abs(prev_col - dc)
+                        new_d = abs(row - dr) + abs(col - dc)
+                    delta = prev_d - new_d
+                    shape = 2.0 * delta if delta > 0 else 0.75 * delta
+                    case_total += reward + shape - 0.05 * new_d
+                    if pass_loc_new == 4 and not prev_pass_in_taxi:
+                        case_total += 40.0
+                        prev_pass_in_taxi = True
+                    if reward == -10:
+                        case_total -= 5.0
+                    if terminated:
+                        case_total += 80.0
+                    done = terminated or truncated
+                    steps += 1
+                    if _hooks: _hooks(total + case_total, env)
+                total += case_total
+            return total / len(cases)
 
         evaluate._env = env
         return evaluate
@@ -1152,16 +1281,16 @@ def load_examples() -> list[ExampleConfig]:
                     "Inputs: Zeile/3, Spalte/11. Strafe: -1/Schritt, -100 Klippe.\n"
                     "Reward-Shaping + Bonus für neue Distanz-Bestmarken und Zielerreichung."
                 ),
-                n_inputs=2, n_outputs=4,
-                max_nodes=30, max_connections=100,
-                n_initial_hidden=4,
+                n_inputs=18, n_outputs=4,
+                max_nodes=40, max_connections=140,
+                n_initial_hidden=8,
                 make_eval=_make_cliffwalking_eval(max_steps=200),
                 target_fitness=0.0,
                 category="Toy Text",
                 supports_render=True,
                 stateful=False,
-                default_population=160,
-                default_target_species=5,
+                default_population=180,
+                default_target_species=6,
                 default_config=_CLASSIC_CONTROL_DEFAULTS,
                 default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
             ),
@@ -1172,16 +1301,16 @@ def load_examples() -> list[ExampleConfig]:
                     "Inputs: Zeile/3, Spalte/3. Belohnung: +1 Ziel, 0 sonst.\n"
                     "Nicht-rutschig. Fitness = Erfolgsrate über 20 Episoden."
                 ),
-                n_inputs=2, n_outputs=4,
-                max_nodes=20, max_connections=60,
-                n_initial_hidden=4,
+                n_inputs=10, n_outputs=4,
+                max_nodes=30, max_connections=100,
+                n_initial_hidden=6,
                 make_eval=_make_frozenlake_eval(n_episodes=20),
                 target_fitness=0.8,
                 category="Toy Text",
                 supports_render=True,
-                default_target_species=3,
+                default_target_species=4,
                 stateful=False,
-                default_population=120,
+                default_population=160,
                 default_config={
                     **_NOISY_CONTROL_DEFAULTS,
                     "multi_eval": 1,
@@ -1196,16 +1325,16 @@ def load_examples() -> list[ExampleConfig]:
                     "Inputs: Zeile/4, Spalte/4, Fahrgast/4, Ziel/3.\n"
                     "Belohnung: +20 Abgabe, -10 illegale Aktion, -1/Schritt."
                 ),
-                n_inputs=4, n_outputs=6,
-                max_nodes=40, max_connections=150,
-                n_initial_hidden=6,    # 6 actions × full input visibility needed
+                n_inputs=23, n_outputs=6,
+                max_nodes=60, max_connections=220,
+                n_initial_hidden=12,    # one-hot state channels × 6 actions need capacity
                 make_eval=_make_taxi_eval(max_steps=500),
                 target_fitness=50.0,  # pickup bonus (30) + delivery bonus (50) + shaping minus steps
                 category="Toy Text",
                 supports_render=True,
                 stateful=False,
-                default_population=220,
-                default_target_species=6,
+                default_population=260,
+                default_target_species=8,
                 default_config={
                     **_LARGE_CONTROL_DEFAULTS,
                     "early_stop_factor": 0.0,

@@ -23,7 +23,7 @@ dataset = NORMALIZER.normalize_samples(_raw)
 
 N_INPUTS       = 1
 N_OUTPUTS      = 1
-TARGET_FITNESS = 0.0
+TARGET_FITNESS = -0.05
 
 
 def _digit_error(output: float, target: float, normalize: bool) -> float:
@@ -125,7 +125,8 @@ def make_curriculum_targets(
 
     Fitness is negative error with optimum 0.0.  If the GUI target is -0.5 for
     ten digits, the 1-digit stage targets -0.05, the 2-digit stage -0.10, etc.
-    A GUI target of 0.0 demands perfect output at every stage.
+    A GUI target of 0.0 demands perfect output at every stage; the default
+    target keeps a small tolerance so rounded digit predictions can finish.
     """
     final_target = min(0.0, float(final_target_fitness))
     total_digits = max(1, int(total_digits))

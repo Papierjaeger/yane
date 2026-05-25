@@ -11,6 +11,8 @@ zukünftigen Änderungen, um Regressionen und Verbesserungen zu erkennen.
 
 ```bash
 python -m yane.benchmarks.run_suite --fast
+python -m yane.benchmarks.long_examples --max-minutes 30 --solved-repeats 10
+python -m yane.benchmarks.long_examples --parallel auto --max-cpu-percent 85 --pause-cpu-percent 95 --min-free-gb 3
 python -m yane.benchmarks.forward_bench --sizes 10 50 200 1000
 python -m yane.benchmarks.compare_lamarck_modes --env Acrobot-v1 --modes hc nes sa cma_es
 python -m yane.benchmarks.descriptor_weight_ablation --max-iter 1000 --seeds 3
@@ -19,6 +21,12 @@ python -m yane.benchmarks.cppn_indirect_ablation --max-iter 1000 --seeds 3
 ```
 
 - `run_suite.py`: Standard-Suite über mehrere Seeds.
+- `long_examples.py`: Langtest-Harness für alle GUI-Beispiele. Standard ist
+  sequenziell; mit `--parallel N` oder `--parallel auto` laufen mehrere Beispiele
+  in eigenen Prozessen. Der Scheduler startet neue Jobs nur bei CPU-/RAM-Headroom
+  (`--max-cpu-percent`, `--min-free-gb`), pausiert Worker oberhalb von
+  `--pause-cpu-percent`, setzt sie unter `--resume-cpu-percent` fort und schreibt
+  pro Beispiel ein Teilresultat.
 - `forward_bench.py`: Microbenchmarks für `forward()`.
 - `compare_lamarck_modes.py`: Vergleich von Hill-Climbing, NES, SA und CMA-ES auf
   Acrobot/LunarLander.
