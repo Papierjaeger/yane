@@ -54,7 +54,7 @@ Ziel: Layer 1 wartbar halten; Layer 2 durch das Policy-Interface erweiterbar mac
 
 ---
 
-### ✅ P0 Strukturierte Evaluator-Komponenten / Task-Curriculum
+### ✓ P0 Strukturierte Evaluator-Komponenten / Task-Curriculum
 
 Mehrere Langtests zeigen: manche Umgebungen scheitern nicht an NEAT selbst,
 sondern an einer zu flachen oder zu monolithischen Fitnessfunktion. Taxi,
@@ -97,14 +97,14 @@ Penalty, State-Coverage und optional Curriculum-Stufen.
 
 **Akzeptanzkriterien:**
 
-- ✅ FrozenLake, CliffWalking und Taxi nutzen `EvaluatorSpec` statt handverteilter
+- ✓ FrozenLake, CliffWalking und Taxi nutzen `EvaluatorSpec` statt handverteilter
   Speziallogik im Evaluator.
 - Taxi loest in einem 10-Minuten-Benchmark mindestens 3/3 Seeds mit Default-
   Einstellungen.
 - FrozenLake loest in einem 10-Minuten-Benchmark mindestens 3/3 Seeds.
 - CliffWalking loest in einem 30-Minuten-Benchmark mindestens 3/3 Seeds.
-- ✅ Ein Ablations-Benchmark zeigt Rollout-only vs. Subgoal vs. GraphPolicyScore.
-- ✅ Tests decken State-Encoding-Dimensionen, GraphPolicyScore und MultiStart-
+- ✓ Ein Ablations-Benchmark zeigt Rollout-only vs. Subgoal vs. GraphPolicyScore.
+- ✓ Tests decken State-Encoding-Dimensionen, GraphPolicyScore und MultiStart-
   Aggregation ab.
 
 **Beziehung zu P1 Evaluation-Middleware:** Dieser Task ist die konkrete
@@ -114,7 +114,7 @@ zu protokollieren.
 
 ---
 
-### ✅ P0 Self-Tuning Speziation (Automatischer Kompatibilitaetsschwellenwert)
+### ✓ P0 Self-Tuning Speziation (Automatischer Kompatibilitaetsschwellenwert)
 
 Die Spezies-Anzahl schwankt stark wenn der Kompatibilitaetsschwellenwert fest eingestellt ist; zu viele Spezies verschwenden Budget, zu wenige unterdruecken Diversitaet.
 
@@ -123,13 +123,13 @@ Die Spezies-Anzahl schwankt stark wenn der Kompatibilitaetsschwellenwert fest ei
 `set_target_species(None)` sind verfuegbar. Diagnostics enthalten Zielband,
 Tune-Intervall, letzten Anpassungsschritt und Trend.
 
-- ✅ `NeuroEvolution.set_target_species(n_min=4, n_max=8, tune_interval=10)`: YANE passt den Schwellenwert alle N Schritte an um die Zielbreite einzuhalten.
-- ✅ PI-Regler: Schwellenwert steigt wenn zu viele Spezies vorhanden, sinkt wenn zu wenige; begrenzt durch `[threshold_min, threshold_max]`.
-- ✅ Diagnostics: aktueller Schwellenwert, letzter Anpassungsschritt, Anpassungs-Trend.
-- ✅ `set_target_species(None)` deaktiviert Self-Tuning.
-- ✅ Tests: Zielband-Konfiguration, Deaktivierung und Anpassungsverhalten.
+- ✓ `NeuroEvolution.set_target_species(n_min=4, n_max=8, tune_interval=10)`: YANE passt den Schwellenwert alle N Schritte an um die Zielbreite einzuhalten.
+- ✓ PI-Regler: Schwellenwert steigt wenn zu viele Spezies vorhanden, sinkt wenn zu wenige; begrenzt durch `[threshold_min, threshold_max]`.
+- ✓ Diagnostics: aktueller Schwellenwert, letzter Anpassungsschritt, Anpassungs-Trend.
+- ✓ `set_target_species(None)` deaktiviert Self-Tuning.
+- ✓ Tests: Zielband-Konfiguration, Deaktivierung und Anpassungsverhalten.
 
-### ✅ P0 Adaptive Recovery System
+### ✓ P0 Adaptive Recovery System
 
 Bei erkannter Stagnation oder Diversitaets-Kollaps laeuft YANE ohne Gegenmasnahme weiter. Die Anomalie-Detektoren erkennen das Problem, handeln aber nicht. Gleichzeitig darf ein naives Patience-Kriterium NEAT-typische Stepping-Stone-Phasen nicht abwuergen: lange Stagnation vor einem Fitness-Sprung ist normaler NEAT-Ablauf. Dieses System vereint Recovery, Diversity-Injection und Early Stopping in einer einzigen, eskalierenden Regelkette.
 
@@ -145,37 +145,37 @@ persistente Stop-Attribute und Diagnostics sind vorhanden.
 
 **API:**
 
-- ✅ `NeuroEvolution.set_adaptive_recovery(enabled=True, strategies=["diversity_boost", "partial_restart", "lamarck_burst"], cooldown=20, escalate=True, diversity_iqr_threshold=1e-4, injection_frac=0.1, early_stopping_patience=500, warmup=100, min_delta=1e-4)`.
+- ✓ `NeuroEvolution.set_adaptive_recovery(enabled=True, strategies=["diversity_boost", "partial_restart", "lamarck_burst"], cooldown=20, escalate=True, diversity_iqr_threshold=1e-4, injection_frac=0.1, early_stopping_patience=500, warmup=100, min_delta=1e-4)`.
 
 **Trigger (in Reihenfolge):**
 
-1. ✅ `DiversityCollapseDetector`/IQR-Signal: Injektions-Phase mit `injection_frac * pop_size` neuen Genomen.
-2. ✅ `HomogenizationDetector` oder `StuckSpeciationDetector`: Recovery-Phase mit konfiguriertem `strategy`.
-3. ✅ Wenn Recovery nach `cooldown`-Generationen keinen Fitness-Delta > `min_delta` erzeugt und `escalate=True`: naechste Strategie in der Liste versuchen.
+1. ✓ `DiversityCollapseDetector`/IQR-Signal: Injektions-Phase mit `injection_frac * pop_size` neuen Genomen.
+2. ✓ `HomogenizationDetector` oder `StuckSpeciationDetector`: Recovery-Phase mit konfiguriertem `strategy`.
+3. ✓ Wenn Recovery nach `cooldown`-Generationen keinen Fitness-Delta > `min_delta` erzeugt und `escalate=True`: naechste Strategie in der Liste versuchen.
 
 **Recovery-Strategien:**
 
-- ✅ `diversity_boost`: mehrere diverse Genome einschleusen.
-- ✅ `partial_restart`: schwache Populationsteile entfernen und durch neue Genome ersetzen.
-- ✅ `lamarck_burst`: Lamarck-Budget temporaer erhoehen um lokales Optimum zu verlassen.
+- ✓ `diversity_boost`: mehrere diverse Genome einschleusen.
+- ✓ `partial_restart`: schwache Populationsteile entfernen und durch neue Genome ersetzen.
+- ✓ `lamarck_burst`: Lamarck-Budget temporaer erhoehen um lokales Optimum zu verlassen.
 
 **Cooldown und Eskalation:**
 
-- ✅ Nach jeder Recovery-Massnahme mindestens `cooldown` Generationen Pause vor erneutem Trigger.
-- ✅ Bei `escalate=True` werden Strategien der Reihe nach eskaliert wenn keine Verbesserung eintritt.
-- ✅ Sind alle Strategien erschoepft oder Diversity kollabiert und es gibt keine Verbesserung seit `early_stopping_patience` Generationen: Trainings-Stop.
+- ✓ Nach jeder Recovery-Massnahme mindestens `cooldown` Generationen Pause vor erneutem Trigger.
+- ✓ Bei `escalate=True` werden Strategien der Reihe nach eskaliert wenn keine Verbesserung eintritt.
+- ✓ Sind alle Strategien erschoepft oder Diversity kollabiert und es gibt keine Verbesserung seit `early_stopping_patience` Generationen: Trainings-Stop.
 
 **Early Stopping (letzte Stufe, kein naives Patience-Kriterium):**
 
-- ✅ Stop wird nur ausgeloest wenn `patience` Generationen ohne Verbesserung um `min_delta` UND mindestens ein weiteres Signal: Diversity kollabiert ODER alle Recovery-Strategien erschoepft und erfolglos.
-- ✅ `warmup`-Generationen werden immer vollstaendig abgewartet bevor Early Stopping greifen kann.
+- ✓ Stop wird nur ausgeloest wenn `patience` Generationen ohne Verbesserung um `min_delta` UND mindestens ein weiteres Signal: Diversity kollabiert ODER alle Recovery-Strategien erschoepft und erfolglos.
+- ✓ `warmup`-Generationen werden immer vollstaendig abgewartet bevor Early Stopping greifen kann.
 - Optional: statistischer Trend-Test (Mann-Whitney U ueber beide Haelften des Patience-Fensters) via `use_stat_test=True`.
 - Hoher Default (500 Generationen = 50k Iterationen bei pop_size=100) verhindert vorzeitiges Abwuergen von Stepping-Stone-Phasen.
 
 **Persistente Attribute nach Training:**
 
-- ✅ `yane.stopped_early: bool`
-- ✅ `yane.stop_reason: str` (z.B. `"patience_exhausted_and_diversity_collapsed"`, `"patience_exhausted_and_all_strategies_exhausted"`)
+- ✓ `yane.stopped_early: bool`
+- ✓ `yane.stop_reason: str` (z.B. `"patience_exhausted_and_diversity_collapsed"`, `"patience_exhausted_and_all_strategies_exhausted"`)
 
 **Diagnostics:**
 
@@ -196,7 +196,7 @@ persistente Stop-Attribute und Diagnostics sind vorhanden.
 - Early Stopping nur wenn Patience UND Diversity-Bedingung erfuellt; `warmup` wird respektiert.
 - Diversity-Injektion: korrekte Anzahl Genome ersetzt; IQR steigt nach Injektion.
 
-### ✅ P0 Anytime-Evaluation (Adaptives Evaluations-Budget)
+### ✓ P0 Anytime-Evaluation (Adaptives Evaluations-Budget)
 
 Jedes Genom wird gleich oft evaluiert, egal wie schlecht es ist; teure Umgebungen (z.B. CartPole) verschwenden Budget auf schwache Genome.
 
@@ -209,16 +209,16 @@ Promotion-Rate und Varianz promoteter Genome.
 
 > **Architektur: Adaptive Evaluation Budgeting** — Anytime-Evaluation (P0) und Fitness-Surrogate (P1) teilen denselben Unterbau: Budget-Verwaltung per Promotion-Fraktion, Diagnostics-Schema (gesparte Evals, Eval-Varianz, Promotion-Rate), konfigurierbares Aggregations-Fn. Anytime benutzt mehrfache echte Evaluierungen; Surrogate filtert vorab per Modell-Vorhersage. Beide Mechanismen koennen gleichzeitig aktiv sein: Surrogate filtert zuerst, Anytime bewertet die promotierten Genome mehrfach.
 
-- ✅ `NeuroEvolution.set_anytime_eval(enabled=True, min_evals=1, max_evals=5, promotion_frac=0.3)`.
-- ✅ Phase 1: alle Genome werden schnell evaluiert.
-- ✅ Phase 2: obere `promotion_frac` werden bis `max_evals` evaluiert; Fitness wird aggregiert.
-- ✅ Konfigurierbares Aggregations-Fn: `mean`, `median`, `min`, `max`.
-- ✅ Diagnostics: durchschnittliche Evals pro Genome, gesparte Evals, Fitness-Varianz der promovierten Genome, Promotion-Rate.
-- ✅ Tests: kompetitive Genome werden promotet; schwache Genome sparen Zusatz-Evals.
+- ✓ `NeuroEvolution.set_anytime_eval(enabled=True, min_evals=1, max_evals=5, promotion_frac=0.3)`.
+- ✓ Phase 1: alle Genome werden schnell evaluiert.
+- ✓ Phase 2: obere `promotion_frac` werden bis `max_evals` evaluiert; Fitness wird aggregiert.
+- ✓ Konfigurierbares Aggregations-Fn: `mean`, `median`, `min`, `max`.
+- ✓ Diagnostics: durchschnittliche Evals pro Genome, gesparte Evals, Fitness-Varianz der promovierten Genome, Promotion-Rate.
+- ✓ Tests: kompetitive Genome werden promotet; schwache Genome sparen Zusatz-Evals.
 
 ---
 
-### 🔲 P1 Adaptive Policy System
+### □ P1 Adaptive Policy System
 
 Verschiedene Adaptive-Mechanismen (Recovery, Diversity, Pop-Resize, Lamarck Burst, Fitness Shaping, Online Tuning, Surrogate-Gating) sind derzeit als separate Regelkreise implementiert. Das fuehrt zu konkurrierenden Aktionen, schwerer Debugbarkeit und doppeltem Code.
 
@@ -256,7 +256,7 @@ class AdaptivePolicy:
 - Zwei Policies mit gleichem `conflict_group` feuern nie gleichzeitig; hoehere `priority` gewinnt.
 - Benutzerdefinierte Policy kann via `register_policy` eingebunden werden.
 
-### 🔲 P1 Modular Compatibility Distance / Genome Descriptor
+### □ P1 Modular Compatibility Distance / Genome Descriptor
 
 Die aktuelle Kompatibilitaets-Distanz in der NEAT-Speziation ist auf Verbindungsanzahl und Gewichtsdifferenz beschraenkt. Sobald Genome komplexer werden — Module, Input-/Output-Gruppen, Conv-Bloecke, Plastizitaetsregeln — reicht diese einfache Distanz nicht mehr um Spezies korrekt zu trennen.
 
@@ -326,7 +326,7 @@ class RunDatabase:
 - `compare_runs` gibt korrekte statistische Zusammenfassung ueber N Runs.
 - Ohne `set_run_database` kein Performance-Overhead (kein automatisches Tracking).
 
-### 🔲 P1 Selektionsstrategie als Plugin
+### □ P1 Selektionsstrategie als Plugin
 
 Die Selektionsstrategie (Tournament) ist fest in `population.py` verdrahtet; kein Austausch ohne Code-Aenderung.
 
@@ -350,24 +350,24 @@ verfuegbar; Middleware laeuft in LIFO-Reihenfolge. Eingebaut sind
 `ComponentMiddleware` und `CaseBatchMiddleware` inklusive Diagnostics. Offen:
 `NoiseMiddleware` und GUI-Anzeige fuer Komponentenwerte.
 
-- ✅ `EvalMiddleware`-Protokoll: `__call__(genome, eval_fn, ctx) -> float`.
-- ✅ Eingebaute Middleware: `CachingMiddleware(maxsize=512)` (Genome-Hash → Fitness), `TimingMiddleware` (Eval-Zeit pro Genom), `RetryMiddleware(n=3, aggregation="mean")`.
+- ✓ `EvalMiddleware`-Protokoll: `__call__(genome, eval_fn, ctx) -> float`.
+- ✓ Eingebaute Middleware: `CachingMiddleware(maxsize=512)` (Genome-Hash → Fitness), `TimingMiddleware` (Eval-Zeit pro Genom), `RetryMiddleware(n=3, aggregation="mean")`.
 - `NoiseMiddleware(sigma=0.05)` (Input-Perturbation).
-- ✅ `ComponentMiddleware`: fuehrt mehrere benannte Fitness-Komponenten aus und
+- ✓ `ComponentMiddleware`: fuehrt mehrere benannte Fitness-Komponenten aus und
   schreibt Rohwerte + gewichteten Gesamtwert in Diagnostics.
-- ✅ `CaseBatchMiddleware`: evaluiert feste Case-Listen (Train/Validation) mit
+- ✓ `CaseBatchMiddleware`: evaluiert feste Case-Listen (Train/Validation) mit
   konfigurierbarer Aggregation; Grundlage fuer MultiStart- und Curriculum-
   Beispiele.
-- ✅ `yane.add_eval_middleware(mw)` haengt in die Kette ein.
-- ✅ Middleware-Reihenfolge: LIFO (zuletzt hinzugefuegt = aeussere Schicht).
-- ✅ Diagnostics: Cache-Hit-Rate, Durchschnittliche Eval-Zeit, Retry-Rate,
+- ✓ `yane.add_eval_middleware(mw)` haengt in die Kette ein.
+- ✓ Middleware-Reihenfolge: LIFO (zuletzt hinzugefuegt = aeussere Schicht).
+- ✓ Diagnostics: Cache-Hit-Rate, Durchschnittliche Eval-Zeit, Retry-Rate,
   Komponenten-Rohwerte, Komponenten-Gewichte, Case-Erfolgsraten.
-- ✅ Tests: Middleware-Reihenfolge korrekt; Komponentenwerte bleiben getrennt
+- ✓ Tests: Middleware-Reihenfolge korrekt; Komponentenwerte bleiben getrennt
   sichtbar; Cache nutzt Genome-Fingerprint und invalidiert bei Gewichts-/Topologie-
   Aenderung; Retry wiederholt instabile Evaluatoren; Validation-Cases
   beeinflussen die Selektion nicht.
 
-### 🔲 P1 Generationsreport / Run-Postmortem
+### □ P1 Generationsreport / Run-Postmortem
 
 Nach einem Trainingslauf gibt es keine strukturierte Zusammenfassung; Erkenntnisse muessen manuell aus Logs und CSV herausgezogen werden.
 
@@ -381,7 +381,7 @@ Nach einem Trainingslauf gibt es keine strukturierte Zusammenfassung; Erkenntnis
 - GUI: „Report exportieren"-Button im Diagnostics-Tab; oeffnet gespeicherte Datei im Browser.
 - `yane.set_report_autosave(path_template="{date}_{example}_report.html")`.
 
-### ✅ P1 Automatisches Checkpoint-Rolling (Retention-Policy und Best-Tracking)
+### ✓ P1 Automatisches Checkpoint-Rolling (Retention-Policy und Best-Tracking)
 
 Checkpoints werden nur manuell gespeichert; der beste Zustand kann zwischen manuellen Saves verloren gehen und alte Checkpoints haeufen sich unbegrenzt an.
 
@@ -392,15 +392,15 @@ max_keep=..., path_template=...)`. Rolling-Checkpoints werden waehrend
 Retention entfernt, und der beste Checkpoint ist ueber
 `get_best_checkpoint_path()` abrufbar.
 
-- ✅ `NeuroEvolution.set_checkpoint_policy(interval=100, keep_best=True, max_keep=5, path_template="{run_name}_{kind}_{iteration}.pkl")`.
-- ✅ `interval`: automatisches Speichern alle N Iterationen parallel zum Training.
-- ✅ `keep_best=True`: Extra-Checkpoint wird immer geschrieben wenn neue Best-Fitness erreicht wird.
-- ✅ `max_keep=N`: die aeltesten Rolling-Checkpoints werden geloescht sobald das Limit ueberschritten wird; Best-Checkpoint bleibt erhalten.
-- ✅ `yane.get_best_checkpoint_path()` → Pfad zum besten gespeicherten Checkpoint.
-- ✅ Diagnostics: letzter Auto-Save, Anzahl vorhandener Checkpoints, Pfad des Best-Checkpoints.
-- ✅ Tests: Auto-Save nach Intervall; Retention entfernt alte Rollover-Dateien.
+- ✓ `NeuroEvolution.set_checkpoint_policy(interval=100, keep_best=True, max_keep=5, path_template="{run_name}_{kind}_{iteration}.pkl")`.
+- ✓ `interval`: automatisches Speichern alle N Iterationen parallel zum Training.
+- ✓ `keep_best=True`: Extra-Checkpoint wird immer geschrieben wenn neue Best-Fitness erreicht wird.
+- ✓ `max_keep=N`: die aeltesten Rolling-Checkpoints werden geloescht sobald das Limit ueberschritten wird; Best-Checkpoint bleibt erhalten.
+- ✓ `yane.get_best_checkpoint_path()` → Pfad zum besten gespeicherten Checkpoint.
+- ✓ Diagnostics: letzter Auto-Save, Anzahl vorhandener Checkpoints, Pfad des Best-Checkpoints.
+- ✓ Tests: Auto-Save nach Intervall; Retention entfernt alte Rollover-Dateien.
 
-### ✅ P1 Generationsanzeige in der GUI (statt Iterationen)
+### ✓ P1 Generationsanzeige in der GUI (statt Iterationen)
 
 Die GUI zeigt unter "Iteration:" die Anzahl einzelner Genome-Evaluierungen, nicht Generationen. Das ist irrefuehrend: mit pop_size=100 sieht der Nutzer "50000" und denkt er haette 50.000 Generationen trainiert — tatsaechlich waren es 500.
 
@@ -414,7 +414,7 @@ enthalten `generation`, und CSV enthaelt `validation_fitness`.
 - `max_iterations` Semantik bleibt unveraendert (zaehlt Evaluierungen); optionales `max_generations` als Alias (`max_generations * pop_size` → `max_iterations`).
 - Tests: `population_memory_info()["generation"]` ist korrekt; GUI-Label zeigt Generations-Zaehler; CSV enthaelt `generation`-Spalte.
 
-### 🔲 P1 Hybrid Feature-Extractor API (Input-Vorverarbeitung)
+### □ P1 Hybrid Feature-Extractor API (Input-Vorverarbeitung)
 
 NEAT eignet sich schlecht fuer hochdimensionale Eingaben (Bilder, Sensorrauschen), weil der Suchraum explodiert. Mit einer vorgeschalteten Transformation — CNN-Layer, PCA, Autoencoder — reduziert NEAT den Suchraum auf das semantisch relevante.
 
@@ -427,7 +427,7 @@ NEAT eignet sich schlecht fuer hochdimensionale Eingaben (Bilder, Sensorrauschen
 - Transform wird im `save_config()`-Blob als Pickle-Referenz gespeichert (falls serialisierbar).
 - Tests: Transform wird vor jedem `forward()` aufgerufen; Dimension-Mismatch loest `ValueError` aus; ohne Transform identisches Verhalten wie bisher.
 
-### 🔲 P1 Fitness-Landscape-Visualisierung (PCA / t-SNE)
+### □ P1 Fitness-Landscape-Visualisierung (PCA / t-SNE)
 
 Konvergenzverhalten und Populationsstruktur sind nur ueber Zahlen erkennbar; die geometrische Verteilung im Genotyp-Raum ist unsichtbar.
 
@@ -440,7 +440,7 @@ Konvergenzverhalten und Populationsstruktur sind nur ueber Zahlen erkennbar; die
 - Export: Snapshot als PNG; alle Projektionspunkte als CSV.
 - Benchmark: Visualisierung auf XOR-Lauf zeigt Species-Cluster klar getrennt.
 
-### ✅ P1 Populations-Filter und -Aggregatoren API
+### ✓ P1 Populations-Filter und -Aggregatoren API
 
 Analyse von Populationszustaenden erfordert direkten Zugriff auf interne Listen; keine saubere funktionale API.
 
@@ -463,13 +463,13 @@ Pathologien wie Vanishing/Exploding Weights oder symmetrische Gewichtsverteilung
 Histogramm, Mean/Std, 5./95.-Perzentil, Dead-/Saturated-Fraction und Warnung
 bei Kollaps/Explosion. Offen: GUI-Histogramm-Widget und `.npy`-Export.
 
-- ✅ Pro Generation: Gewichtsverteilung der gesamten Population als Histogramm (20 Bins, -5 bis +5).
-- ✅ Kennzahlen: Mean, Std, 5./95.-Perzentil, Anteil toter Gewichte (|w| < 0.01), Anteil saturierter Gewichte (|w| > 4.9).
+- ✓ Pro Generation: Gewichtsverteilung der gesamten Population als Histogramm (20 Bins, -5 bis +5).
+- ✓ Kennzahlen: Mean, Std, 5./95.-Perzentil, Anteil toter Gewichte (|w| < 0.01), Anteil saturierter Gewichte (|w| > 4.9).
 - GUI: Histogramm-Widget im Diagnostics-Tab (aktualisiert sich waehrend Training).
 - ⚡ Warnung wenn Std < 0.05 (Kollaps) oder > 3.0 (Explosion); noch ohne N-Generationen-Streak.
 - Export: Gewichtsmatrix des besten Genoms als `.npy` (NumPy-Format) fuer externe Analyse.
 
-### 🔲 P1 Erweiterbare Aktivierungsfunktionen
+### □ P1 Erweiterbare Aktivierungsfunktionen
 
 Das Aktivierungsset (sigmoid, tanh, relu, leaky_relu, swish, linear) ist im Code fest verdrahtet.
 
@@ -480,7 +480,7 @@ Das Aktivierungsset (sigmoid, tanh, relu, leaky_relu, swish, linear) ist im Code
 - Vorschlaege fuer eingebaute Erweiterungen: GELU, Mish, SiLU.
 - GUI-Checkbox-Liste zeigt verfuegbare Aktivierungen; Nutzer kann erlaubte Typen einschraenken.
 
-### 🔲 P1 Multi-Population Inselmodell
+### □ P1 Multi-Population Inselmodell
 
 Einzelne Population konvergiert in lokale Optima; unabhaengige Inseln verbessern die Exploration.
 
@@ -493,7 +493,7 @@ Einzelne Population konvergiert in lokale Optima; unabhaengige Inseln verbessern
   CarRacing, Regression 2→2 und Multiplication. Erfolgskriterien: hoehere
   Seed-Erfolgsrate oder niedrigere Median-Zeit bei gleichem Eval-Budget.
 
-### 🔲 P1 Hyperparameter-Suche
+### □ P1 Hyperparameter-Suche
 
 Nutzer muessen Parameter (Pop-Groesse, Target-Species, Lamarck-Steps usw.) manuell ausprobieren.
 
@@ -510,7 +510,7 @@ Nutzer muessen Parameter (Pop-Groesse, Target-Species, Lamarck-Steps usw.) manue
   parallel ueber 3 Seeds vergleichen und eine nach Erfolgsrate + Median-Zeit
   sortierte Tabelle erzeugen.
 
-### 🔲 P1 Ensemble-Bewertung und -Deployment
+### □ P1 Ensemble-Bewertung und -Deployment
 
 Ein einzelnes Genom ist stochastisch; ein Ensemble aus den Top-K ist robuster.
 
@@ -528,7 +528,7 @@ Ein einzelnes Genom ist stochastisch; ein Ensemble aus den Top-K ist robuster.
 - Fitness-History-CSV um Validierungs-Fitness-Spalte ergaenzen (Wert ist in `population_memory_info()` vorhanden, wird aber nicht ins CSV geschrieben).
 - Ensemble-Fitness-Spalte ergaenzen (sobald Ensemble-Bewertung implementiert ist).
 
-### 🔲 P1 Erweiterte Genome-Analyse im Inspect (Sensitivitaet / Attribution)
+### □ P1 Erweiterte Genome-Analyse im Inspect (Sensitivitaet / Attribution)
 
 Nutzer sehen Ausgaben, aber nicht WARUM das Genom so entscheidet.
 
@@ -539,7 +539,7 @@ Nutzer sehen Ausgaben, aber nicht WARUM das Genom so entscheidet.
 - „Toter Knoten"-Marker: Knoten/Verbindungen, die bei allen Test-Cases nie feuern, visuell hervorheben.
 - Vergleich: gleiche Analyse fuer Genome am Anfang und am Ende des Trainings.
 
-### 🔲 P1 Plugin-System fuer benutzerdefinierte Evaluatoren
+### □ P1 Plugin-System fuer benutzerdefinierte Evaluatoren
 
 Eigene Umgebungen einzubinden erfordert bisher direktes Editieren der `examples.py`.
 
@@ -562,7 +562,7 @@ Einzelne Runs sind nicht repraesentativ; Vergleich verschiedener Konfigurationen
 - Statistische Zusammenfassung: Median, 25./75.-Perzentil ueber N Wiederholungen derselben Konfig.
 - Export: Vergleichs-Plot als PNG, Rohdaten als CSV.
 
-### 🔲 P1 Fitness-Surrogate-Modell (Billigfilter vor teurer Evaluierung)
+### □ P1 Fitness-Surrogate-Modell (Billigfilter vor teurer Evaluierung)
 
 Teure Evaluierungen (Simulationen, Gym-Umgebungen) werden fuer jedes Genom gleich oft durchgefuehrt; ein billiges Surrogate-Modell koennte schwache Genome frueh aussortieren.
 
@@ -578,7 +578,7 @@ Teure Evaluierungen (Simulationen, Gym-Umgebungen) werden fuer jedes Genom gleic
 - Diagnostics: `surrogate_spearman_rho`, `filtered_fraction`, `saved_real_evals`.
 - Tests: Surrogate wird trainiert; Filterquote haelt `surrogate_frac` ein; Spearman-Rho wird korrekt berechnet.
 
-### 🔲 P1 Automatische Fitness-Shaping-Erkennung
+### □ P1 Automatische Fitness-Shaping-Erkennung
 
 Die Fitness-Landschaft (sparse, plateau, skewed) ist unsichtbar; der Nutzer muss manuell entscheiden welche Fitness-Transformationen noetig sind.
 
@@ -591,7 +591,7 @@ Die Fitness-Landschaft (sparse, plateau, skewed) ist unsichtbar; der Nutzer muss
 - GUI: Landscape-Report erscheint im Diagnostics-Tab; Empfehlung und angewendete Transformation werden angezeigt.
 - Tests: Analyzer erkennt schief-verteilte Fitness; empfiehlt korrekte Transformation; Auto-Mode setzt Transform.
 
-### 🔲 P1 Online-Hyperparameter-Adaptation (Bandit-Tuning waehrend Training)
+### □ P1 Online-Hyperparameter-Adaptation (Bandit-Tuning waehrend Training)
 
 Statische Hyperparameter sind fuer alle Trainingsphasen gleich; im Unterschied zur einmaligen offline Suche laeuft das Bandit-Tuning innerhalb eines einzelnen Runs und passt sich dynamisch an die aktuelle Phase an.
 
@@ -605,7 +605,7 @@ Statische Hyperparameter sind fuer alle Trainingsphasen gleich; im Unterschied z
 - Diagnostics: aktuelle Werte, Arm-Rewards, Exploration-Rate, Anzahl Arm-Wechsel.
 - Tests: Bandit waehlt mehrere Konfigurationen in Exploration-Phase; bester Arm wird danach haeufiger gewaehlt.
 
-### 🔲 P1 Weight-Inheritance beim Crossover (Lamarck-informierte Gewichts-Initialisierung)
+### □ P1 Weight-Inheritance beim Crossover (Lamarck-informierte Gewichts-Initialisierung)
 
 Beim Crossover werden Gewichte neuer Verbindungen (die nur ein Elternteil hat) zufaellig initialisiert; Lamarck-optimierte Elterngewichte werden nicht weitervererbt.
 
@@ -619,7 +619,7 @@ Beim Crossover werden Gewichte neuer Verbindungen (die nur ein Elternteil hat) z
 
 ---
 
-### 🔲 P2 Genome-Codec-Protokoll (austauschbare Serialisierung)
+### □ P2 Genome-Codec-Protokoll (austauschbare Serialisierung)
 
 Das Checkpoint-Format ist fest auf Pickle festgelegt; alternative Formate (JSON, MessagePack, komprimiertes Binaerformat) sind nicht einsteckbar.
 
@@ -632,7 +632,7 @@ Das Checkpoint-Format ist fest auf Pickle festgelegt; alternative Formate (JSON,
 - Migration: `yane.migrate_checkpoint(path, target_codec)` konvertiert bestehende Pickles.
 - Tests: Round-trip encode → decode fuer alle Codecs auf Standard-Genomen.
 
-### 🔲 P2 Konfigurationsversionierung und Kompatibilitaets-Check
+### □ P2 Konfigurationsversionierung und Kompatibilitaets-Check
 
 Checkpoints enthalten die Population, aber nicht den vollstaendigen Zustand der Konfiguration; spaeters Nachladen kann zu stillem Fehlverhalten fuehren.
 
@@ -644,7 +644,7 @@ Checkpoints enthalten die Population, aber nicht den vollstaendigen Zustand der 
 - GUI: Warn-Dialog bei `BREAKING`; Checkpoint-Metadaten zeigen Konfig-Hash und Aenderungs-Diff.
 - CLI: `python -m yane.checkpoint --diff old.pkl new.pkl` zeigt Konfigurations-Unterschiede.
 
-### 🔲 P2 Transfer Learning / Genome Fine-Tuning
+### □ P2 Transfer Learning / Genome Fine-Tuning
 
 Wissen aus einem trainierten Genom soll auf eine neue Aufgabe uebertragen werden.
 
@@ -655,7 +655,7 @@ Wissen aus einem trainierten Genom soll auf eine neue Aufgabe uebertragen werden
 - Dann schrittweise Entsperren eingeforener Teile (progressive unfreeze).
 - Benchmark: Transfer CartPole → LunarLander vs. Training from scratch.
 
-### 🔲 P2 Offene Evolution / Co-Evolution von Aufgabe und Agent (POET-aehnlich)
+### □ P2 Offene Evolution / Co-Evolution von Aufgabe und Agent (POET-aehnlich)
 
 Statische Aufgaben fuehren zu Ueberanpassung; co-evolving Environments erzeugen robustere Agenten.
 
@@ -666,7 +666,7 @@ Statische Aufgaben fuehren zu Ueberanpassung; co-evolving Environments erzeugen 
 - Archiv-Mechanismus: nur Agenten-Genome, die auf mindestens einem Environment gut abschneiden, ueberleben.
 - Benchmark: Co-Evolution vs. Domain-Randomization auf BipedalWalker mit variabler Bodenbeschaffenheit.
 
-### 🔲 P2 YANE → PyTorch-Bruecke (NAS + Feinabstimmung)
+### □ P2 YANE → PyTorch-Bruecke (NAS + Feinabstimmung)
 
 Evoluted Architekturen koennen nicht mit Gradienten-Methoden weiter optimiert werden.
 
@@ -677,7 +677,7 @@ Evoluted Architekturen koennen nicht mit Gradienten-Methoden weiter optimiert we
 - Nutzung: YANE findet gute Architektur (NAS-Rolle), PyTorch optimiert Gewichte weiter.
 - Export beruecksichtigt Memory-Knoten als `nn.GRUCell`-Aequivalent.
 
-### 🔲 P2 Genome-Phylogenie (Stammbaum der Innovationen)
+### □ P2 Genome-Phylogenie (Stammbaum der Innovationen)
 
 Welche Mutation hat den entscheidenden Durchbruch geliefert? Das ist derzeit nicht nachverfolgbar.
 
@@ -688,7 +688,7 @@ Welche Mutation hat den entscheidenden Durchbruch geliefert? Das ist derzeit nic
 - GUI: Stammbaum-Visualisierung (kollabierbar) mit markierten Schluessel-Mutationen.
 - Analyse: welche Mutations-Operatoren fuehren am haeufigsten zu Fitness-Spruengen.
 
-### 🔲 P2 Verhaltensklonierung als Warm-Start
+### □ P2 Verhaltensklonierung als Warm-Start
 
 Evolution braucht viele Iterationen bis zu brauchbaren Loesungen; Demonstrationen koennen das beschleunigen.
 
@@ -712,7 +712,7 @@ Die Populationsgroesse ist nach Start fest; in fruehen Phasen ist eine grosse Po
 - Diagnostics: aktuelle Pop-Groesse, letzter Resize-Trigger, Groessen-Historie.
 - Tests: Pop-Groesse bleibt in `[min_pop, max_pop]`; bei `linear_decay` sinkt sie monoton; kein Resize innerhalb einer Generation.
 
-### 🔲 P2 Gradient-gesteuerte Mutations-Richtung (Lamarck-Momentum)
+### □ P2 Gradient-gesteuerte Mutations-Richtung (Lamarck-Momentum)
 
 Lamarck-Gradienten werden nach jedem Refinement-Schritt verworfen; sie koennten die Mutations-Richtung fuer die naechste Generation informieren.
 
@@ -725,7 +725,7 @@ Lamarck-Gradienten werden nach jedem Refinement-Schritt verworfen; sie koennten 
 - Benchmark: Mit vs. ohne Momentum auf Symbolic-Regression und CartPole (Konvergenzgeschwindigkeit).
 - Tests: Momentum-Vektor wird nach Lamarck-Schritt aktualisiert; bei `momentum_prob=0` kein Einfluss auf Mutation.
 
-### 🔲 P2 Automatisches Post-Training Pruning (Netzwerk-Komprimierung)
+### □ P2 Automatisches Post-Training Pruning (Netzwerk-Komprimierung)
 
 Trainierte Genome sind oft ueberdimensioniert; unnoetige Verbindungen und tote Knoten koennen ohne Leistungsverlust entfernt werden.
 
@@ -740,7 +740,7 @@ Trainierte Genome sind oft ueberdimensioniert; unnoetige Verbindungen und tote K
 
 ---
 
-### 🔲 P2 Differenzierbare Topologie-Suche (DARTS-Lite)
+### □ P2 Differenzierbare Topologie-Suche (DARTS-Lite)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -754,7 +754,7 @@ NEAT sucht Topologien diskret durch Mutation; differenzierbare Relaxation erlaub
 - `NeuroEvolution.set_darts_mode(enabled=True, prune_threshold=0.1)`.
 - Benchmark: DARTS-Lite vs. Standard-NEAT auf Symbolic-Regression-Task.
 
-### 🔲 P2 Intrinsische Belohnung / Curiosity-Modul
+### □ P2 Intrinsische Belohnung / Curiosity-Modul
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -769,7 +769,7 @@ Sparse-Reward-Umgebungen (z. B. Maze) liefern keine nutzbare Fitness-Information
 - Benchmark: Curiosity vs. kein Curiosity auf einem Sparse-Reward-Maze (eigene
   minimale Implementierung), nicht auf Taxi als Primaer-Benchmark.
 
-### 🔲 P2 Synaptische Plastizitaet (STDP / Hebbsches Lernen)
+### □ P2 Synaptische Plastizitaet (STDP / Hebbsches Lernen)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -782,7 +782,7 @@ Genome lernen derzeit nur durch Evolution, nicht durch Erfahrung innerhalb einer
 - `genome.reset()` setzt Gewichte auf Basiswerte zurueck (Plastizitaet ist episoden-lokal).
 - Benchmark: STDP vs. Lamarck auf Aufgaben mit veraenderlicher Umgebung (z. B. wechselnde XOR-Eingaenge).
 
-### 🔲 P2 Neuromodulation
+### □ P2 Neuromodulation
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -795,7 +795,7 @@ Modulatorische Signale erlauben kontextabhaengige Gewichtung ganzer Verbindungsg
 - Anwendung: schnelle Anpassung an wechselnde Aufgaben (Multi-Task-Szenarien).
 - Benchmark: Modulation vs. kein Modulation auf einem Aufgaben-Wechsel-Szenario.
 
-### 🔲 P2 Evolutionaere Input-Gruppierung (Evolvable Input Aggregation Layer)
+### □ P2 Evolutionaere Input-Gruppierung (Evolvable Input Aggregation Layer)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -836,7 +836,7 @@ Verwandte Konzepte: Capsule Networks (Hinton 2017) gruppieren semantisch aequiva
 
 - Tests: `transform()` produziert korrekte Ausgabe-Dimension; `split_group()` fuegt korrekten Input-Knoten hinzu; Crossover zweier Genome mit unterschiedlichen Groupern laeuft ohne Fehler; Checkpoint-Round-Trip erhaelt Gruppen.
 
-### 🔲 P2 Evolutionaere Output-Gruppierung (Evolvable Output Synergy Layer)
+### □ P2 Evolutionaere Output-Gruppierung (Evolvable Output Synergy Layer)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -891,7 +891,7 @@ Beide Layer koennen gleichzeitig aktiv sein: `InputGrouper.transform(raw_inputs)
 
 - Tests: `expand()` gibt stets N Werte zurueck; `genome.forward()` gibt unveraendert N Werte zurueck; `split_group()` erhoeh interne Output-Knoten-Anzahl um 1; Crossover zweier Genome mit unterschiedlichen OutputGroupern laeuft fehlerfrei; `genome_to_python()` erzeugt korrekten Expand-Block.
 
-### 🔲 P2 Shared Weights (Weight-Sharing zwischen Verbindungen)
+### □ P2 Shared Weights (Weight-Sharing zwischen Verbindungen)
 
 Klassische NEAT-Verbindungen haben je ein unabhaengiges Gewicht; fuer CNN-artige Strukturen muessen raeumlich aequivalente Verbindungen dasselbe Gewicht teilen. Ohne Weight-Sharing muss NEAT jedes Pixel-zu-Pixel-Gewicht einzeln evolvieren.
 
@@ -904,7 +904,7 @@ Klassische NEAT-Verbindungen haben je ein unabhaengiges Gewicht; fuer CNN-artige
 - Checkpoint-kompatibel: `weight_groups`-Dict wird gespeichert.
 - Benchmark: Shared-Weights vs. unabhaengige Gewichte auf MNIST (784 Inputs → 10 Outputs, flache Topologie).
 
-### 🔲 P2 Convolutional NEAT (CoDeepNEAT-inspiriert)
+### □ P2 Convolutional NEAT (CoDeepNEAT-inspiriert)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -919,7 +919,7 @@ NEAT sucht verbindungsweise; fuer Bildverarbeitung ist die sinnvolle Sucheinheit
 - `genome_to_python()` unterstuetzt CONV2D-Knoten (erzeugt `for`-Schleifen statt einzelner Verbindungen).
 - Benchmark: Convolutional NEAT vs. HyperNEAT vs. flaches NEAT auf MNIST (Accuracy nach fester Evaluierungs-Anzahl).
 
-### 🔲 P2 ES-HyperNEAT (Evolvable Substrate HyperNEAT)
+### □ P2 ES-HyperNEAT (Evolvable Substrate HyperNEAT)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
