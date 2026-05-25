@@ -113,6 +113,16 @@ class NeuroEvolution:
         self._runner = EvaluationRunner()
         self._eval_middlewares: list[EvalMiddleware] = []
         self._eval_middleware_diagnostics: dict = {}
+        # Automatic checkpoint rolling
+        self._checkpoint_policy_enabled: bool = False
+        self._checkpoint_interval: int = 100
+        self._checkpoint_keep_best: bool = True
+        self._checkpoint_max_keep: int = 5
+        self._checkpoint_path_template: str = "{run_name}_{iteration}.pkl"
+        self._checkpoint_paths: list[str] = []
+        self._best_checkpoint_path: str | None = None
+        self._last_checkpoint_iteration: int | None = None
+        self._last_checkpoint_best_fitness: float = -float("inf")
         # Elitism (applied to population on configure())
         self._elite_count: int = 1
         self._species_elite_count: int = 1
@@ -518,6 +528,34 @@ class NeuroEvolution:
             max_used_percent=max_used_percent,
             max_process_gb=max_process_gb,
         )
+
+    def set_checkpoint_policy(
+        self,
+        interval: int = 100,
+        keep_best: bool = True,
+        max_keep: int = 5,
+        path_template: str = "{run_name}_{iteration}.pkl",
+        enabled: bool = True,
+    ) -> None:
+        """Automatically save rolling checkpoints during training.
+
+        ``path_template`` may use ``{run_name}``, ``{iteration}``,
+        ``{generation}``, ``{best_fitness}`` and ``{kind}``. Relative paths are
+        resolved inside the current run log directory when available.
+        """
+        self._checkpoint_policy_enabled = bool(enabled)
+        self._checkpoint_interval = max(1, int(interval))
+        self._checkpoint_keep_best = bool(keep_best)
+        self._checkpoint_max_keep = max(1, int(max_keep))
+        self._checkpoint_path_template = path_template
+        self._checkpoint_paths = []
+        self._best_checkpoint_path = None
+        self._last_checkpoint_iteration = None
+        self._last_checkpoint_best_fitness = -float("inf")
+
+    def get_best_checkpoint_path(self) -> str | None:
+        """Return the path of the best auto-saved checkpoint, if any."""
+        return self._best_checkpoint_path
 
     def set_efficiency_penalty(self, max_ms: float, penalty_per_ms: float) -> None:
         self._efficiency_penalty = EfficiencyPenalty(max_ms, penalty_per_ms)
@@ -1088,6 +1126,12 @@ class NeuroEvolution:
             "anytime_promotion_frac": self._runner.anytime_promotion_frac,
             "anytime_aggregation": self._runner.anytime_aggregation,
             "eval_middleware_count": len(self._eval_middlewares),
+            "checkpoint_policy_enabled": self._checkpoint_policy_enabled,
+            "checkpoint_interval": self._checkpoint_interval,
+            "checkpoint_keep_best": self._checkpoint_keep_best,
+            "checkpoint_max_keep": self._checkpoint_max_keep,
+            "checkpoint_path_template": self._checkpoint_path_template,
+            "best_checkpoint_path": self._best_checkpoint_path,
             # Lamarck
             "lamarck_mode": self._lamarck.mode,
             "lamarck_steps": self._lamarck.steps,
@@ -1293,6 +1337,7 @@ class NeuroEvolution:
             # --- Periodic CSV logging + heartbeat ---------------------------
             _heartbeat_now = (iterations % 100 == 0)
             _csv_now = (iterations % _log_interval == 0)
+            self._maybe_auto_checkpoint(iterations, name)
 
             if _heartbeat_now:
                 # Full diagnostics once; shared by heartbeat log and CSV.
@@ -1622,6 +1667,13 @@ class NeuroEvolution:
         if self._eval_middlewares:
             info["eval_middleware_count"] = len(self._eval_middlewares)
             info["eval_middleware"] = dict(self._eval_middleware_diagnostics)
+        if self._checkpoint_policy_enabled:
+            info.update({
+                "checkpoint_policy_enabled": True,
+                "last_auto_checkpoint_iteration": self._last_checkpoint_iteration,
+                "rolling_checkpoint_count": len(self._checkpoint_paths),
+                "best_checkpoint_path": self._best_checkpoint_path,
+            })
         return info
 
     def set_target_species(
@@ -2651,6 +2703,58 @@ class NeuroEvolution:
         except Exception as e:
             _li("Failed to write crash state snapshot: %s", e)
 
+    def _checkpoint_path(
+        self,
+        iteration: int,
+        run_name: str,
+        kind: str,
+        best_fitness: float,
+    ) -> Path:
+        generation = iteration // max(1, self._population_size)
+        path = Path(self._checkpoint_path_template.format(
+            run_name=run_name,
+            iteration=iteration,
+            generation=generation,
+            best_fitness=f"{best_fitness:.6f}",
+            kind=kind,
+        ))
+        if not path.is_absolute() and self._log_run_dir is not None:
+            path = self._log_run_dir / path
+        return path
+
+    def _maybe_auto_checkpoint(self, iteration: int, run_name: str) -> None:
+        if not self._checkpoint_policy_enabled or self._population is None:
+            return
+        if not self._population._evaluated:
+            return
+        best = self._population.get_best()
+        best_fitness = best.raw_fitness
+        if iteration % self._checkpoint_interval == 0:
+            path = self._checkpoint_path(iteration, run_name, "rolling", best_fitness)
+            self.save_checkpoint(path)
+            path_str = str(path)
+            if path_str not in self._checkpoint_paths:
+                self._checkpoint_paths.append(path_str)
+            self._last_checkpoint_iteration = iteration
+            self._trim_rolling_checkpoints()
+        if self._checkpoint_keep_best and best_fitness > self._last_checkpoint_best_fitness:
+            path = self._checkpoint_path(iteration, run_name, "best", best_fitness)
+            self.save_checkpoint(path)
+            self._best_checkpoint_path = str(path)
+            self._last_checkpoint_best_fitness = best_fitness
+
+    def _trim_rolling_checkpoints(self) -> None:
+        while len(self._checkpoint_paths) > self._checkpoint_max_keep:
+            old = self._checkpoint_paths.pop(0)
+            if old == self._best_checkpoint_path:
+                continue
+            try:
+                path = Path(old)
+                path.unlink(missing_ok=True)
+                Path(str(path) + ".json").unlink(missing_ok=True)
+            except Exception:
+                pass
+
     def _write_run_summary(
         self,
         name: str,
@@ -2827,6 +2931,13 @@ class NeuroEvolution:
             self.set_max_iterations(cfg["max_iterations"])
         if cfg.get("max_evaluations") is not None:
             self.set_max_evaluations(cfg["max_evaluations"])
+        if cfg.get("checkpoint_policy_enabled"):
+            self.set_checkpoint_policy(
+                interval=cfg.get("checkpoint_interval", 100),
+                keep_best=cfg.get("checkpoint_keep_best", True),
+                max_keep=cfg.get("checkpoint_max_keep", 5),
+                path_template=cfg.get("checkpoint_path_template", "{run_name}_{iteration}.pkl"),
+            )
         if cfg.get("adaptive_recovery_enabled"):
             self.set_adaptive_recovery(
                 enabled=True,

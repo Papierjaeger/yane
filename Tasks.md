@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Neue P0/P1-Bausteine implementiert: Self-Tuning-Speziation mit Zielbereich, Anytime-Evaluation, Adaptive Recovery System, strukturierte Evaluator-Komponenten, Evaluation-Middleware-Basis, Populations-Analyse-API und Generationsanzeige/Logging. Offener P0-Schwerpunkt: vollstaendige GUI-/Benchmark-Ablation fuer EvaluatorSpec. Teststand: `827 passed`.
+**Aktueller Stand:** Neue P0/P1-Bausteine implementiert: Self-Tuning-Speziation mit Zielbereich, Anytime-Evaluation, Adaptive Recovery System, strukturierte Evaluator-Komponenten, Evaluation-Middleware-Basis, automatisches Checkpoint-Rolling, Gewichtsgesundheit-Diagnostics, Populations-Analyse-API und Generationsanzeige/Logging. Offener P0-Schwerpunkt: vollstaendige GUI-/Benchmark-Ablation fuer EvaluatorSpec. Teststand: `832 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -343,27 +343,26 @@ Evaluatoren sind einfache Callables ohne Kompositionsmechanismus; Caching, Normi
 **Aktueller Stand:** Basis implementiert in `evolution/eval_middleware.py`.
 `NeuroEvolution.add_eval_middleware()` und `clear_eval_middleware()` sind
 verfuegbar; Middleware laeuft in LIFO-Reihenfolge. Eingebaut sind
-`CachingMiddleware`, `TimingMiddleware` und `RetryMiddleware` inklusive
-Diagnostics. Offen: `ComponentMiddleware`, `CaseBatchMiddleware` und GUI-
-Anzeige fuer Komponentenwerte.
+`CachingMiddleware`, `TimingMiddleware`, `RetryMiddleware`,
+`ComponentMiddleware` und `CaseBatchMiddleware` inklusive Diagnostics. Offen:
+`NoiseMiddleware` und GUI-Anzeige fuer Komponentenwerte.
 
 - ✅ `EvalMiddleware`-Protokoll: `__call__(genome, eval_fn, ctx) -> float`.
 - ✅ Eingebaute Middleware: `CachingMiddleware(maxsize=512)` (Genome-Hash → Fitness), `TimingMiddleware` (Eval-Zeit pro Genom), `RetryMiddleware(n=3, aggregation="mean")`.
 - `NoiseMiddleware(sigma=0.05)` (Input-Perturbation).
-- `ComponentMiddleware`: fuehrt mehrere benannte Fitness-Komponenten aus und
+- ✅ `ComponentMiddleware`: fuehrt mehrere benannte Fitness-Komponenten aus und
   schreibt Rohwerte + gewichteten Gesamtwert in Diagnostics.
-- `CaseBatchMiddleware`: evaluiert feste Case-Listen (Train/Validation) mit
+- ✅ `CaseBatchMiddleware`: evaluiert feste Case-Listen (Train/Validation) mit
   konfigurierbarer Aggregation; Grundlage fuer MultiStart- und Curriculum-
   Beispiele.
 - ✅ `yane.add_eval_middleware(mw)` haengt in die Kette ein.
 - ✅ Middleware-Reihenfolge: LIFO (zuletzt hinzugefuegt = aeussere Schicht).
-- ⚡ Diagnostics: Cache-Hit-Rate, Durchschnittliche Eval-Zeit, Retry-Rate,
+- ✅ Diagnostics: Cache-Hit-Rate, Durchschnittliche Eval-Zeit, Retry-Rate,
   Komponenten-Rohwerte, Komponenten-Gewichte, Case-Erfolgsraten.
-- ⚡ Tests: Middleware-Reihenfolge korrekt; Cache invalidiert bei Gewichts-/
-  Topologie-Aenderung; Retry wiederholt instabile Evaluatoren. Offen:
-  Komponentenwerte bleiben getrennt
+- ✅ Tests: Middleware-Reihenfolge korrekt; Komponentenwerte bleiben getrennt
   sichtbar; Cache nutzt Genome-Fingerprint und invalidiert bei Gewichts-/Topologie-
-  Aenderung; Validation-Cases beeinflussen die Selektion nicht.
+  Aenderung; Retry wiederholt instabile Evaluatoren; Validation-Cases
+  beeinflussen die Selektion nicht.
 
 ### 🔲 P1 Generationsreport / Run-Postmortem
 
@@ -379,19 +378,24 @@ Nach einem Trainingslauf gibt es keine strukturierte Zusammenfassung; Erkenntnis
 - GUI: „Report exportieren"-Button im Diagnostics-Tab; oeffnet gespeicherte Datei im Browser.
 - `yane.set_report_autosave(path_template="{date}_{example}_report.html")`.
 
-### 🔲 P1 Automatisches Checkpoint-Rolling (Retention-Policy und Best-Tracking)
+### ✅ P1 Automatisches Checkpoint-Rolling (Retention-Policy und Best-Tracking)
 
 Checkpoints werden nur manuell gespeichert; der beste Zustand kann zwischen manuellen Saves verloren gehen und alte Checkpoints haeufen sich unbegrenzt an.
 
-**Aktueller Stand:** `save_checkpoint(path)` muss explizit aufgerufen werden, z.B. aus einem `generation_end`-Handler. Kein automatisches Intervall-Speichern, keine Retention-Policy fuer alte Checkpoints, kein dedizierten Best-Checkpoint-Tracking.
+**Aktueller Stand:** Implementiert via
+`NeuroEvolution.set_checkpoint_policy(interval=..., keep_best=True,
+max_keep=..., path_template=...)`. Rolling-Checkpoints werden waehrend
+`train()` geschrieben, alte Rolling-Dateien inklusive JSON-Sidecar werden nach
+Retention entfernt, und der beste Checkpoint ist ueber
+`get_best_checkpoint_path()` abrufbar.
 
-- `NeuroEvolution.set_checkpoint_policy(interval=100, keep_best=True, max_keep=5, path_template="{run_id}_{iter}.pkl")`.
-- `interval`: automatisches Speichern alle N Iterationen parallel zum Training.
-- `keep_best=True`: Extra-Checkpoint wird immer geschrieben wenn neue Best-Fitness erreicht wird.
-- `max_keep=N`: die aeltesten Rolling-Checkpoints werden geloescht sobald das Limit ueberschritten wird; Best-Checkpoint bleibt immer erhalten.
-- `yane.get_best_checkpoint_path()` → Pfad zum besten gespeicherten Checkpoint.
-- Diagnostics: letzter Auto-Save, Anzahl vorhandener Checkpoints, Pfad des Best-Checkpoints.
-- Tests: Auto-Save nach Intervall; Best-Checkpoint bleibt beim Loeschen aelterer Rollover-Dateien erhalten.
+- ✅ `NeuroEvolution.set_checkpoint_policy(interval=100, keep_best=True, max_keep=5, path_template="{run_name}_{kind}_{iteration}.pkl")`.
+- ✅ `interval`: automatisches Speichern alle N Iterationen parallel zum Training.
+- ✅ `keep_best=True`: Extra-Checkpoint wird immer geschrieben wenn neue Best-Fitness erreicht wird.
+- ✅ `max_keep=N`: die aeltesten Rolling-Checkpoints werden geloescht sobald das Limit ueberschritten wird; Best-Checkpoint bleibt erhalten.
+- ✅ `yane.get_best_checkpoint_path()` → Pfad zum besten gespeicherten Checkpoint.
+- ✅ Diagnostics: letzter Auto-Save, Anzahl vorhandener Checkpoints, Pfad des Best-Checkpoints.
+- ✅ Tests: Auto-Save nach Intervall; Retention entfernt alte Rollover-Dateien.
 
 ### ✅ P1 Generationsanzeige in der GUI (statt Iterationen)
 
@@ -448,16 +452,18 @@ Analyse von Populationszustaenden erfordert direkten Zugriff auf interne Listen;
 - Alle Methoden mit Typ-Annotationen; kein Overhead wenn nicht verwendet.
 - Tests: Filter, Map, Group-by auf kleiner Test-Population; Top-k-Reihenfolge korrekt.
 
-### 🔲 P1 Connection-Weight-Histogramm und Gewichtsgesundheit
+### ⚡ P1 Connection-Weight-Histogramm und Gewichtsgesundheit
 
 Pathologien wie Vanishing/Exploding Weights oder symmetrische Gewichtsverteilungen sind in den Diagnostics unsichtbar.
 
-**Aktueller Stand:** Diagnostics liefern Fitness-Kennzahlen, Species-Anzahl, Stagnation und Mutation-Success-Raten. Gewichtsverteilungen sind nicht erfasst; `export_genome_weights()` gibt die Matrix des besten Genoms auf Anfrage zurueck, aber kein automatisches Per-Generation-Tracking.
+**Aktueller Stand:** Core-Diagnostics implementiert unter `weight_health`:
+Histogramm, Mean/Std, 5./95.-Perzentil, Dead-/Saturated-Fraction und Warnung
+bei Kollaps/Explosion. Offen: GUI-Histogramm-Widget und `.npy`-Export.
 
-- Pro Generation: Gewichtsverteilung der gesamten Population als Histogramm (20 Bins, -5 bis +5).
-- Kennzahlen: Mean, Std, 5./95.-Perzentil, Anteil toter Gewichte (|w| < 0.01), Anteil saturierter Gewichte (|w| > 4.9).
+- ✅ Pro Generation: Gewichtsverteilung der gesamten Population als Histogramm (20 Bins, -5 bis +5).
+- ✅ Kennzahlen: Mean, Std, 5./95.-Perzentil, Anteil toter Gewichte (|w| < 0.01), Anteil saturierter Gewichte (|w| > 4.9).
 - GUI: Histogramm-Widget im Diagnostics-Tab (aktualisiert sich waehrend Training).
-- Warnung wenn Std < 0.05 (Kollaps) oder > 3.0 (Explosion) fuer N aufeinanderfolgende Generationen.
+- ⚡ Warnung wenn Std < 0.05 (Kollaps) oder > 3.0 (Explosion); noch ohne N-Generationen-Streak.
 - Export: Gewichtsmatrix des besten Genoms als `.npy` (NumPy-Format) fuer externe Analyse.
 
 ### 🔲 P1 Erweiterbare Aktivierungsfunktionen

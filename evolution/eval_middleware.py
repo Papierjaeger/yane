@@ -139,6 +139,90 @@ class RetryMiddleware:
         return sum(values) / len(values)
 
 
+class ComponentMiddleware:
+    """Evaluate named auxiliary fitness components and combine them."""
+
+    def __init__(
+        self,
+        components: dict[str, Callable[[Genome], float]],
+        weights: dict[str, float] | None = None,
+        include_base: bool = True,
+        base_name: str = "base",
+    ) -> None:
+        self.components = dict(components)
+        self.weights = dict(weights or {})
+        self.include_base = bool(include_base)
+        self.base_name = base_name
+
+    def __call__(self, genome: Genome, eval_fn, ctx: EvalContext) -> float:
+        raw: dict[str, float] = {}
+        total = 0.0
+        if self.include_base:
+            base = float(eval_fn(genome))
+            raw[self.base_name] = base
+            total += base * self.weights.get(self.base_name, 1.0)
+        for name, fn in self.components.items():
+            value = float(fn(genome))
+            raw[name] = value
+            total += value * self.weights.get(name, 1.0)
+        ctx.diagnostics["component_values"] = raw
+        ctx.diagnostics["component_weights"] = {
+            name: self.weights.get(name, 1.0)
+            for name in raw
+        }
+        ctx.diagnostics["component_total"] = total
+        return total
+
+
+class CaseBatchMiddleware:
+    """Evaluate fixed train/validation case lists with separate diagnostics."""
+
+    def __init__(
+        self,
+        train_cases: list[Any] | tuple[Any, ...],
+        case_fn: Callable[[Genome, Any], float],
+        aggregation: str = "mean",
+        validation_cases: list[Any] | tuple[Any, ...] | None = None,
+        validation_name: str = "validation",
+    ) -> None:
+        if aggregation not in {"mean", "min", "max"}:
+            raise ValueError("aggregation must be 'mean', 'min', or 'max'")
+        self.train_cases = tuple(train_cases)
+        self.validation_cases = tuple(validation_cases or ())
+        self.case_fn = case_fn
+        self.aggregation = aggregation
+        self.validation_name = validation_name
+
+    def __call__(self, genome: Genome, eval_fn, ctx: EvalContext) -> float:
+        # The wrapped eval_fn is intentionally ignored: this middleware turns a
+        # single genome evaluation into a deterministic case batch.
+        train_scores = [float(self.case_fn(genome, case)) for case in self.train_cases]
+        fitness = self._aggregate(train_scores)
+        ctx.diagnostics["case_scores"] = train_scores
+        ctx.diagnostics["case_count"] = len(train_scores)
+        ctx.diagnostics["case_success_rate"] = (
+            sum(1 for score in train_scores if score > 0.0) / len(train_scores)
+            if train_scores else 0.0
+        )
+        if self.validation_cases:
+            validation_scores = [
+                float(self.case_fn(genome, case))
+                for case in self.validation_cases
+            ]
+            ctx.diagnostics[f"{self.validation_name}_scores"] = validation_scores
+            ctx.diagnostics[f"{self.validation_name}_fitness"] = self._aggregate(validation_scores)
+        return fitness
+
+    def _aggregate(self, values: list[float]) -> float:
+        if not values:
+            return 0.0
+        if self.aggregation == "min":
+            return min(values)
+        if self.aggregation == "max":
+            return max(values)
+        return sum(values) / len(values)
+
+
 def apply_middleware(
     genome: Genome,
     eval_fn: Callable[[Genome], float],

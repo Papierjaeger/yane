@@ -181,5 +181,59 @@ class TestCheckpointAdaptiveState(unittest.TestCase):
                           yane2.get_operator_scheduler())
 
 
+class TestCheckpointPolicy(unittest.TestCase):
+
+    def test_auto_checkpoint_interval_and_best_tracking(self):
+        from yane.util import logger as logmod
+        orig_root = logmod.log_root
+        with tempfile.TemporaryDirectory() as tmp:
+            logmod.log_root = Path(tmp) / "logs"
+            try:
+                yane = NeuroEvolution()
+                yane.set_population_size(5)
+                yane.configure(1, 1)
+                yane.set_checkpoint_policy(
+                    interval=2,
+                    keep_best=True,
+                    max_keep=2,
+                    path_template="ckpt_{kind}_{iteration}.pkl",
+                )
+                yane.set_max_iterations(5)
+                yane.train(lambda _g: 1.0)
+
+                info = yane.population_memory_info()
+                self.assertEqual(info["last_auto_checkpoint_iteration"], 4)
+                self.assertLessEqual(info["rolling_checkpoint_count"], 2)
+                best_path = yane.get_best_checkpoint_path()
+                self.assertIsNotNone(best_path)
+                self.assertTrue(Path(best_path).exists())
+            finally:
+                logmod.log_root = orig_root
+
+    def test_auto_checkpoint_retention_removes_old_rollovers(self):
+        from yane.util import logger as logmod
+        orig_root = logmod.log_root
+        with tempfile.TemporaryDirectory() as tmp:
+            logmod.log_root = Path(tmp) / "logs"
+            try:
+                yane = NeuroEvolution()
+                yane.set_population_size(5)
+                yane.configure(1, 1)
+                yane.set_checkpoint_policy(
+                    interval=1,
+                    keep_best=False,
+                    max_keep=2,
+                    path_template="roll_{iteration}.pkl",
+                )
+                yane.set_max_iterations(5)
+                yane.train(lambda _g: 0.0)
+                paths = [Path(p) for p in yane._checkpoint_paths]
+                self.assertEqual(len(paths), 2)
+                self.assertTrue(all(p.exists() for p in paths))
+                self.assertFalse((yane._log_run_dir / "roll_1.pkl").exists())
+            finally:
+                logmod.log_root = orig_root
+
+
 if __name__ == "__main__":
     unittest.main()

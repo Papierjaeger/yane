@@ -53,6 +53,32 @@ class TestLogFormat(unittest.TestCase):
         with self.assertRaises(ValueError):
             ne.set_log_format("html")
 
+
+class TestWeightHealthDiagnostics(unittest.TestCase):
+
+    def test_weight_health_histogram_and_warning(self):
+        from yane.core.connection import Connection
+
+        ne = NeuroEvolution()
+        ne.configure(2, 1)
+        g = ne.population.select_for_evaluation()
+        for inp, weight in zip(g.input_nodes, [0.0, 5.5]):
+            conn = Connection(g.output_nodes[0], innovation=ne._tracker.get_connection(
+                inp.innovation,
+                g.output_nodes[0].innovation,
+            ))
+            conn.weight = weight
+            inp.connections.append(conn)
+        g._invalidate_topology()
+        ne.population.submit(g, 1.0)
+
+        health = ne.population_memory_info()["weight_health"]
+        self.assertEqual(health["count"], 2)
+        self.assertEqual(len(health["histogram"]["counts"]), 20)
+        self.assertEqual(health["histogram"]["overflow"], 1)
+        self.assertAlmostEqual(health["dead_fraction"], 0.5)
+        self.assertIsNone(health["warning"])
+
     def test_jsonlines_file_created(self):
         from yane.util import logger as logmod
         orig_root = logmod.log_root

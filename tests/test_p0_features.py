@@ -243,6 +243,47 @@ def test_retry_middleware_retries_flaky_evaluator():
     assert yane.population_memory_info()["eval_middleware"]["retry_count"] == 1
 
 
+def test_component_middleware_keeps_component_values_separate():
+    from yane.evolution.eval_middleware import ComponentMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    yane.add_eval_middleware(ComponentMiddleware(
+        {"policy": lambda _g: 2.0, "subgoal": lambda _g: 3.0},
+        weights={"base": 1.0, "policy": 10.0, "subgoal": 0.5},
+    ))
+    g = yane.population.select_for_evaluation()
+    result = yane._run_evaluations(g, lambda _g: 1.0)
+    assert result.fitness == 22.5
+    diag = yane.population_memory_info()["eval_middleware"]
+    assert diag["component_values"] == {"base": 1.0, "policy": 2.0, "subgoal": 3.0}
+    assert diag["component_weights"]["policy"] == 10.0
+
+
+def test_case_batch_middleware_validation_does_not_affect_selection_fitness():
+    from yane.evolution.eval_middleware import CaseBatchMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+
+    def case_fn(_genome, case):
+        return float(case)
+
+    yane.add_eval_middleware(CaseBatchMiddleware(
+        train_cases=[1.0, 3.0],
+        validation_cases=[100.0],
+        case_fn=case_fn,
+    ))
+    g = yane.population.select_for_evaluation()
+    result = yane._run_evaluations(g, lambda _g: -999.0)
+    assert result.fitness == 2.0
+    diag = yane.population_memory_info()["eval_middleware"]
+    assert diag["validation_fitness"] == 100.0
+    assert diag["case_success_rate"] == 1.0
+
+
 # ---------------------------------------------------------------------------
 # Event System
 # ---------------------------------------------------------------------------

@@ -257,6 +257,50 @@ def build_population_info(
         if all_conns:
             info["pop_avg_weight_rate"] = sum(
                 c.mutation.shift_rate for c in all_conns) / len(all_conns)
+            weights = [float(c.weight) for c in all_conns]
+            sorted_w = sorted(weights)
+            n_w = len(sorted_w)
+            mean_w = statistics.mean(sorted_w)
+            std_w = statistics.pstdev(sorted_w) if n_w > 1 else 0.0
+            p05 = sorted_w[max(0, min(n_w - 1, int(n_w * 0.05)))]
+            p95 = sorted_w[max(0, min(n_w - 1, int(n_w * 0.95)))]
+            lo, hi, bins = -5.0, 5.0, 20
+            width = (hi - lo) / bins
+            hist = [0] * bins
+            under = over = 0
+            for w in weights:
+                if w < lo:
+                    under += 1
+                    idx = 0
+                elif w > hi:
+                    over += 1
+                    idx = bins - 1
+                else:
+                    idx = min(bins - 1, max(0, int((w - lo) / width)))
+                hist[idx] += 1
+            info["weight_health"] = {
+                "count": n_w,
+                "mean": mean_w,
+                "std": std_w,
+                "p05": p05,
+                "p95": p95,
+                "dead_fraction": sum(1 for w in weights if abs(w) < 0.01) / n_w,
+                "saturated_fraction": sum(1 for w in weights if abs(w) > 4.9) / n_w,
+                "histogram": {
+                    "min": lo,
+                    "max": hi,
+                    "bins": bins,
+                    "counts": hist,
+                    "underflow": under,
+                    "overflow": over,
+                    "bin_edges": [lo + i * width for i in range(bins + 1)],
+                },
+                "warning": (
+                    "weight_collapse" if std_w < 0.05
+                    else "weight_explosion" if std_w > 3.0
+                    else None
+                ),
+            }
 
     # Eval-time statistics
     eval_times = [

@@ -237,14 +237,30 @@ Bei Diversity-Kollaps oder festgefahrener Speziation kann YANE automatisch Gegen
 ### Evaluation-Middleware
 
 ```python
-from yane.evolution.eval_middleware import CachingMiddleware, RetryMiddleware, TimingMiddleware
+from yane.evolution.eval_middleware import (
+    CachingMiddleware, RetryMiddleware, TimingMiddleware,
+    ComponentMiddleware, CaseBatchMiddleware,
+)
 
 yane.add_eval_middleware(CachingMiddleware(maxsize=512))
 yane.add_eval_middleware(RetryMiddleware(n=3))
 yane.add_eval_middleware(TimingMiddleware())
 ```
 
-Middleware wird in LIFO-Reihenfolge ausgeführt: die zuletzt hinzugefügte Schicht läuft außen. Eingebaute Middleware deckt Genome-Fitness-Caching, Retry für instabile Evaluatoren und Timing-Diagnostics ab. `clear_eval_middleware()` entfernt den Stack wieder.
+Middleware wird in LIFO-Reihenfolge ausgeführt: die zuletzt hinzugefügte Schicht läuft außen. Eingebaute Middleware deckt Genome-Fitness-Caching, Retry für instabile Evaluatoren, Timing-Diagnostics, benannte Fitness-Komponenten und feste Train-/Validation-Case-Batches ab. `clear_eval_middleware()` entfernt den Stack wieder.
+
+### Automatische Checkpoints
+
+```python
+yane.set_checkpoint_policy(
+    interval=100,
+    keep_best=True,
+    max_keep=5,
+    path_template="{run_name}_{kind}_{iteration}.pkl",
+)
+```
+
+YANE kann während `train()` automatisch Rolling-Checkpoints schreiben und zusätzlich den besten Zustand festhalten. Alte Rolling-Checkpoints werden nach `max_keep` entfernt; der Best-Checkpoint bleibt separat abrufbar über `get_best_checkpoint_path()`.
 
 - `aggregation`: `"mean"` (Standard), `"median"` (robust gegen Ausreißer) oder `"min"` (konservativster Worst-Case)
 - `sigma_penalty`: zieht `sigma_penalty × Standardabweichung` vom Ergebnis ab; bestraft hochvariante Genome unabhängig von der Aggregationsmethode
