@@ -777,3 +777,151 @@ class TestTrainingEvents:
         # After training, fitness values should be rank-transformed (all in (0,1])
         for g in ne._population._evaluated:
             assert 0.0 < g.fitness <= 1.0 + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# EvaluatorSpec ablation: enabled_components, MultiStartRollout, combine
+# ---------------------------------------------------------------------------
+
+def test_evaluator_spec_combine_all_components():
+    from yane.evolution.evaluator_components import EvaluatorSpec
+    spec = EvaluatorSpec(
+        component_weights={"rollout": 1.0, "policy": 2.0, "subgoal": 0.5},
+    )
+    result = spec.combine({"rollout": 3.0, "policy": 1.0, "subgoal": 4.0})
+    assert abs(result - (3.0 + 2.0 + 2.0)) < 1e-9
+
+
+def test_evaluator_spec_combine_disabled_component():
+    from yane.evolution.evaluator_components import EvaluatorSpec
+    spec = EvaluatorSpec(
+        component_weights={"rollout": 1.0, "policy": 2.0, "subgoal": 0.5},
+        enabled_components=frozenset({"rollout", "subgoal"}),
+    )
+    result = spec.combine({"rollout": 3.0, "policy": 1.0, "subgoal": 4.0})
+    # policy disabled — only rollout*1 + subgoal*0.5
+    assert abs(result - (3.0 + 2.0)) < 1e-9
+
+
+def test_evaluator_spec_combine_single_component():
+    from yane.evolution.evaluator_components import EvaluatorSpec
+    spec = EvaluatorSpec(
+        component_weights={"rollout": 1.0, "policy": 2.0},
+        enabled_components=frozenset({"rollout"}),
+    )
+    result = spec.combine({"rollout": 5.0, "policy": 99.0})
+    assert abs(result - 5.0) < 1e-9
+
+
+def test_evaluator_spec_with_enabled():
+    from yane.evolution.evaluator_components import EvaluatorSpec
+    base = EvaluatorSpec(component_weights={"a": 1.0, "b": 3.0})
+    derived = base.with_enabled(frozenset({"a"}))
+    assert derived.enabled_components == frozenset({"a"})
+    assert derived.component_weights == base.component_weights
+    # base unmodified
+    assert base.enabled_components is None
+
+
+def test_evaluator_spec_combine_no_weights_sums_active():
+    from yane.evolution.evaluator_components import EvaluatorSpec
+    # No component_weights → sum active values
+    spec = EvaluatorSpec(enabled_components=frozenset({"x", "z"}))
+    result = spec.combine({"x": 2.0, "y": 10.0, "z": 3.0})
+    assert abs(result - 5.0) < 1e-9
+
+
+def test_multi_start_rollout_mean_aggregation():
+    from yane.evolution.evaluator_components import MultiStartRollout
+    from yane.core.genome import Genome
+
+    g = Genome()
+    cases = [1.0, 2.0, 3.0]
+    rollout = MultiStartRollout(
+        cases=tuple(cases),
+        rollout_fn=lambda genome, case: case,
+        aggregation="mean",
+    )
+    assert abs(rollout.evaluate(g) - 2.0) < 1e-9
+
+
+def test_multi_start_rollout_min_aggregation():
+    from yane.evolution.evaluator_components import MultiStartRollout
+    from yane.core.genome import Genome
+
+    g = Genome()
+    rollout = MultiStartRollout(
+        cases=(5.0, 2.0, 8.0),
+        rollout_fn=lambda genome, case: case,
+        aggregation="min",
+    )
+    assert abs(rollout.evaluate(g) - 2.0) < 1e-9
+
+
+def test_multi_start_rollout_max_aggregation():
+    from yane.evolution.evaluator_components import MultiStartRollout
+    from yane.core.genome import Genome
+
+    g = Genome()
+    rollout = MultiStartRollout(
+        cases=(5.0, 2.0, 8.0),
+        rollout_fn=lambda genome, case: case,
+        aggregation="max",
+    )
+    assert abs(rollout.evaluate(g) - 8.0) < 1e-9
+
+
+def test_evaluator_spec_ablation_different_scores():
+    """Ablation: rollout-only vs. policy-only produce different fitness values."""
+    from yane.evolution.evaluator_components import EvaluatorSpec
+
+    components = {"rollout": 10.0, "policy": -5.0, "subgoal": 2.0}
+    weights = {"rollout": 1.0, "policy": 1.0, "subgoal": 1.0}
+
+    spec_full = EvaluatorSpec(component_weights=weights)
+    spec_rollout_only = EvaluatorSpec(
+        component_weights=weights,
+        enabled_components=frozenset({"rollout"}),
+    )
+    spec_policy_only = EvaluatorSpec(
+        component_weights=weights,
+        enabled_components=frozenset({"policy"}),
+    )
+    spec_subgoal_only = EvaluatorSpec(
+        component_weights=weights,
+        enabled_components=frozenset({"subgoal"}),
+    )
+
+    full = spec_full.combine(components)
+    rollout_only = spec_rollout_only.combine(components)
+    policy_only = spec_policy_only.combine(components)
+    subgoal_only = spec_subgoal_only.combine(components)
+
+    # Full includes all signals, single-component scores isolate each contribution
+    assert abs(full - 7.0) < 1e-9        # 10 - 5 + 2
+    assert abs(rollout_only - 10.0) < 1e-9
+    assert abs(policy_only - (-5.0)) < 1e-9
+    assert abs(subgoal_only - 2.0) < 1e-9
+    # Each ablation is different from the others
+    assert len({full, rollout_only, policy_only, subgoal_only}) == 4
+
+
+def test_state_encoder_output_dim_scaled():
+    from yane.evolution.evaluator_components import StateEncoder
+    enc = StateEncoder(mode="scaled", scales=(4.0, 3.0))
+    assert enc.output_dim == 2
+    assert enc.encode((2, 3)) == [0.5, 1.0]
+
+
+def test_state_encoder_output_dim_one_hot():
+    from yane.evolution.evaluator_components import StateEncoder
+    enc = StateEncoder(mode="one_hot", sizes=(3, 2))
+    assert enc.output_dim == 5
+    assert enc.encode((1, 0)) == [0.0, 1.0, 0.0, 1.0, 0.0]
+
+
+def test_state_encoder_output_dim_mixed():
+    from yane.evolution.evaluator_components import StateEncoder
+    # mixed: one_hot part (sizes) + scaled part (scales)
+    enc = StateEncoder(mode="mixed", sizes=(4, 4), scales=(3.0, 3.0))
+    assert enc.output_dim == 10  # 4+4 one-hot + 2 scaled

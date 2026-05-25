@@ -4,7 +4,9 @@ import time
 from typing import Callable
 
 from yane.core.genome import Genome
-from yane.evolution.evaluator_components import GraphPolicyScore, StateEncoder
+from yane.evolution.evaluator_components import (
+    EvaluatorSpec, GraphPolicyScore, StateEncoder,
+)
 
 # Dataset examples — import make_eval and metadata directly from each example
 # package so there is exactly one implementation (no duplication).
@@ -213,16 +215,17 @@ def _make_cliffwalking_eval(max_steps: int = 200):
     """CliffWalking-v1: navigiere über ein 4×12-Gitter ohne in die Klippe zu fallen.
 
     Obs = integer 0–47 (Zeile × 12 + Spalte).
-    Inputs: [Zeile/3, Spalte/11]. Belohnung: -1/Schritt, -100 Klippe.
-    Reward-Shaping: Bonus für Annäherung an das Ziel (Zeile=3, Spalte=11).
+    Inputs: mixed one-hot + scaled (Zeile, Spalte).
+    Components: rollout_score (env reward + distance shaping), oracle_score (oracle-action match).
     """
     encoder = StateEncoder(mode="mixed", sizes=(4, 12), scales=(3.0, 11.0))
+    _COMPONENTS = ("rollout_score", "oracle_score")
+    _BASE_WEIGHTS = {"rollout_score": 1.0, "oracle_score": 0.4}
 
     def _inputs(row: int, col: int) -> list[float]:
         return encoder.encode((row, col))
 
-    def make(render_callback=None, step_callback=None, demo=False):
-        import numpy as np
+    def make(render_callback=None, step_callback=None, demo=False, enabled_components=None):
         import gymnasium as gym
         env = gym.make("CliffWalking-v1", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None)
@@ -230,6 +233,16 @@ def _make_cliffwalking_eval(max_steps: int = 200):
         cap = 10_000 if demo else max_steps
         goal_row, goal_col = 3, 11
         start_states = [36, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]
+        enabled = (
+            frozenset(enabled_components)
+            if enabled_components is not None
+            else None
+        )
+        spec = EvaluatorSpec(
+            component_weights=_BASE_WEIGHTS,
+            enabled_components=enabled,
+        )
+        _scores: dict = {}
 
         def _oracle_action(row: int, col: int) -> int:
             if row == 3 and col == 0:
@@ -241,7 +254,8 @@ def _make_cliffwalking_eval(max_steps: int = 200):
             return 2      # down into the goal
 
         def evaluate(genome: Genome) -> float:
-            total = 0.0
+            rollout_total = 0.0
+            oracle_total = 0.0
             for start in start_states:
                 env.reset()
                 env.unwrapped.s = start
@@ -251,31 +265,40 @@ def _make_cliffwalking_eval(max_steps: int = 200):
                 steps = 0
                 prev_dist = abs(obs // 12 - goal_row) + abs(obs % 12 - goal_col)
                 best_dist = prev_dist
-                case_total = 0.0
+                case_rollout = 0.0
+                case_oracle = 0.0
                 while not done and steps < cap:
                     row, col = obs // 12, obs % 12
                     out = genome.forward(_inputs(row, col))
                     action = out.index(max(out))
-                    case_total += 4.0 if action == _oracle_action(row, col) else -1.0
+                    case_oracle += 4.0 if action == _oracle_action(row, col) else -1.0
                     obs, reward, terminated, truncated, _ = env.step(action)
                     new_row, new_col = obs // 12, obs % 12
                     new_dist = abs(new_row - goal_row) + abs(new_col - goal_col)
                     delta = prev_dist - new_dist
                     shape = 2.0 * delta if delta > 0 else 0.75 * delta
-                    case_total += reward + shape - 0.05 * new_dist
+                    case_rollout += reward + shape - 0.05 * new_dist
                     if new_dist < best_dist:
-                        case_total += 3.0
+                        case_rollout += 3.0
                         best_dist = new_dist
                     if new_row == goal_row and new_col == goal_col:
-                        case_total += 80.0
+                        case_rollout += 80.0
                     prev_dist = new_dist
                     done = terminated or truncated
                     steps += 1
-                    if _hooks: _hooks(total + case_total, env)
-                total += case_total
-            return total / len(start_states)
+                    if _hooks: _hooks(rollout_total + case_rollout, env)
+                rollout_total += case_rollout
+                oracle_total += case_oracle
+            components = {
+                "rollout_score": rollout_total / len(start_states),
+                "oracle_score": oracle_total / len(start_states),
+            }
+            _scores.update(components)
+            return spec.combine(components)
 
         evaluate._env = env
+        evaluate._component_scores = _scores
+        evaluate._available_components = list(_COMPONENTS)
         return evaluate
     return make
 
@@ -284,17 +307,17 @@ def _make_frozenlake_eval(n_episodes: int = 20):
     """FrozenLake-v1 (nicht-rutschig): Erreiche das Ziel ohne in Löcher zu fallen.
 
     Obs = integer 0–15 (Zeile × 4 + Spalte). Ziel: (3, 3).
-    Inputs: [Zeile/3, Spalte/3].
-    Reward-Shaping: Bonus für Annäherung an das Ziel pro Schritt.
-    Fitness = mittlere Belohnung über n_episodes.
+    Inputs: mixed one-hot + scaled (Zeile, Spalte).
+    Components: rollout_score (env reward + distance shaping), subgoal_score (distance progress).
     """
     encoder = StateEncoder(mode="mixed", sizes=(4, 4), scales=(3.0, 3.0))
+    _COMPONENTS = ("rollout_score", "subgoal_score")
+    _BASE_WEIGHTS = {"rollout_score": 1.0, "subgoal_score": 0.5}
 
     def _inputs(row: int, col: int) -> list[float]:
         return encoder.encode((row, col))
 
-    def make(render_callback=None, step_callback=None, demo=False):
-        import numpy as np
+    def make(render_callback=None, step_callback=None, demo=False, enabled_components=None):
         import gymnasium as gym
         env = gym.make("FrozenLake-v1", disable_env_checker=True, is_slippery=False,
                        render_mode="rgb_array" if render_callback else None)
@@ -304,9 +327,20 @@ def _make_frozenlake_eval(n_episodes: int = 20):
         start_states = [0, 1, 2, 3, 4, 6, 8, 9, 10, 13, 14]
         if demo:
             start_states = [0]
+        enabled = (
+            frozenset(enabled_components)
+            if enabled_components is not None
+            else None
+        )
+        spec = EvaluatorSpec(
+            component_weights=_BASE_WEIGHTS,
+            enabled_components=enabled,
+        )
+        _scores: dict = {}
 
         def evaluate(genome: Genome) -> float:
-            total = 0.0
+            rollout_total = 0.0
+            subgoal_total = 0.0
             for start in start_states:
                 env.reset()
                 env.unwrapped.s = start
@@ -315,7 +349,8 @@ def _make_frozenlake_eval(n_episodes: int = 20):
                 done = False
                 prev_dist = abs(obs // 4 - goal_row) + abs(obs % 4 - goal_col)
                 steps = 0
-                case_total = 0.0
+                case_rollout = 0.0
+                case_subgoal = 0.0
                 while not done and steps < 20:
                     row, col = obs // 4, obs % 4
                     out = genome.forward(_inputs(row, col))
@@ -323,17 +358,26 @@ def _make_frozenlake_eval(n_episodes: int = 20):
                     obs, reward, terminated, truncated, _ = env.step(action)
                     new_dist = abs(obs // 4 - goal_row) + abs(obs % 4 - goal_col)
                     delta = prev_dist - new_dist
-                    case_total += reward + 0.25 * delta - 0.02
+                    case_rollout += reward - 0.02
                     if obs in holes:
-                        case_total -= 1.0
+                        case_rollout -= 1.0
+                    case_subgoal += 0.25 * delta
                     prev_dist = new_dist
                     done = terminated or truncated
                     steps += 1
-                    if _hooks: _hooks(total + case_total, env)
-                total += case_total
-            return total / len(start_states)
+                    if _hooks: _hooks(rollout_total + case_rollout, env)
+                rollout_total += case_rollout
+                subgoal_total += case_subgoal
+            components = {
+                "rollout_score": rollout_total / len(start_states),
+                "subgoal_score": subgoal_total / len(start_states),
+            }
+            _scores.update(components)
+            return spec.combine(components)
 
         evaluate._env = env
+        evaluate._component_scores = _scores
+        evaluate._available_components = list(_COMPONENTS)
         return evaluate
     return make
 
@@ -342,24 +386,35 @@ def _make_taxi_eval(max_steps: int = 500):
     """Taxi-v4: Fahrgast aufnehmen und zum Ziel bringen (5×5-Gitter).
 
     Obs = integer 0–499, kodiert (row, col, passenger_loc, dest).
-    Inputs: [Zeile/4, Spalte/4, Fahrgast/4, Ziel/3].
-    Reward-Shaping: Bonus für Annäherung an Fahrgast oder Zielort.
-    Belohnung: +20 Abgabe, -10 illegale Aktion, -1/Schritt.
+    Inputs: mixed one-hot + scaled (row, col, pass_loc, dest).
+    Components: policy_score (GraphPolicyScore over state space),
+                rollout_score (episodic reward + shaping),
+                subgoal_score (movement toward current subgoal).
     """
     encoder = StateEncoder(mode="mixed", sizes=(5, 5, 5, 4), scales=(4.0, 4.0, 4.0, 3.0))
+    _COMPONENTS = ("policy_score", "rollout_score", "subgoal_score")
+    _BASE_WEIGHTS = {"policy_score": 45.0, "rollout_score": 1.0, "subgoal_score": 1.0}
 
     def _inputs(row: int, col: int, pass_loc: int, dest: int) -> list[float]:
         return encoder.encode((row, col, pass_loc, dest))
 
-    def make(render_callback=None, step_callback=None, demo=False):
-        import numpy as np
+    def make(render_callback=None, step_callback=None, demo=False, enabled_components=None):
         import gymnasium as gym
         env = gym.make("Taxi-v4", disable_env_checker=True,
                        render_mode="rgb_array" if render_callback else None)
         _hooks = _make_step_hooks(step_callback, render_callback)
         cap = 10_000 if demo else max_steps
-        # Fixed pickup/dropoff locations (R, G, Y, B) in the 5×5 grid
         _locs = [(0, 0), (0, 4), (4, 0), (4, 3)]
+        enabled = (
+            frozenset(enabled_components)
+            if enabled_components is not None
+            else None
+        )
+        spec = EvaluatorSpec(
+            component_weights=_BASE_WEIGHTS,
+            enabled_components=enabled,
+        )
+        _scores: dict = {}
 
         def _decode(obs):
             dest     = obs % 4
@@ -374,8 +429,8 @@ def _make_taxi_eval(max_steps: int = 500):
         ]
 
         transitions = env.unwrapped.P
-        policy_score = GraphPolicyScore(transitions, env.action_space.n, terminal_reward=0.0)
-        dist = policy_score.distances
+        _policy_scorer = GraphPolicyScore(transitions, env.action_space.n, terminal_reward=0.0)
+        dist = _policy_scorer.distances
 
         policy_probe_states = [
             env.unwrapped.encode(row, col, pass_loc, dest)
@@ -421,21 +476,28 @@ def _make_taxi_eval(max_steps: int = 500):
             return -0.5
 
         def evaluate(genome: Genome) -> float:
-            total = 0.0
             cases = train_cases[:1] if demo else train_cases
-            policy_total = 0.0
-            for probe_state in policy_probe_states:
-                row, col, pass_loc, dest = _decode(probe_state)
-                out = genome.forward(_inputs(row, col, pass_loc, dest))
-                action = out.index(max(out))
-                policy_total += policy_score.action_score(probe_state, action)
-            total += 45.0 * (policy_total / len(policy_probe_states))
+            # policy_score component
+            if enabled is None or "policy_score" in enabled:
+                policy_total = 0.0
+                for probe_state in policy_probe_states:
+                    row, col, pass_loc, dest = _decode(probe_state)
+                    out = genome.forward(_inputs(row, col, pass_loc, dest))
+                    action = out.index(max(out))
+                    policy_total += _policy_scorer.action_score(probe_state, action)
+                policy_val = policy_total / len(policy_probe_states)
+            else:
+                policy_val = 0.0
+            # rollout_score and subgoal_score components
+            rollout_total = 0.0
+            subgoal_total = 0.0
             for row0, col0, pass0, dest0 in cases:
                 env.reset()
                 obs = env.unwrapped.encode(row0, col0, pass0, dest0)
                 env.unwrapped.s = obs
                 genome.reset()
-                case_total = 0.0
+                case_rollout = 0.0
+                case_subgoal = 0.0
                 done = False
                 steps = 0
                 prev_pass_in_taxi = pass0 == 4
@@ -443,7 +505,7 @@ def _make_taxi_eval(max_steps: int = 500):
                     row, col, pass_loc, dest = _decode(obs)
                     out = genome.forward(_inputs(row, col, pass_loc, dest))
                     action = out.index(max(out))
-                    case_total += _movement_action_score(action, row, col, pass_loc, dest)
+                    case_subgoal += _movement_action_score(action, row, col, pass_loc, dest)
                     prev_row, prev_col, prev_pass_loc = row, col, pass_loc
                     obs, reward, terminated, truncated, _ = env.step(action)
                     row, col, pass_loc_new, _dest_new = _decode(obs)
@@ -458,21 +520,30 @@ def _make_taxi_eval(max_steps: int = 500):
                         new_d = abs(row - dr) + abs(col - dc)
                     delta = prev_d - new_d
                     shape = 2.0 * delta if delta > 0 else 0.75 * delta
-                    case_total += reward + shape - 0.05 * new_d
+                    case_rollout += reward + shape - 0.05 * new_d
                     if pass_loc_new == 4 and not prev_pass_in_taxi:
-                        case_total += 40.0
+                        case_rollout += 40.0
                         prev_pass_in_taxi = True
                     if reward == -10:
-                        case_total -= 5.0
+                        case_rollout -= 5.0
                     if terminated:
-                        case_total += 80.0
+                        case_rollout += 80.0
                     done = terminated or truncated
                     steps += 1
-                    if _hooks: _hooks(total + case_total, env)
-                total += case_total
-            return total / len(cases)
+                    if _hooks: _hooks(rollout_total + case_rollout, env)
+                rollout_total += case_rollout
+                subgoal_total += case_subgoal
+            components = {
+                "policy_score": policy_val,
+                "rollout_score": rollout_total / len(cases),
+                "subgoal_score": subgoal_total / len(cases),
+            }
+            _scores.update(components)
+            return spec.combine(components)
 
         evaluate._env = env
+        evaluate._component_scores = _scores
+        evaluate._available_components = list(_COMPONENTS)
         return evaluate
     return make
 
@@ -863,6 +934,7 @@ class ExampleConfig:
         default_config: dict | None = None,
         default_adaptive_policies: dict | None = None,
         action_display_fn: "Callable[[list[float]], str] | None" = None,
+        evaluator_components: "list[str] | None" = None,
     ) -> None:
         self.name = name
         self.description = description
@@ -898,6 +970,9 @@ class ExampleConfig:
         # Optional callable: (network_outputs: list[float]) -> str
         # When set, the Inspect tab shows the interpreted action next to raw outputs.
         self.action_display_fn: "Callable[[list[float]], str] | None" = action_display_fn
+        # Named fitness components available for this evaluator (None = no per-component UI).
+        # Each name corresponds to a component tracked in evaluate._component_scores.
+        self.evaluator_components: list[str] | None = list(evaluator_components) if evaluator_components else None
 
 
 def _pi_make_curriculum(
@@ -1265,6 +1340,7 @@ def load_examples() -> list[ExampleConfig]:
                 default_target_species=6,
                 default_config=_CLASSIC_CONTROL_DEFAULTS,
                 default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
+                evaluator_components=["rollout_score", "oracle_score"],
             ),
             ExampleConfig(
                 name="Frozen Lake",
@@ -1289,6 +1365,7 @@ def load_examples() -> list[ExampleConfig]:
                     "sigma_penalty": 0.0,
                 },
                 default_adaptive_policies=_CLASSIC_CONTROL_ADAPTIVE,
+                evaluator_components=["rollout_score", "subgoal_score"],
             ),
             ExampleConfig(
                 name="Taxi",
@@ -1312,6 +1389,7 @@ def load_examples() -> list[ExampleConfig]:
                     "early_stop_factor": 0.0,
                 },
                 default_adaptive_policies=_LARGE_CONTROL_ADAPTIVE,
+                evaluator_components=["policy_score", "rollout_score", "subgoal_score"],
             ),
         ]
     except ImportError:

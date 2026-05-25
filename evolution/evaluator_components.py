@@ -161,11 +161,23 @@ class EvaluatorSpec:
     component_weights: dict[str, float] = field(default_factory=dict)
     target_fitness: float | None = None
     validation_cases: tuple[Any, ...] = ()
+    enabled_components: frozenset[str] | None = None
 
     def combine(self, components: dict[str, float]) -> float:
-        if not self.component_weights:
-            return sum(components.values())
-        return sum(
-            components.get(name, 0.0) * weight
-            for name, weight in self.component_weights.items()
+        active = (
+            {k: v for k, v in components.items() if k in self.enabled_components}
+            if self.enabled_components is not None
+            else components
         )
+        if not self.component_weights:
+            return sum(active.values())
+        return sum(
+            active.get(name, 0.0) * weight
+            for name, weight in self.component_weights.items()
+            if self.enabled_components is None or name in self.enabled_components
+        )
+
+    def with_enabled(self, enabled: frozenset[str] | None) -> "EvaluatorSpec":
+        """Return a copy with the given enabled_components set."""
+        from dataclasses import replace
+        return replace(self, enabled_components=enabled)

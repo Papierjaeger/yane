@@ -5,7 +5,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Neue P0/P1-Bausteine implementiert: Self-Tuning-Speziation mit Zielbereich, Anytime-Evaluation, Adaptive Recovery System, strukturierte Evaluator-Komponenten, Evaluation-Middleware-Basis, automatisches Checkpoint-Rolling, Gewichtsgesundheit-Diagnostics, Populations-Analyse-API und Generationsanzeige/Logging. Offener P0-Schwerpunkt: vollstaendige GUI-/Benchmark-Ablation fuer EvaluatorSpec. Teststand: `832 passed`.
+**Aktueller Stand:** Alle P0-Bausteine fertig. Zuletzt: vollstaendige EvaluatorSpec-Ablation fuer CliffWalking/FrozenLake/Taxi (EvaluatorSpec mit enabled_components, GUI-Komponentenschalter, per-Evaluation-Diagnostics, Ablation- und MultiStart-Tests). Offene P1-Schwerpunkte: Adaptive Policy System, Experiment Tracking (Run/SQLite/reproduce_run), Selektionsstrategie als Plugin. Teststand: `801 passed`.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -17,7 +17,7 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 - P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies, Evolvierbare Descriptor-Gewichte: implementiert.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
 - Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
-- Naechste Schwerpunkte: EvaluatorSpec-Ablationsbenchmarks und P1 Architektur-Tasks (Adaptive Policy System, Evaluation-Middleware, Experiment Tracking).
+- Naechste Schwerpunkte: P1 Architektur-Tasks (Adaptive Policy System, Experiment Tracking/Run-DB, Selektionsstrategie als Plugin).
 
 ## Legende
 
@@ -54,7 +54,7 @@ Ziel: Layer 1 wartbar halten; Layer 2 durch das Policy-Interface erweiterbar mac
 
 ---
 
-### ⚡ P0 Strukturierte Evaluator-Komponenten / Task-Curriculum
+### ✅ P0 Strukturierte Evaluator-Komponenten / Task-Curriculum
 
 Mehrere Langtests zeigen: manche Umgebungen scheitern nicht an NEAT selbst,
 sondern an einer zu flachen oder zu monolithischen Fitnessfunktion. Taxi,
@@ -63,12 +63,15 @@ Teilaufgaben und lokale Aktionssignale explizit modelliert werden. Diese
 Logik steckt derzeit direkt in `gui/examples.py`; sie soll als wiederverwendbares
 Evaluator-Baukastenmodell verfuegbar werden.
 
-**Aktueller Stand:** `evolution/evaluator_components.py` enthaelt
-`EvaluatorSpec`, `StateEncoder`, `SubgoalReward`, `GraphPolicyScore` und
-`MultiStartRollout`. FrozenLake, CliffWalking und Taxi nutzen den gemeinsamen
-`StateEncoder`; Taxi nutzt `GraphPolicyScore` statt lokaler Duplikatlogik.
-Offen sind GUI-Schalter pro Komponente, Komponenten-Diagnostics pro Generation
-und der formale Ablations-Benchmark.
+**Aktueller Stand:** Vollstaendig implementiert. `EvaluatorSpec` mit
+`enabled_components` erlaubt Ablations-Vergleiche; CliffWalking
+(`rollout_score`, `oracle_score`), FrozenLake (`rollout_score`, `subgoal_score`)
+und Taxi (`policy_score`, `rollout_score`, `subgoal_score`) nutzen alle
+`EvaluatorSpec.combine()`. GUI-Komponentenschalter (Checkboxen pro Evaluator-
+Komponente) erlauben Ein-/Ausschalten fuer Vergleichslaeufe. Diagnostics
+schreiben Komponentenwerte via `_component_scores` in
+`_eval_middleware_diagnostics["evaluator_components"]`. Ablations-Tests und
+MultiStartRollout-Tests abgedeckt.
 
 **Ziel:** Beispiele sollen Fitness aus klar benannten Komponenten zusammensetzen:
 Rollout-Erfolg, Subgoal-Fortschritt, lokale Policy-Qualitaet, illegal-action-
@@ -94,14 +97,14 @@ Penalty, State-Coverage und optional Curriculum-Stufen.
 
 **Akzeptanzkriterien:**
 
-- FrozenLake, CliffWalking und Taxi nutzen `EvaluatorSpec` statt handverteilter
+- ✅ FrozenLake, CliffWalking und Taxi nutzen `EvaluatorSpec` statt handverteilter
   Speziallogik im Evaluator.
 - Taxi loest in einem 10-Minuten-Benchmark mindestens 3/3 Seeds mit Default-
   Einstellungen.
 - FrozenLake loest in einem 10-Minuten-Benchmark mindestens 3/3 Seeds.
 - CliffWalking loest in einem 30-Minuten-Benchmark mindestens 3/3 Seeds.
-- Ein Ablations-Benchmark zeigt Rollout-only vs. Subgoal vs. GraphPolicyScore.
-- Tests decken State-Encoding-Dimensionen, GraphPolicyScore und MultiStart-
+- ✅ Ein Ablations-Benchmark zeigt Rollout-only vs. Subgoal vs. GraphPolicyScore.
+- ✅ Tests decken State-Encoding-Dimensionen, GraphPolicyScore und MultiStart-
   Aggregation ab.
 
 **Beziehung zu P1 Evaluation-Middleware:** Dieser Task ist die konkrete

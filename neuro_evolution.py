@@ -2459,19 +2459,21 @@ class NeuroEvolution:
     ) -> EvaluationResult:
         if self._matrix_forward_enabled:
             return self._run_with_matrix_forward(genome, fitness_fn)
+        original_fn = fitness_fn
         if self._eval_middlewares:
             import inspect
             if not inspect.isgeneratorfunction(fitness_fn):
-                original_fn = fitness_fn
-
                 def _wrapped(g: Genome):
                     ctx = EvalContext()
                     value = apply_middleware(g, original_fn, self._eval_middlewares, ctx)
                     self._eval_middleware_diagnostics.update(ctx.diagnostics)
                     return value
-
                 fitness_fn = _wrapped
-        return self._runner.run(genome, fitness_fn, self._population, self._lamarck)
+        result = self._runner.run(genome, fitness_fn, self._population, self._lamarck)
+        _cs = getattr(original_fn, "_component_scores", None)
+        if _cs:
+            self._eval_middleware_diagnostics["evaluator_components"] = dict(_cs)
+        return result
 
     def _run_with_matrix_forward(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]
@@ -2495,20 +2497,22 @@ class NeuroEvolution:
                 self._matrix_misses += 1
         else:
             self._matrix_misses += 1
+        original_fn = fitness_fn
         try:
             if self._eval_middlewares:
                 import inspect
                 if not inspect.isgeneratorfunction(fitness_fn):
-                    original_fn = fitness_fn
-
                     def _wrapped(g: Genome):
                         ctx = EvalContext()
                         value = apply_middleware(g, original_fn, self._eval_middlewares, ctx)
                         self._eval_middleware_diagnostics.update(ctx.diagnostics)
                         return value
-
                     fitness_fn = _wrapped
-            return self._runner.run(genome, fitness_fn, self._population, self._lamarck)
+            result = self._runner.run(genome, fitness_fn, self._population, self._lamarck)
+            _cs = getattr(original_fn, "_component_scores", None)
+            if _cs:
+                self._eval_middleware_diagnostics["evaluator_components"] = dict(_cs)
+            return result
         finally:
             if patched:
                 genome.__dict__.pop("forward", None)

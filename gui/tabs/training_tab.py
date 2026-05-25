@@ -533,6 +533,13 @@ class TrainingTab(QWidget):
         self.chk_curriculum = QCheckBox("aktiv")
         self.chk_curriculum.setChecked(False)
         self.chk_curriculum.setVisible(False)   # shown only for examples that support it
+
+        # Evaluator component filter — shown only for examples with named components
+        self._eval_components_widget = QWidget()
+        self._eval_components_layout = QHBoxLayout(self._eval_components_widget)
+        self._eval_components_layout.setContentsMargins(0, 0, 0, 0)
+        self._eval_component_checkboxes: list[tuple[str, QCheckBox]] = []
+        self._eval_components_widget.setVisible(False)
         self.chk_curriculum.setToolTip(
             "Curriculum Learning: Training in aufsteigend schwieriger werdenden Stufen.\n\n"
             "Pi-Ziffern: Stufe 1 (3 Ziffern) → Stufe 2 (6 Ziffern) → Stufe 3 (10 Ziffern).\n"
@@ -566,6 +573,9 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Normalization:", self.chk_normalize)
         cfg_form.addRow("Memory:",        self.chk_memory)
         cfg_form.addRow("Curriculum:",    self.chk_curriculum)
+        self._eval_components_label = _label("Eval components:")
+        self._eval_components_label.setVisible(False)
+        cfg_form.addRow(self._eval_components_label, self._eval_components_widget)
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
 
@@ -1002,12 +1012,48 @@ class TrainingTab(QWidget):
         else:
             self.chk_curriculum.setChecked(False)
             self._render_group.setVisible(False)
+        # Rebuild evaluator component checkboxes
+        self._rebuild_eval_component_checkboxes(ex)
         self.combo_adaptive_preset.setCurrentText("Kein Preset")
         self._apply_adaptive_policies(ex.default_adaptive_policies)
         self._apply_config_dict(ex.default_config)
         self._best_genome = None
         self.btn_run_best.setEnabled(False)
         self.example_changed.emit(ex)
+
+    def _rebuild_eval_component_checkboxes(self, ex) -> None:
+        """Show per-component checkboxes when the example supports named components."""
+        # Remove old checkboxes
+        for _, chk in self._eval_component_checkboxes:
+            self._eval_components_layout.removeWidget(chk)
+            chk.deleteLater()
+        self._eval_component_checkboxes.clear()
+        components = getattr(ex, "evaluator_components", None)
+        visible = bool(components)
+        self._eval_components_widget.setVisible(visible)
+        self._eval_components_label.setVisible(visible)
+        if components:
+            for name in components:
+                chk = QCheckBox(name.replace("_", " "))
+                chk.setChecked(True)
+                chk.setToolTip(
+                    f"Komponente '{name}' in die Fitness-Berechnung einbeziehen.\n"
+                    "Deaktivieren für Ablations-Vergleiche."
+                )
+                self._eval_components_layout.addWidget(chk)
+                self._eval_component_checkboxes.append((name, chk))
+
+    def _get_enabled_eval_components(self) -> "frozenset[str] | None":
+        """Return enabled component names, or None if all are enabled / no components."""
+        if not self._eval_component_checkboxes:
+            return None
+        enabled = frozenset(
+            name for name, chk in self._eval_component_checkboxes if chk.isChecked()
+        )
+        all_names = frozenset(name for name, _ in self._eval_component_checkboxes)
+        if enabled == all_names:
+            return None  # all enabled = default behaviour
+        return enabled if enabled else None
 
     def _on_lamarck_mode_changed(self, index: int) -> None:
         self.spin_lamarck.setEnabled(self.combo_lamarck_schedule.currentText() == "Explizit")
@@ -1360,11 +1406,14 @@ class TrainingTab(QWidget):
         )
 
     def _make_eval_factory(self, ex):
+        import functools
         if ex.supports_normalization and not self.chk_normalize.isChecked():
-            import functools
             make_eval_fn = functools.partial(ex.make_eval, normalize=False)
         else:
             make_eval_fn = ex.make_eval
+        enabled = self._get_enabled_eval_components()
+        if enabled is not None:
+            make_eval_fn = functools.partial(make_eval_fn, enabled_components=enabled)
 
         if not self.chk_multi_objective.isChecked():
             return make_eval_fn
