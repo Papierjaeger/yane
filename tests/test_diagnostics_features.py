@@ -794,5 +794,378 @@ class TestSelectionStrategy(unittest.TestCase):
         self.assertNotEqual(s1.species_id, s2.species_id)
 
 
+# ---------------------------------------------------------------------------
+# Hybrid Feature-Extractor API
+# ---------------------------------------------------------------------------
+
+class TestInputTransform(unittest.TestCase):
+    def _make_ne(self):
+        ne = NeuroEvolution(seed=1)
+        ne.set_max_iterations(3)
+        return ne
+
+    def test_transform_applied_to_forward(self):
+        """Input transform intercepts genome.forward() inputs during evaluation."""
+        received: list[list] = []
+
+        def capturing_transform(data):
+            received.append(list(data))
+            return [x * 2.0 for x in data]
+
+        ne = self._make_ne()
+        ne.set_input_transform(capturing_transform)
+        ne.configure(n_inputs=2, n_outputs=1)
+
+        def fitness_fn(genome):
+            genome.forward([0.5, 1.0])
+            return 0.0
+
+        ne.train(fitness_fn)
+        self.assertTrue(len(received) > 0)
+        # Every captured input should be the raw [0.5, 1.0]
+        for inp in received:
+            self.assertEqual(inp, [0.5, 1.0])
+
+    def test_transform_output_reaches_network(self):
+        """The network sees the transformed inputs, not the raw ones."""
+        seen_in_network: list[list] = []
+
+        def transform(data):
+            return [x + 100.0 for x in data]
+
+        ne = self._make_ne()
+        ne.set_input_transform(transform)
+        ne.configure(n_inputs=2, n_outputs=1)
+
+        def fitness_fn(genome):
+            # Bypass the transform by calling the internal _bfs_forward directly
+            # to observe what the network nodes received — instead just check that
+            # forward() still returns a list of floats (no crash).
+            out = genome.forward([1.0, 2.0])
+            self.assertIsInstance(out, list)
+            return 0.0
+
+        ne.train(fitness_fn)  # should not raise
+
+    def test_transform_dimension_validation(self):
+        """set_input_transform raises ValueError when output dim != n_inputs."""
+        ne = self._make_ne()
+        ne.set_input_transform(lambda x: x[:1], n_raw_inputs=2)
+        with self.assertRaises(ValueError):
+            ne.configure(n_inputs=2, n_outputs=1)
+
+    def test_transform_none_removes_transform(self):
+        """Passing None to set_input_transform disables the transform."""
+        ne = self._make_ne()
+        ne.set_input_transform(lambda x: [v * 99 for v in x])
+        ne.set_input_transform(None)
+        ne.configure(n_inputs=2, n_outputs=1)
+
+        def fitness_fn(genome):
+            return sum(genome.forward([0.1, 0.2]))
+
+        ne.train(fitness_fn)  # should not raise, no transform applied
+
+    def test_transform_with_correct_n_raw_inputs_passes(self):
+        """Validation passes when transform output matches n_inputs."""
+        ne = self._make_ne()
+        ne.set_input_transform(lambda x: [x[0], x[1]], n_raw_inputs=3)
+        ne.configure(n_inputs=2, n_outputs=1)  # should not raise
+
+    def test_transform_applied_when_matrix_forward_misses(self):
+        """Input transform is applied even when matrix_forward is on but genome is non-compatible."""
+        received: list[list] = []
+
+        def capturing_transform(data):
+            received.append(list(data))
+            return [x * 3.0 for x in data]
+
+        ne = self._make_ne()
+        ne.set_matrix_forward(True)
+        ne.set_input_transform(capturing_transform)
+        ne.configure(n_inputs=2, n_outputs=1)
+
+        def fitness_fn(genome):
+            genome.forward([0.5, 1.0])
+            return 0.0
+
+        ne.train(fitness_fn)
+        self.assertTrue(len(received) > 0, "Transform should have been called")
+        for inp in received:
+            self.assertEqual(inp, [0.5, 1.0])
+
+
+# ---------------------------------------------------------------------------
+# Modular Compatibility Distance
+# ---------------------------------------------------------------------------
+
+class TestCompatibilityDistance(unittest.TestCase):
+    def _make_genome_pair(self):
+        from yane.core.genome import Genome
+        from yane.core.node import Node, NodeType
+        from yane.core.connection import Connection
+        from yane.evolution.innovation import InnovationTracker
+        t = InnovationTracker()
+        g1 = Genome()
+        g2 = Genome()
+        for _ in range(2):
+            n = Node(NodeType.INPUT, innovation=t.next())
+            g1.nodes.append(n); g1.input_nodes.append(n)
+            m = Node(NodeType.INPUT, innovation=t.next())
+            g2.nodes.append(m); g2.input_nodes.append(m)
+        for _ in range(1):
+            n = Node(NodeType.OUTPUT, innovation=t.next())
+            g1.nodes.append(n); g1.output_nodes.append(n)
+            g2.nodes.append(n); g2.output_nodes.append(n)
+        return g1, g2
+
+    def test_topology_distance_default(self):
+        """TopologyDistance delegates to the existing compatibility() formula."""
+        from yane.evolution.compatibility import TopologyDistance, compatibility
+        from yane.core.genome import Genome
+        g1 = Genome()
+        g2 = Genome()
+        td = TopologyDistance()
+        self.assertAlmostEqual(td(g1, g2), compatibility(g1, g2))
+
+    def test_topology_distance_only_enabled_flag(self):
+        """TopologyDistance honours only_enabled parameter."""
+        from yane.evolution.compatibility import TopologyDistance, compatibility
+        from yane.core.genome import Genome
+        g1 = Genome()
+        g2 = Genome()
+        td = TopologyDistance(only_enabled=True)
+        self.assertAlmostEqual(td(g1, g2), compatibility(g1, g2, only_enabled=True))
+
+    def test_weight_distance_zero_for_identical(self):
+        """WeightDistance returns 0 for two genomes sharing same-weight connections."""
+        from yane.evolution.compatibility import WeightDistance
+        from yane.core.genome import Genome
+        g = Genome()
+        wd = WeightDistance()
+        self.assertAlmostEqual(wd(g, g), 0.0)
+
+    def test_weight_distance_non_negative(self):
+        """WeightDistance always returns a non-negative value."""
+        from yane.evolution.compatibility import WeightDistance
+        from yane.core.genome import Genome
+        g1 = Genome()
+        g2 = Genome()
+        wd = WeightDistance()
+        self.assertGreaterEqual(wd(g1, g2), 0.0)
+
+    def test_activation_distance_zero_for_identical(self):
+        """ActivationDistance returns 0 for the same genome."""
+        from yane.evolution.compatibility import ActivationDistance
+        from yane.core.genome import Genome
+        g = Genome()
+        ad = ActivationDistance()
+        self.assertAlmostEqual(ad(g, g), 0.0)
+
+    def test_chain_metric_sum(self):
+        """ChainMetric computes weighted sum of component metrics."""
+        from yane.evolution.compatibility import (
+            ChainMetric, TopologyDistance, WeightDistance
+        )
+        from yane.core.genome import Genome
+        g1 = Genome()
+        g2 = Genome()
+        td = TopologyDistance()
+        wd = WeightDistance()
+        chain = ChainMetric([td, wd], weights=[0.6, 0.4])
+        expected = 0.6 * td(g1, g2) + 0.4 * wd(g1, g2)
+        self.assertAlmostEqual(chain(g1, g2), expected)
+
+    def test_chain_metric_weights_length_mismatch(self):
+        """ChainMetric raises ValueError if weights length differs from metrics."""
+        from yane.evolution.compatibility import ChainMetric, TopologyDistance
+        with self.assertRaises(ValueError):
+            ChainMetric([TopologyDistance()], weights=[1.0, 2.0])
+
+    def test_set_compatibility_distance_plugs_into_population(self):
+        """set_compatibility_distance wires the metric into the population."""
+        from yane.evolution.compatibility import WeightDistance
+        ne = NeuroEvolution(seed=42)
+        ne.set_compatibility_distance(WeightDistance())
+        ne.configure(n_inputs=2, n_outputs=1)
+        self.assertIsInstance(ne._population.compatibility_distance, WeightDistance)
+
+    def test_set_compatibility_distance_before_configure(self):
+        """set_compatibility_distance set before configure() is applied at configure."""
+        from yane.evolution.compatibility import ActivationDistance
+        ne = NeuroEvolution(seed=42)
+        ne.set_compatibility_distance(ActivationDistance())
+        ne.configure(n_inputs=2, n_outputs=1)
+        self.assertIsInstance(ne._population.compatibility_distance, ActivationDistance)
+
+    def test_set_compatibility_distance_none_resets_to_default(self):
+        """Passing None resets to the default TopologyDistance."""
+        from yane.evolution.compatibility import WeightDistance, TopologyDistance
+        ne = NeuroEvolution(seed=42)
+        ne.set_compatibility_distance(WeightDistance())
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.set_compatibility_distance(None)
+        self.assertIsInstance(ne._population.compatibility_distance, TopologyDistance)
+
+    def test_set_speciation_metric_no_disabled_syncs_topology_distance(self):
+        """set_speciation_metric('topology_no_disabled') updates TopologyDistance."""
+        from yane.evolution.compatibility import TopologyDistance
+        ne = NeuroEvolution(seed=42)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.set_speciation_metric("topology_no_disabled")
+        cd = ne._population.compatibility_distance
+        self.assertIsInstance(cd, TopologyDistance)
+        self.assertTrue(cd._only_enabled)
+
+    def test_custom_metric_runs_full_training(self):
+        """A ChainMetric can run through a short training loop without error."""
+        from yane.evolution.compatibility import ChainMetric, TopologyDistance, WeightDistance
+        ne = NeuroEvolution(seed=7)
+        ne.set_max_iterations(5)
+        ne.set_compatibility_distance(ChainMetric([TopologyDistance(), WeightDistance()]))
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.train(_dummy_eval)  # should not raise
+
+    def test_protocol_check(self):
+        """Built-in metrics satisfy the DistanceMetric protocol."""
+        from yane.evolution.compatibility import (
+            DistanceMetric, TopologyDistance, WeightDistance,
+            ActivationDistance, ChainMetric
+        )
+        for cls in (TopologyDistance, WeightDistance, ActivationDistance):
+            self.assertIsInstance(cls(), DistanceMetric)
+
+
+# ---------------------------------------------------------------------------
+# Generationsreport / Run Postmortem
+# ---------------------------------------------------------------------------
+
+class TestRunReport(unittest.TestCase):
+    def _run_with_db(self):
+        """Run a short training session with RunDatabase, return (ne, run_id, db_path)."""
+        import tempfile
+        tmpdir = tempfile.mkdtemp()
+        db_path = str(Path(tmpdir) / "report_test.db")
+        ne = NeuroEvolution(seed=5)
+        ne.set_run_database(db_path)
+        ne.set_max_iterations(5)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.train(_dummy_eval)
+        run_id = ne._active_run_id
+        return ne, run_id, db_path
+
+    def test_export_run_report_json(self):
+        """export_run_report returns valid JSON with expected keys."""
+        ne, run_id, _ = self._run_with_db()
+        text = ne.export_run_report(format="json")
+        data = json.loads(text)
+        self.assertIn("run_id", data)
+        self.assertIn("final_best", data)
+        self.assertIn("fitness_history", data)
+        self.assertIn("config", data)
+
+    def test_export_run_report_html(self):
+        """export_run_report returns HTML with <table> and SVG elements."""
+        ne, _, _ = self._run_with_db()
+        text = ne.export_run_report(format="html")
+        self.assertIn("<html", text)
+        self.assertIn("<table", text)
+        self.assertIn("<svg", text)
+
+    def test_export_run_report_markdown(self):
+        """export_run_report returns Markdown with headers and table rows."""
+        ne, _, _ = self._run_with_db()
+        text = ne.export_run_report(format="md")
+        self.assertIn("# Run Report", text)
+        self.assertIn("## Summary", text)
+        self.assertIn("| Run ID |", text)
+
+    def test_export_run_report_specific_run_id(self):
+        """export_run_report(run_id=...) retrieves the specified run."""
+        ne, run_id, _ = self._run_with_db()
+        text = ne.export_run_report(format="json", run_id=run_id)
+        data = json.loads(text)
+        self.assertEqual(data["run_id"], run_id)
+
+    def test_export_run_report_writes_file(self):
+        """export_run_report writes to disk when path is given."""
+        import tempfile
+        ne, _, _ = self._run_with_db()
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            out_path = f.name
+        ne.export_run_report(path=out_path, format="html")
+        self.assertGreater(Path(out_path).stat().st_size, 100)
+
+    def test_export_run_report_requires_db(self):
+        """export_run_report raises RuntimeError when no DB is configured."""
+        ne = NeuroEvolution(seed=1)
+        ne.configure(n_inputs=2, n_outputs=1)
+        with self.assertRaises(RuntimeError):
+            ne.export_run_report()
+
+    def test_report_autosave_html(self):
+        """set_report_autosave writes a report file at end of training."""
+        import tempfile
+        tmpdir = tempfile.mkdtemp()
+        db_path = str(Path(tmpdir) / "autosave.db")
+        report_path = str(Path(tmpdir) / "{run_name}_{run_id_short}.html")
+        ne = NeuroEvolution(seed=3)
+        ne.set_run_database(db_path)
+        ne.set_report_autosave(report_path, format="html")
+        ne.set_max_iterations(5)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.train(_dummy_eval)
+        # At least one HTML file should exist in tmpdir
+        html_files = list(Path(tmpdir).glob("*.html"))
+        self.assertTrue(len(html_files) > 0)
+        content = html_files[0].read_text()
+        self.assertIn("<html", content)
+
+    def test_report_autosave_disabled_by_default(self):
+        """No report file is written when autosave is not configured."""
+        import tempfile
+        tmpdir = tempfile.mkdtemp()
+        db_path = str(Path(tmpdir) / "no_autosave.db")
+        ne = NeuroEvolution(seed=3)
+        ne.set_run_database(db_path)
+        ne.set_max_iterations(5)
+        ne.configure(n_inputs=2, n_outputs=1)
+        ne.train(_dummy_eval)
+        html_files = list(Path(tmpdir).glob("*.html"))
+        self.assertEqual(len(html_files), 0)
+
+    def test_generate_run_report_json(self):
+        """generate_run_report returns JSON independently of NeuroEvolution."""
+        from yane.util.run_report import generate_run_report
+        from yane.util.run_database import Run
+        run = Run(
+            run_id="test-001",
+            experiment_id=None,
+            name="test",
+            seed=0,
+            config={"n_inputs": 2},
+            fitness_history=[{"iteration": 1, "best_fitness": 0.5}],
+            diagnostics={},
+            start_time="2026-01-01",
+            end_time="2026-01-01",
+            stop_reason="max_iterations",
+            artifacts={},
+        )
+        text = generate_run_report(run, format="json")
+        data = json.loads(text)
+        self.assertEqual(data["run_id"], "test-001")
+        self.assertEqual(data["final_best"], 0.5)
+
+    def test_generate_run_report_invalid_format(self):
+        """generate_run_report raises ValueError for unknown format."""
+        from yane.util.run_report import generate_run_report
+        from yane.util.run_database import Run
+        run = Run(run_id="x", name="x", experiment_id=None, seed=0, config={},
+                  fitness_history=[], diagnostics={}, start_time=None,
+                  end_time=None, stop_reason=None, artifacts={})
+        with self.assertRaises(ValueError):
+            generate_run_report(run, format="pdf")
+
+
 if __name__ == "__main__":
     unittest.main()

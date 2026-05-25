@@ -52,6 +52,7 @@ _mp_eval_fn        = None   # set once per subprocess by _mp_initializer
 _mp_n_evaluations  = 1
 _mp_aggregation    = "mean"
 _mp_sigma_penalty  = 0.0
+_mp_input_transform = None  # set before forking via _set_mp_input_transform
 
 def _mp_initializer(make_eval_fn, render_cb,
                     n_evaluations=1, aggregation="mean", sigma_penalty=0.0):
@@ -67,20 +68,28 @@ def _mp_initializer(make_eval_fn, render_cb,
 
 def _mp_evaluate(genome: Genome) -> tuple[float, float]:
     """Evaluate a single genome — runs inside a worker process."""
-    if _mp_n_evaluations <= 1:
-        start = time.perf_counter()
-        fitness = _mp_eval_fn(genome)
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        return fitness, elapsed_ms
+    if _mp_input_transform is not None:
+        _t = _mp_input_transform
+        _orig = genome.forward
+        genome.__dict__["forward"] = lambda data: _orig(_t(data))
+    try:
+        if _mp_n_evaluations <= 1:
+            start = time.perf_counter()
+            fitness = _mp_eval_fn(genome)
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            return fitness, elapsed_ms
 
-    fitnesses: list[float] = []
-    total_ms = 0.0
-    for _ in range(_mp_n_evaluations):
-        start = time.perf_counter()
-        f = _mp_eval_fn(genome)
-        total_ms += (time.perf_counter() - start) * 1000.0
-        fitnesses.append(f)
-    return _aggregate_fitnesses(fitnesses, _mp_aggregation, _mp_sigma_penalty), total_ms
+        fitnesses: list[float] = []
+        total_ms = 0.0
+        for _ in range(_mp_n_evaluations):
+            start = time.perf_counter()
+            f = _mp_eval_fn(genome)
+            total_ms += (time.perf_counter() - start) * 1000.0
+            fitnesses.append(f)
+        return _aggregate_fitnesses(fitnesses, _mp_aggregation, _mp_sigma_penalty), total_ms
+    finally:
+        if _mp_input_transform is not None:
+            genome.__dict__.pop("forward", None)
 
 
 def _timed_evaluate(eval_fn: Callable, genome: Genome) -> tuple[float, float]:
@@ -459,6 +468,10 @@ class TrainingWorker(QThread):
             return
         else:
             self.workers_resolved.emit(n_workers)
+
+        # Expose input transform via module-level slot so fork-child inherits it.
+        import yane.gui.worker as _wmod
+        _wmod._mp_input_transform = getattr(self._yane, '_input_transform', None)
 
         def _make_pool(nw: int):
             return ctx.Pool(

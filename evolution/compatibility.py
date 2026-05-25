@@ -2,9 +2,15 @@
 
 Automatically dispatches to a fast Python path (small networks) or a
 vectorised NumPy path (large networks) based on connection count.
+
+Modular distance metrics (``DistanceMetric`` protocol + built-ins):
+  TopologyDistance   — standard NEAT formula (default)
+  WeightDistance     — average |Δweight| over matching gene pairs
+  ActivationDistance — fraction of non-input nodes with different activation
+  ChainMetric        — weighted sum of multiple metrics
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -15,6 +21,103 @@ if TYPE_CHECKING:
 # faster than NumPy due to array-creation overhead (~13 μs fixed cost).
 # Above it, NumPy's vectorised searchsorted + abs win (crossover measured ~200).
 _COMPAT_NUMPY_THRESHOLD: int = 200
+
+
+# ---------------------------------------------------------------------------
+# DistanceMetric protocol + built-in implementations
+# ---------------------------------------------------------------------------
+
+@runtime_checkable
+class DistanceMetric(Protocol):
+    """Protocol for pluggable genome-pair distance metrics."""
+    def __call__(self, g1: Genome, g2: Genome) -> float: ...
+
+
+class TopologyDistance:
+    """NEAT compatibility distance δ = c1·E/N + c2·D/N + c3·W̄.
+
+    Wraps the module-level ``compatibility()`` function.  When
+    *only_enabled* is True, disabled connections are excluded from the
+    innovation dict (useful for the ``topology_no_disabled`` speciation
+    metric).
+    """
+    def __init__(self, only_enabled: bool = False) -> None:
+        self._only_enabled = only_enabled
+
+    def __call__(self, g1: Genome, g2: Genome) -> float:
+        return compatibility(g1, g2, only_enabled=self._only_enabled)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"TopologyDistance(only_enabled={self._only_enabled})"
+
+
+class WeightDistance:
+    """Average absolute weight difference over shared (matching) gene pairs.
+
+    Returns 0.0 when the two genomes share no connections.
+    """
+    def __call__(self, g1: Genome, g2: Genome) -> float:
+        def _build(g: Genome):
+            return {conn.innovation: conn
+                    for src in g.nodes for conn in src.connections
+                    if conn.innovation >= 0}
+        d1 = _build(g1)
+        d2 = _build(g2)
+        shared = frozenset(d1) & frozenset(d2)
+        if not shared:
+            return 0.0
+        return sum(abs(d1[k].weight - d2[k].weight) for k in shared) / len(shared)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return "WeightDistance()"
+
+
+class ActivationDistance:
+    """Fraction of non-input nodes whose activation function differs.
+
+    Counts positionally (index-aligned); extra nodes in the larger genome
+    all count as mismatches.
+    """
+    def __call__(self, g1: Genome, g2: Genome) -> float:
+        from yane.core.node import NodeType
+        a1 = [n.activation for n in g1.nodes if n.node_type != NodeType.INPUT]
+        a2 = [n.activation for n in g2.nodes if n.node_type != NodeType.INPUT]
+        n = max(len(a1), len(a2))
+        if n == 0:
+            return 0.0
+        diffs = sum(1 for i in range(min(len(a1), len(a2))) if a1[i] != a2[i])
+        diffs += abs(len(a1) - len(a2))
+        return diffs / n
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return "ActivationDistance()"
+
+
+class ChainMetric:
+    """Weighted sum of multiple ``DistanceMetric`` instances.
+
+    Args:
+        metrics:  Iterable of distance metric callables.
+        weights:  Matching scalar weights (default: 1.0 for each metric).
+
+    Example::
+
+        metric = ChainMetric(
+            [TopologyDistance(), WeightDistance()],
+            weights=[0.6, 0.4],
+        )
+    """
+    def __init__(self, metrics, weights=None) -> None:
+        self._metrics = list(metrics)
+        self._weights = list(weights) if weights is not None else [1.0] * len(self._metrics)
+        if len(self._weights) != len(self._metrics):
+            raise ValueError("len(weights) must equal len(metrics)")
+
+    def __call__(self, g1: Genome, g2: Genome) -> float:
+        return sum(w * m(g1, g2) for m, w in zip(self._metrics, self._weights))
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"ChainMetric({self._metrics!r}, weights={self._weights!r})"
 
 
 def compatibility(g1: Genome, g2: Genome, only_enabled: bool = False) -> float:

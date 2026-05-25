@@ -17,6 +17,8 @@ from yane.evolution.species import Species  # noqa: F401 (re-exported for tests)
 from yane.evolution.compatibility import (  # noqa: F401 (re-exported for tests/genome.py)
     compatibility as _compatibility,
     _COMPAT_NUMPY_THRESHOLD,
+    TopologyDistance,
+    DistanceMetric,
 )
 from yane.evolution.multi_objective import pareto_scores
 from yane.evolution.quality_diversity import MAPElitesArchive
@@ -230,6 +232,8 @@ class Population:
         # Diagnostics: rolling window of recent parent fitnesses (last 100).
         self._recent_parent_fitnesses: list[float] = []
         self._recent_parent_fitness_max: int = 100
+        # Pluggable compatibility distance — defaults to NEAT topology metric.
+        self.compatibility_distance: DistanceMetric = TopologyDistance()
 
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
@@ -244,6 +248,7 @@ class Population:
         self.__dict__.setdefault("selection_strategies_by_species", {})
         self.__dict__.setdefault("_recent_parent_fitnesses", [])
         self.__dict__.setdefault("_recent_parent_fitness_max", 100)
+        self.__dict__.setdefault("compatibility_distance", TopologyDistance())
         self.__dict__.setdefault("_interspecies_crossover_mode", "fixed")
         self.__dict__.setdefault("_interspecies_crossover_min", 0.0)
         self.__dict__.setdefault("_interspecies_crossover_max", 0.2)
@@ -726,13 +731,13 @@ class Population:
         Returns the newly created Species, or None if genome was force-assigned.
         """
         cap = max(self._effective_target_species(), self.max_size // 2)
-        _only_enabled = self._speciation_metric == "topology_no_disabled"
         if self._species and len(self._species) >= cap:
             # Force-assign to nearest existing species by compatibility distance.
+            _cd = self.compatibility_distance
             nearest = min(
                 self._species,
                 key=lambda sp: (
-                    _compatibility(genome, sp.representative, _only_enabled)
+                    _cd(genome, sp.representative)
                     if sp.representative is not None else float('inf')
                 ),
             )
@@ -775,7 +780,7 @@ class Population:
         removes genomes that are evicted right after submission.
         """
         threshold = self._compat_threshold
-        _only_enabled = self._speciation_metric == "topology_no_disabled"
+        _cd = self.compatibility_distance
         placed = False
 
         # Try last-known species first (O(1) id-match with small species list).
@@ -784,7 +789,7 @@ class Population:
             for sp in self._species:
                 if id(sp) == last_id:
                     if (sp.representative is not None
-                            and _compatibility(genome, sp.representative, _only_enabled) < threshold):
+                            and _cd(genome, sp.representative) < threshold):
                         sp.members.append(genome)
                         if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                             sp._cached_best = genome
@@ -794,7 +799,7 @@ class Population:
         if not placed:
             for sp in self._species:
                 if (sp.representative is not None
-                        and _compatibility(genome, sp.representative, _only_enabled) < threshold):
+                        and _cd(genome, sp.representative) < threshold):
                     sp.members.append(genome)
                     if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                         sp._cached_best = genome
@@ -820,7 +825,7 @@ class Population:
         could accumulate from the incremental path over many generations.
         """
         threshold = self._compat_threshold
-        _only_enabled = self._speciation_metric == "topology_no_disabled"
+        _cd = self.compatibility_distance
 
         if (self._force_full_assign_interval > 0
                 and self._spawn_count % self._force_full_assign_interval == 0):
@@ -838,7 +843,7 @@ class Population:
                 last_sp_id = genome._last_species_id
                 if last_sp_id is not None:
                     sp = species_by_id.get(last_sp_id)
-                    if sp is not None and _compatibility(genome, sp.representative, _only_enabled) < threshold:
+                    if sp is not None and _cd(genome, sp.representative) < threshold:
                         sp.members.append(genome)
                         if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                             sp._cached_best = genome
@@ -846,7 +851,7 @@ class Population:
 
                 if not placed:
                     for sp in self._species:
-                        if _compatibility(genome, sp.representative, _only_enabled) < threshold:
+                        if _cd(genome, sp.representative) < threshold:
                             sp.members.append(genome)
                             if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                                 sp._cached_best = genome
@@ -880,7 +885,7 @@ class Population:
                 placed = False
                 for sp in self._species:
                     if (sp.members and sp.representative is not None
-                            and _compatibility(genome, sp.representative, _only_enabled) < threshold):
+                            and _cd(genome, sp.representative) < threshold):
                         sp.members.append(genome)
                         if sp._cached_best is None or genome.fitness > sp._cached_best.fitness:
                             sp._cached_best = genome
@@ -910,7 +915,7 @@ class Population:
                     if not self._species[j].members:
                         continue
                     sp_a, sp_b = self._species[i], self._species[j]
-                    if _compatibility(sp_a.representative, sp_b.representative, _only_enabled) < threshold:
+                    if _cd(sp_a.representative, sp_b.representative) < threshold:
                         bigger, smaller = (
                             (sp_a, sp_b) if len(sp_a.members) >= len(sp_b.members)
                             else (sp_b, sp_a)

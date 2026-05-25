@@ -208,6 +208,14 @@ class NeuroEvolution:
         # Selection strategy (None = population uses its own default TournamentSelection)
         self._selection_strategy = None
         self._selection_strategies_by_species: dict = {}
+        # Compatibility distance (None = population uses its own default TopologyDistance)
+        self._compatibility_distance = None
+        # Input transform applied to genome.forward() inputs (None = disabled)
+        self._input_transform = None
+        self._n_raw_inputs: int | None = None
+        # Run report autosave (None = disabled)
+        self._report_autosave_template: str | None = None
+        self._report_autosave_format: str = "html"
 
     @property
     def current_genome(self) -> Genome | None:
@@ -349,6 +357,20 @@ class NeuroEvolution:
             self._population.selection_strategies_by_species = dict(
                 self._selection_strategies_by_species
             )
+        # Apply compatibility distance override if set before configure().
+        if self._compatibility_distance is not None:
+            self._population.compatibility_distance = self._compatibility_distance
+        # Validate input transform dimensions.
+        if self._input_transform is not None and self._n_raw_inputs is not None:
+            try:
+                _dummy_out = self._input_transform([0.0] * self._n_raw_inputs)
+                if len(_dummy_out) != self._n_inputs:
+                    raise ValueError(
+                        f"set_input_transform: transform output length {len(_dummy_out)}"
+                        f" != n_inputs {self._n_inputs} (n_raw_inputs={self._n_raw_inputs})"
+                    )
+            except (TypeError, AttributeError):
+                pass
 
     def set_seed(self, seed: int | None) -> None:
         """Set or clear the random seed.
@@ -1787,6 +1809,10 @@ class NeuroEvolution:
             raise ValueError(f"Unknown speciation metric: {metric}")
         if self._population is not None:
             self._population._speciation_metric = metric
+            from yane.evolution.compatibility import TopologyDistance as _TD
+            if type(self._population.compatibility_distance) is _TD:
+                only_enabled = metric == "topology_no_disabled"
+                self._population.compatibility_distance = _TD(only_enabled=only_enabled)
 
     # ── Getters ────────────────────────────────────────────────────────────
 
@@ -2506,21 +2532,29 @@ class NeuroEvolution:
     ) -> EvaluationResult:
         if self._matrix_forward_enabled:
             return self._run_with_matrix_forward(genome, fitness_fn)
-        original_fn = fitness_fn
-        if self._eval_middlewares:
-            import inspect
-            if not inspect.isgeneratorfunction(fitness_fn):
-                def _wrapped(g: Genome):
-                    ctx = EvalContext()
-                    value = apply_middleware(g, original_fn, self._eval_middlewares, ctx)
-                    self._eval_middleware_diagnostics.update(ctx.diagnostics)
-                    return value
-                fitness_fn = _wrapped
-        result = self._runner.run(genome, fitness_fn, self._population, self._lamarck)
-        _cs = getattr(original_fn, "_component_scores", None)
-        if _cs:
-            self._eval_middleware_diagnostics["evaluator_components"] = dict(_cs)
-        return result
+        if self._input_transform is not None:
+            _t = self._input_transform
+            _orig_fwd = genome.forward
+            genome.__dict__["forward"] = lambda data: _orig_fwd(_t(data))
+        try:
+            original_fn = fitness_fn
+            if self._eval_middlewares:
+                import inspect
+                if not inspect.isgeneratorfunction(fitness_fn):
+                    def _wrapped(g: Genome):
+                        ctx = EvalContext()
+                        value = apply_middleware(g, original_fn, self._eval_middlewares, ctx)
+                        self._eval_middleware_diagnostics.update(ctx.diagnostics)
+                        return value
+                    fitness_fn = _wrapped
+            result = self._runner.run(genome, fitness_fn, self._population, self._lamarck)
+            _cs = getattr(original_fn, "_component_scores", None)
+            if _cs:
+                self._eval_middleware_diagnostics["evaluator_components"] = dict(_cs)
+            return result
+        finally:
+            if self._input_transform is not None:
+                genome.__dict__.pop("forward", None)
 
     def _run_with_matrix_forward(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]
@@ -2531,10 +2565,13 @@ class NeuroEvolution:
             try:
                 exported = self._matrix_cache.get(genome)
                 _exp = exported
+                _t = self._input_transform
 
                 def _matrix_fwd(data):
                     if type(data) is not list:
                         data = [float(x) for x in data]
+                    if _t is not None:
+                        data = _t(data)
                     return forward_matrix(_exp, data)
 
                 genome.__dict__["forward"] = _matrix_fwd
@@ -2544,6 +2581,11 @@ class NeuroEvolution:
                 self._matrix_misses += 1
         else:
             self._matrix_misses += 1
+            if self._input_transform is not None:
+                _t = self._input_transform
+                _orig_fwd = genome.forward
+                genome.__dict__["forward"] = lambda data: _orig_fwd(_t(data))
+                patched = True
         original_fn = fitness_fn
         try:
             if self._eval_middlewares:
@@ -2879,6 +2921,7 @@ class NeuroEvolution:
                     stop_reason=stop_reason or "manual",
                     artifacts=artifacts,
                 )
+                self._autosave_report(name, self._active_run_id)
             except Exception:
                 pass
 
@@ -3158,6 +3201,67 @@ class NeuroEvolution:
             if self._population is not None:
                 self._population.selection_strategy = self._selection_strategy
 
+    def set_compatibility_distance(self, metric) -> None:
+        """Set the genome-pair compatibility distance used for speciation.
+
+        Args:
+            metric: Any callable ``(g1, g2) -> float`` implementing the
+                ``DistanceMetric`` protocol.  Pass ``None`` to reset to the
+                default ``TopologyDistance()``.
+
+        Built-in metrics (importable from ``yane.evolution.compatibility``)::
+
+            TopologyDistance(only_enabled=False)  # default — standard NEAT
+            WeightDistance()                      # avg |Δweight| of shared genes
+            ActivationDistance()                  # fraction of differing activations
+            ChainMetric([m1, m2], weights=[...])  # weighted sum
+
+        Example — combine topology and weight signals::
+
+            from yane.evolution.compatibility import TopologyDistance, WeightDistance, ChainMetric
+            ne.set_compatibility_distance(
+                ChainMetric([TopologyDistance(), WeightDistance()], weights=[0.7, 0.3])
+            )
+        """
+        from yane.evolution.compatibility import TopologyDistance as _TD
+        self._compatibility_distance = metric if metric is not None else _TD()
+        if self._population is not None:
+            self._population.compatibility_distance = self._compatibility_distance
+
+    def set_input_transform(self, fn, n_raw_inputs: int | None = None) -> None:
+        """Set a preprocessing transform applied to every ``genome.forward()`` call.
+
+        The transform receives the raw network inputs and returns the
+        (possibly different-length) vector that is actually passed to the
+        network.  This is useful for feature extraction, normalisation, or
+        dimensionality reduction without modifying the fitness function.
+
+        Args:
+            fn:            Callable ``list[float] -> list[float]``.  Pass
+                           ``None`` to remove a previously set transform.
+            n_raw_inputs:  Expected length of the raw input vector *before*
+                           the transform.  When provided and ``configure()``
+                           has already been called, the transform output
+                           length is validated against ``n_inputs``.
+
+        Example — normalise raw gym observations::
+
+            ne.set_input_transform(lambda obs: [x / 4.8 for x in obs])
+            ne.configure(n_inputs=4, n_outputs=2)
+        """
+        self._input_transform = fn
+        self._n_raw_inputs = n_raw_inputs
+        if fn is not None and n_raw_inputs is not None and self._population is not None:
+            try:
+                dummy_out = fn([0.0] * n_raw_inputs)
+                if len(dummy_out) != self._n_inputs:
+                    raise ValueError(
+                        f"set_input_transform: transform output length {len(dummy_out)}"
+                        f" != n_inputs {self._n_inputs} (n_raw_inputs={n_raw_inputs})"
+                    )
+            except (TypeError, AttributeError):
+                pass
+
     # ── Genome export ─────────────────────────────────────────────────────────
 
     def export_genome_python(self, path: str | None = None) -> str:
@@ -3182,6 +3286,93 @@ class NeuroEvolution:
         from yane.evolution.genome_export import genome_to_numpy_weights
         self._ensure_configured()
         return genome_to_numpy_weights(self._population.get_best())
+
+    # ── Run reports ───────────────────────────────────────────────────────────
+
+    def set_report_autosave(
+        self,
+        path_template: str | None = "{run_name}_{run_id_short}.{format}",
+        format: str = "html",
+    ) -> None:
+        """Enable automatic report generation at the end of each training run.
+
+        The report is written right after ``_write_run_summary()`` completes.
+        Requires a ``RunDatabase`` to be active (``set_run_database()``).
+
+        Args:
+            path_template: Path template for the report file.  Supports
+                ``{run_name}``, ``{run_id}``, ``{run_id_short}`` (first 8
+                chars), ``{format}`` (the *format* argument).
+                Pass ``None`` to disable autosave.
+            format: ``"html"`` (default), ``"json"``, or ``"md"``.
+        """
+        self._report_autosave_template = path_template
+        self._report_autosave_format = format
+
+    def export_run_report(
+        self,
+        path: str | Path | None = None,
+        format: str = "html",
+        run_id: str | None = None,
+    ) -> str:
+        """Generate a postmortem report for a training run.
+
+        Reads the run record from the active ``RunDatabase``.
+
+        Args:
+            path:   Write the report to this file path (optional).
+            format: ``"html"`` (default), ``"json"``, or ``"md"``.
+            run_id: Specific run ID to report on.  Defaults to the most
+                    recently completed run in the active DB.
+
+        Returns:
+            Report text in the requested format.
+
+        Raises:
+            RuntimeError: if no RunDatabase is active or no runs are found.
+        """
+        if self._run_database is None:
+            raise RuntimeError(
+                "export_run_report requires a RunDatabase. Call set_run_database() first."
+            )
+        from yane.util.run_report import generate_run_report
+        if run_id is not None:
+            run = self._run_database.load_run(run_id)
+            if run is None:
+                raise RuntimeError(f"Run '{run_id}' not found in database.")
+        else:
+            runs = self._run_database.list_runs()
+            if not runs:
+                raise RuntimeError("No runs found in the database.")
+            run = runs[-1]
+        text = generate_run_report(run, format=format)
+        if path is not None:
+            Path(path).write_text(text, encoding="utf-8")
+        return text
+
+    def _autosave_report(self, run_name: str, run_id: str) -> None:
+        """Write the autosave report if configured.  Called at end of train()."""
+        if self._report_autosave_template is None:
+            return
+        if self._run_database is None:
+            return
+        try:
+            from yane.util.run_report import generate_run_report
+            run = self._run_database.load_run(run_id)
+            if run is None:
+                return
+            fmt = self._report_autosave_format
+            short_id = run_id[:8] if run_id else "unknown"
+            safe_name = (run_name or "run").replace("/", "_").replace(" ", "_")
+            out_path = self._report_autosave_template.format(
+                run_name=safe_name,
+                run_id=run_id,
+                run_id_short=short_id,
+                format=fmt,
+            )
+            Path(out_path).write_text(generate_run_report(run, format=fmt), encoding="utf-8")
+        except Exception:
+            pass
 
     def _ensure_configured(self) -> None:
         if not self.is_configured:
