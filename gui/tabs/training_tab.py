@@ -1484,11 +1484,15 @@ class TrainingTab(QWidget):
 
     def _setup_gui_run_logging(self, ex) -> None:
         from yane.util.logger import setup_logging as _setup_log, write_json as _wj, log_info as _li
+        from yane.benchmarks import wire_db, BENCHMARK_DB_PATH
+
+        wire_db(self._yane, f"gui/{ex.name}", BENCHMARK_DB_PATH)
 
         log_dir = _setup_log(f"gui/{ex.name}")
         self._yane._log_run_dir = log_dir
         self._yane._log_run_name = ex.name
-        _wj(log_dir / "config.json", self._yane._config_dict())
+        if self._yane._run_database is None:
+            _wj(log_dir / "config.json", self._yane._config_dict())
         if self.preset_combo.currentIndex() in self._preset_by_index:
             preset = self._preset_by_index[self.preset_combo.currentIndex()]
             _wj(log_dir / "preset.json", preset.to_json())
