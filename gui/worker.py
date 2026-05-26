@@ -122,10 +122,8 @@ class TrainingWorker(QThread):
             self._run_sequential(last_emit)
             return
 
-        # Some evaluators (e.g. Atari/ALE) link against system Qt6 which
-        # conflicts with PySide6's bundled Qt6 in this process.  They signal
-        # this via _requires_clean_process=True and must run in spawn workers.
-        use_spawn = getattr(self._make_eval_fn, '_requires_clean_process', False)
+        from yane.gui._mp_eval import SpawnRequired
+        use_spawn = isinstance(self._make_eval_fn, SpawnRequired)
 
         n_workers = getattr(self._yane, '_n_workers', 1)
         if n_workers == 0:
@@ -136,16 +134,13 @@ class TrainingWorker(QThread):
             self._run_multiprocess(n_workers, last_emit, auto=False,
                                    use_spawn=use_spawn)
         else:
+            self.workers_resolved.emit(1)
             if use_spawn:
-                # Sequential mode can't call gym.make in this process — run
-                # via a single spawn worker instead.
-                self.workers_resolved.emit(1)
                 self.info_message.emit(
                     "Atari: läuft in separatem Prozess (kein Qt-Konflikt)."
                 )
                 self._run_multiprocess(1, last_emit, auto=False, use_spawn=True)
             else:
-                self.workers_resolved.emit(1)
                 self._run_sequential(last_emit)
 
     def _run_sequential(self, last_emit: float, auto: bool = False) -> None:
@@ -419,28 +414,27 @@ class TrainingWorker(QThread):
                 f"Auto → {n_workers} Worker "
                 f"({eval_ms:.2f}ms/Genome, EMA justiert laufend)"
             )
-        elif chosen <= 1:
-            if not use_spawn:
-                self.workers_resolved.emit(1)
-                self.info_message.emit(
-                    f"MP-Overhead > Nutzen ({eval_ms:.2f}ms/Genome, "
-                    f"seq={seq_time:.0f}ms ≤ overhead={_OVERHEAD_MS:.0f}ms) "
-                    f"— Training läuft sequenziell."
-                )
-                self._run_sequential(0.0)
-                return
-            self.workers_resolved.emit(n_workers)
+        elif chosen <= 1 and not use_spawn:
+            self.workers_resolved.emit(1)
+            self.info_message.emit(
+                f"MP-Overhead > Nutzen ({eval_ms:.2f}ms/Genome, "
+                f"seq={seq_time:.0f}ms ≤ overhead={_OVERHEAD_MS:.0f}ms) "
+                f"— Training läuft sequenziell."
+            )
+            self._run_sequential(0.0)
+            return
         else:
             self.workers_resolved.emit(n_workers)
 
         # Fork: expose input transform via module-level slot so child inherits it.
         # Spawn: pass it explicitly via initargs (fork globals aren't inherited).
+        input_transform = getattr(self._yane, '_input_transform', None)
         if not use_spawn:
             import yane.gui._mp_eval as _mp_eval_mod
-            _mp_eval_mod._mp_input_transform = getattr(self._yane, '_input_transform', None)
+            _mp_eval_mod._mp_input_transform = input_transform
 
         def _make_pool(nw: int):
-            extra = (getattr(self._yane, '_input_transform', None),) if use_spawn else ()
+            extra = (input_transform,) if use_spawn else ()
             return ctx.Pool(
                 processes=nw,
                 initializer=_mp_initializer,

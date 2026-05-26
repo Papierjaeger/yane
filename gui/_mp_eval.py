@@ -10,6 +10,16 @@ import time
 from yane.core.genome import Genome
 from yane.neuro_evolution import _aggregate_fitnesses
 
+class SpawnRequired:
+    """Mixin for eval-maker classes that must run in a spawn subprocess.
+
+    Inherit from this instead of setting _requires_clean_process manually.
+    TrainingWorker checks isinstance(make_eval_fn, SpawnRequired) to decide
+    whether to use spawn (clean process, no Qt6 conflict) instead of fork.
+    """
+    __slots__ = ()
+
+
 _mp_eval_fn         = None
 _mp_n_evaluations   = 1
 _mp_aggregation     = "mean"

@@ -7,6 +7,7 @@ from yane.core.genome import Genome
 from yane.evolution.evaluator_components import (
     EvaluatorSpec, GraphPolicyScore, StateEncoder,
 )
+from yane.gui._mp_eval import SpawnRequired
 
 # Dataset examples — import make_eval and metadata directly from each example
 # package so there is exactly one implementation (no duplication).
@@ -637,15 +638,13 @@ def _downsample_grayscale(obs, grid_h: int, grid_w: int):
     return (small.flatten() / 255.0).tolist()
 
 
-class _AtariEvalMaker:
+class _AtariEvalMaker(SpawnRequired):
     """Picklable make-eval factory for ALE/Atari environments.
 
-    Defined as a class instead of a closure so it can be transmitted to
-    spawn-based subprocesses.  ale_py links against system Qt6 which conflicts
-    with PySide6's bundled Qt6 in the GUI process; spawn workers start without
-    PySide6, so the conflict doesn't exist there.
+    Inherits SpawnRequired so TrainingWorker runs evaluations in a clean
+    spawn subprocess — ale_py links against system Qt6 which conflicts with
+    PySide6's bundled Qt6 in the GUI process.
     """
-    _requires_clean_process = True  # signal to TrainingWorker to use spawn
 
     def __init__(self, env_id: str, grid_h: int = 14, grid_w: int = 16,
                  max_steps: int = 1000) -> None:
