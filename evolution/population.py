@@ -208,6 +208,8 @@ class Population:
         self._speciation_enabled: bool = True
         self._crossover_enabled: bool = True
         self._diversity_injection_enabled: bool = True
+        # Weight inheritance: blend_alpha < 0 = disabled (50/50 random pick)
+        self._weight_blend_alpha: float = -1.0
 
         # Adaptive Operator Scheduler — applies adaptive mutation weights.
         # Set to None to disable (default). Assigned by NeuroEvolution.
@@ -1514,7 +1516,14 @@ class Population:
                     candidates = [g for g in self._evaluated if g is not parent]
                 other = random.choice(candidates)
             fitter, weaker = (parent, other) if parent.fitness >= other.fitness else (other, parent)
-            child = fitter.crossover(weaker)
+            child = fitter.crossover(weaker, blend_alpha=self._weight_blend_alpha)
+            if self._tracker is not None and hasattr(self._tracker, "record_crossover"):
+                _pids = getattr(child, "_parent_ids", [])
+                self._tracker.record_crossover(
+                    _pids[0] if _pids else -1,
+                    getattr(child, "_genome_id", -1),
+                    self._spawn_count,
+                )
             self._n_crossover += 1
             if use_interspecies:
                 child._interspecies_parent_fitness = _interspecies_parent_fitness

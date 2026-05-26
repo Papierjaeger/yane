@@ -284,6 +284,213 @@ def test_case_batch_middleware_validation_does_not_affect_selection_fitness():
     assert diag["case_success_rate"] == 1.0
 
 
+def test_noise_middleware_averages_over_n_samples():
+    from yane.evolution.eval_middleware import NoiseMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    mw = NoiseMiddleware(sigma=0.1, n_samples=5, aggregation="mean")
+    yane.add_eval_middleware(mw)
+    g = yane.population.select_for_evaluation()
+    result = yane._run_evaluations(g, lambda _g: 1.0)
+    assert result.fitness == 1.0
+    diag = yane.population_memory_info()["eval_middleware"]
+    assert diag["noise_sigma"] == 0.1
+    assert diag["noise_n_samples"] == 5
+    assert len(diag["noise_raw_values"]) == 5
+
+
+def test_noise_middleware_sigma_zero_is_noop():
+    from yane.evolution.eval_middleware import NoiseMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    mw = NoiseMiddleware(sigma=0.0, n_samples=3, aggregation="mean")
+    yane.add_eval_middleware(mw)
+    g = yane.population.select_for_evaluation()
+    result = yane._run_evaluations(g, lambda _g: 42.0)
+    assert result.fitness == 42.0
+
+
+def test_noise_middleware_aggregation_min():
+    from yane.evolution.eval_middleware import NoiseMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    mw = NoiseMiddleware(sigma=0.0, n_samples=3, aggregation="min")
+    yane.add_eval_middleware(mw)
+    g = yane.population.select_for_evaluation()
+    # With sigma=0, all evaluations return the same value
+    result = yane._run_evaluations(g, lambda _g: 7.0)
+    assert result.fitness == 7.0
+
+
+def test_noise_middleware_aggregation_max():
+    from yane.evolution.eval_middleware import NoiseMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    mw = NoiseMiddleware(sigma=0.0, n_samples=3, aggregation="max")
+    yane.add_eval_middleware(mw)
+    g = yane.population.select_for_evaluation()
+    result = yane._run_evaluations(g, lambda _g: 7.0)
+    assert result.fitness == 7.0
+
+
+def test_noise_middleware_aggregation_median():
+    from yane.evolution.eval_middleware import NoiseMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    mw = NoiseMiddleware(sigma=0.0, n_samples=3, aggregation="median")
+    yane.add_eval_middleware(mw)
+    g = yane.population.select_for_evaluation()
+    result = yane._run_evaluations(g, lambda _g: 7.0)
+    assert result.fitness == 7.0
+
+
+def test_noise_middleware_original_genome_not_modified():
+    from yane.evolution.eval_middleware import NoiseMiddleware
+    from yane.neuro_evolution import NeuroEvolution
+
+    yane = NeuroEvolution()
+    yane.configure(1, 1)
+    mw = NoiseMiddleware(sigma=0.5, n_samples=2)
+    yane.add_eval_middleware(mw)
+    g = yane.population.select_for_evaluation()
+    original_nodes = len(g.nodes)
+    original_weights = [
+        conn.weight
+        for node in g.nodes
+        for conn in node.connections
+        if conn.enabled
+    ]
+    yane._run_evaluations(g, lambda _g: 1.0)
+    # Genome should be unchanged
+    assert len(g.nodes) == original_nodes
+    current_weights = [
+        conn.weight
+        for node in g.nodes
+        for conn in node.connections
+        if conn.enabled
+    ]
+    assert current_weights == original_weights
+
+
+def test_noise_middleware_invalid_params():
+    from yane.evolution.eval_middleware import NoiseMiddleware
+    import pytest
+
+    with pytest.raises(ValueError, match="sigma must be >= 0"):
+        NoiseMiddleware(sigma=-0.1)
+    with pytest.raises(ValueError, match="n_samples must be >= 1"):
+        NoiseMiddleware(n_samples=0)
+    with pytest.raises(ValueError, match="aggregation must be"):
+        NoiseMiddleware(aggregation="invalid")
+
+
+# ---------------------------------------------------------------------------
+# Auto Fitness Shaping
+# ---------------------------------------------------------------------------
+
+class TestFitnessLandscapeAnalyzer:
+
+    def test_analyze_skewed_recommends_rank_transform(self):
+        from yane.evolution.fitness_transform import FitnessLandscapeAnalyzer
+        # Create genomes with highly skewed fitness (one outlier, rest similar)
+        class FakeGenome:
+            def __init__(self, fitness):
+                self.raw_fitness = fitness
+                self.fitness = fitness
+                self._last_species_id = 0
+
+        genomes = [FakeGenome(0.1) for _ in range(50)]
+        genomes.append(FakeGenome(10.0))  # outlier
+        report = FitnessLandscapeAnalyzer.analyze(genomes)
+        assert abs(report.skewness) > 1.0, f"Expected skew, got {report.skewness}"
+        assert "apply RankTransform" in report.recommendations
+
+    def test_analyze_plateau_recommends_sigma_scaling(self):
+        from yane.evolution.fitness_transform import FitnessLandscapeAnalyzer
+        class FakeGenome:
+            def __init__(self, fitness):
+                self.raw_fitness = fitness
+                self.fitness = fitness
+                self._last_species_id = 0
+
+        # All genomes have nearly identical fitness (plateau)
+        genomes = [FakeGenome(0.5 + i * 1e-6) for i in range(100)]
+        report = FitnessLandscapeAnalyzer.analyze(genomes)
+        assert report.plateau_fraction > 0.5, f"Expected plateau, got {report.plateau_fraction}"
+        assert "apply SigmaScaling" in report.recommendations
+
+    def test_recommend_transform_returns_rank(self):
+        from yane.evolution.fitness_transform import (
+            FitnessLandscapeAnalyzer, FitnessLandscapeReport, RankTransform,
+        )
+        report = FitnessLandscapeReport(skewness=2.0, recommendations=["apply RankTransform"])
+        transform = FitnessLandscapeAnalyzer.recommend_transform(report)
+        assert transform is not None
+        assert isinstance(transform, RankTransform)
+
+    def test_recommend_transform_returns_sigma_scaling(self):
+        from yane.evolution.fitness_transform import (
+            FitnessLandscapeAnalyzer, FitnessLandscapeReport, SigmaScaling,
+        )
+        report = FitnessLandscapeReport(
+            plateau_fraction=0.8,
+            recommendations=["apply SigmaScaling"],
+        )
+        transform = FitnessLandscapeAnalyzer.recommend_transform(report)
+        assert transform is not None
+        assert isinstance(transform, SigmaScaling)
+
+    def test_recommend_transform_returns_none_for_healthy(self):
+        from yane.evolution.fitness_transform import (
+            FitnessLandscapeAnalyzer, FitnessLandscapeReport,
+        )
+        report = FitnessLandscapeReport()  # no issues
+        transform = FitnessLandscapeAnalyzer.recommend_transform(report)
+        assert transform is None
+
+    def test_empty_population_returns_default_report(self):
+        from yane.evolution.fitness_transform import FitnessLandscapeAnalyzer
+        report = FitnessLandscapeAnalyzer.analyze([])
+        assert report.sparsity_score == 0.0
+        assert report.plateau_fraction == 0.0
+        assert report.skewness == 0.0
+
+    def test_auto_fitness_shaping_api(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.set_auto_fitness_shaping(True)
+        assert yane._auto_fitness_shaping_enabled is True
+        yane.set_auto_fitness_shaping(False)
+        assert yane._auto_fitness_shaping_enabled is False
+
+    def test_auto_shaping_integration(self):
+        """Auto shaping applies transform during train()."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        yane.set_max_iterations(60)
+        yane.set_auto_fitness_shaping(True)
+        # Use a fitness function that creates skewed distribution
+        import random
+        def _skewed_eval(g):
+            return random.random() ** 3  # skewed toward 0
+        yane.train(_skewed_eval)
+        # After 60 iterations (≥ one 50-iter boundary check), a transform
+        # should have been set if the landscape was skewed enough.
+        mem = yane.population_memory_info()
+        assert yane._auto_fitness_shaping_enabled
+
+
 # ---------------------------------------------------------------------------
 # Event System
 # ---------------------------------------------------------------------------

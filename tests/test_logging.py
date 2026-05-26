@@ -198,5 +198,127 @@ class TestTrainLogging(unittest.TestCase):
         self.assertIn("training", log_dir_str)
 
 
+# ---------------------------------------------------------------------------
+# Run report (Generationsreport / Run-Postmortem)
+# ---------------------------------------------------------------------------
+
+class TestRunReport(unittest.TestCase):
+    """Tests for export_run_report() and set_report_autosave()."""
+    _orig_log_root = logmod.log_root
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        logmod.log_root = Path(self._tmp)
+
+    def tearDown(self):
+        logmod.log_root = self._orig_log_root
+
+    def _train_briefly(self, n_iter=50):
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        yane.set_max_iterations(n_iter)
+        yane.train(_dummy_fitness, run_name="report_test")
+        return yane
+
+    def test_export_html(self):
+        yane = self._train_briefly()
+        out = Path(self._tmp) / "report.html"
+        iters = yane.train(_dummy_fitness, run_name="html_test")
+        content = yane.export_run_report(
+            str(out), fmt="html",
+            stop_reason="target_reached",
+            iterations=iters,
+        )
+        self.assertTrue(out.exists())
+        self.assertIn("<svg", content)
+        self.assertIn("Run Report", content)
+        self.assertIn("Best Genome", content)
+        self.assertIn("Configuration", content)
+
+    def test_export_json(self):
+        yane = self._train_briefly()
+        out = Path(self._tmp) / "report.json"
+        iters = yane.train(_dummy_fitness, run_name="json_test")
+        content = yane.export_run_report(
+            str(out), fmt="json",
+            stop_reason="manual",
+            iterations=iters,
+        )
+        self.assertTrue(out.exists())
+        import json
+        data = json.loads(content)
+        self.assertIn("run_name", data)
+        self.assertIn("best_fitness", data)
+        self.assertIn("fitness_history", data)
+        self.assertIn("config", data)
+        self.assertIn("stop_reason", data)
+
+    def test_export_markdown(self):
+        yane = self._train_briefly()
+        out = Path(self._tmp) / "report.md"
+        iters = yane.train(_dummy_fitness, run_name="md_test")
+        content = yane.export_run_report(
+            str(out), fmt="md",
+            stop_reason="target_reached",
+            iterations=iters,
+        )
+        self.assertTrue(out.exists())
+        self.assertIn("Run Report", content)
+        self.assertIn("Best Genome", content)
+        self.assertIn("Fitness Progress", content)
+
+    def test_invalid_format_raises(self):
+        yane = self._train_briefly()
+        out = Path(self._tmp) / "bad.txt"
+        with self.assertRaises(ValueError):
+            yane.export_run_report(str(out), fmt="txt")
+
+    def test_set_report_autosave(self):
+        """set_report_autosave causes a report to be written after train()."""
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        yane.set_max_iterations(30)
+        yane.set_report_autosave("{name}_{date}_report.html")
+        yane.train(_dummy_fitness, run_name="autosave_test")
+        # The autosave template without path separators places the file in
+        # the run log directory.
+        log_dir = yane._log_run_dir
+        self.assertIsNotNone(log_dir)
+        # Find the report in the log directory.
+        found = list(log_dir.glob("*report*"))
+        self.assertGreaterEqual(len(found), 1,
+            msg=f"Expected report in {log_dir}, found {list(log_dir.iterdir())}")
+
+    def test_report_contains_best_genome_details(self):
+        yane = self._train_briefly(60)
+        out = Path(self._tmp) / "detail.html"
+        iters = yane.train(_dummy_fitness, run_name="detail_test")
+        content = yane.export_run_report(
+            str(out), fmt="html",
+            stop_reason="target_reached",
+            iterations=iters,
+        )
+        # Should contain node and connection tables
+        self.assertIn("<th>ID</th>", content)
+        self.assertIn("<th>Weight</th>", content)
+        best = yane.get_best()
+        # Fitness is formatted with :.6f in the report
+        self.assertIn(f"{best.fitness:.6f}", content)
+
+    def test_report_valid_svg(self):
+        """HTML report contains valid SVG with fitness data."""
+        yane = self._train_briefly(80)
+        out = Path(self._tmp) / "svg.html"
+        iters = yane.train(_dummy_fitness, run_name="svg_test")
+        content = yane.export_run_report(
+            str(out), fmt="html",
+            stop_reason="target_reached",
+            iterations=iters,
+        )
+        # Must contain an SVG with polyline
+        self.assertIn("<polyline", content)
+        self.assertIn('stroke="#2196F3"', content)
+
+
 if __name__ == "__main__":
     unittest.main()

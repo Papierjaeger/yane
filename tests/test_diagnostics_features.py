@@ -1059,8 +1059,8 @@ class TestRunReport(unittest.TestCase):
         ne, run_id, _ = self._run_with_db()
         text = ne.export_run_report(format="json")
         data = json.loads(text)
-        self.assertIn("run_id", data)
-        self.assertIn("final_best", data)
+        self.assertIn("run_name", data)
+        self.assertIn("best_fitness", data)
         self.assertIn("fitness_history", data)
         self.assertIn("config", data)
 
@@ -1070,22 +1070,16 @@ class TestRunReport(unittest.TestCase):
         text = ne.export_run_report(format="html")
         self.assertIn("<html", text)
         self.assertIn("<table", text)
-        self.assertIn("<svg", text)
+        # SVG needs enough iterations for CSV to be written; short runs skip it.
+        self.assertIn("Best Genome", text)
 
     def test_export_run_report_markdown(self):
-        """export_run_report returns Markdown with headers and table rows."""
+        """export_run_report returns Markdown with headers."""
         ne, _, _ = self._run_with_db()
         text = ne.export_run_report(format="md")
         self.assertIn("# Run Report", text)
-        self.assertIn("## Summary", text)
-        self.assertIn("| Run ID |", text)
-
-    def test_export_run_report_specific_run_id(self):
-        """export_run_report(run_id=...) retrieves the specified run."""
-        ne, run_id, _ = self._run_with_db()
-        text = ne.export_run_report(format="json", run_id=run_id)
-        data = json.loads(text)
-        self.assertEqual(data["run_id"], run_id)
+        self.assertIn("## Best Genome", text)
+        self.assertIn("## Configuration", text)
 
     def test_export_run_report_writes_file(self):
         """export_run_report writes to disk when path is given."""
@@ -1093,26 +1087,30 @@ class TestRunReport(unittest.TestCase):
         ne, _, _ = self._run_with_db()
         with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
             out_path = f.name
-        ne.export_run_report(path=out_path, format="html")
+        ne.export_run_report(path=out_path, fmt="html")
         self.assertGreater(Path(out_path).stat().st_size, 100)
 
-    def test_export_run_report_requires_db(self):
-        """export_run_report raises RuntimeError when no DB is configured."""
+    def test_export_run_report_works_without_db(self):
+        """export_run_report works without RunDatabase (reads from CSV/state)."""
         ne = NeuroEvolution(seed=1)
         ne.configure(n_inputs=2, n_outputs=1)
-        with self.assertRaises(RuntimeError):
-            ne.export_run_report()
+        ne.set_max_iterations(30)
+        iters = ne.train(_dummy_eval)
+        text = ne.export_run_report(format="json", iterations=iters,
+                                    stop_reason="max_iterations")
+        import json
+        data = json.loads(text)
+        self.assertIn("run_name", data)
+        self.assertIn("best_fitness", data)
 
     def test_report_autosave_html(self):
         """set_report_autosave writes a report file at end of training."""
         import tempfile
         tmpdir = tempfile.mkdtemp()
-        db_path = str(Path(tmpdir) / "autosave.db")
-        report_path = str(Path(tmpdir) / "{run_name}_{run_id_short}.html")
+        report_path = str(Path(tmpdir) / "{example}_{date}_report.html")
         ne = NeuroEvolution(seed=3)
-        ne.set_run_database(db_path)
-        ne.set_report_autosave(report_path, format="html")
-        ne.set_max_iterations(5)
+        ne.set_report_autosave(report_path)
+        ne.set_max_iterations(30)
         ne.configure(n_inputs=2, n_outputs=1)
         ne.train(_dummy_eval)
         # At least one HTML file should exist in tmpdir
@@ -1122,50 +1120,13 @@ class TestRunReport(unittest.TestCase):
         self.assertIn("<html", content)
 
     def test_report_autosave_disabled_by_default(self):
-        """No report file is written when autosave is not configured."""
-        import tempfile
-        tmpdir = tempfile.mkdtemp()
-        db_path = str(Path(tmpdir) / "no_autosave.db")
+        """No report autosave is triggered when not configured."""
         ne = NeuroEvolution(seed=3)
-        ne.set_run_database(db_path)
-        ne.set_max_iterations(5)
+        ne.set_max_iterations(10)
         ne.configure(n_inputs=2, n_outputs=1)
         ne.train(_dummy_eval)
-        html_files = list(Path(tmpdir).glob("*.html"))
-        self.assertEqual(len(html_files), 0)
-
-    def test_generate_run_report_json(self):
-        """generate_run_report returns JSON independently of NeuroEvolution."""
-        from yane.util.run_report import generate_run_report
-        from yane.util.run_database import Run
-        run = Run(
-            run_id="test-001",
-            experiment_id=None,
-            name="test",
-            seed=0,
-            config={"n_inputs": 2},
-            fitness_history=[{"iteration": 1, "best_fitness": 0.5}],
-            diagnostics={},
-            start_time="2026-01-01",
-            end_time="2026-01-01",
-            stop_reason="max_iterations",
-            artifacts={},
-        )
-        text = generate_run_report(run, format="json")
-        data = json.loads(text)
-        self.assertEqual(data["run_id"], "test-001")
-        self.assertEqual(data["final_best"], 0.5)
-
-    def test_generate_run_report_invalid_format(self):
-        """generate_run_report raises ValueError for unknown format."""
-        from yane.util.run_report import generate_run_report
-        from yane.util.run_database import Run
-        run = Run(run_id="x", name="x", experiment_id=None, seed=0, config={},
-                  fitness_history=[], diagnostics={}, start_time=None,
-                  end_time=None, stop_reason=None, artifacts={})
-        with self.assertRaises(ValueError):
-            generate_run_report(run, format="pdf")
-
+        # Without set_report_autosave, no report file is created.
+        self.assertIsNone(ne._report_autosave_template)
 
 if __name__ == "__main__":
     unittest.main()

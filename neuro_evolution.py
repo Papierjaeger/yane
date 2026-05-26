@@ -88,6 +88,7 @@ class NeuroEvolution:
         self._adaptive_pop_min: int = 100
         self._adaptive_pop_max: int = 100
         self._adaptive_pop_rate: float = 0.05
+        self._island_model: Any = None
         self._interspecies_crossover_mode: str = "fixed"
         self._interspecies_crossover_rate: float = 0.0
         self._interspecies_crossover_min: float = 0.0
@@ -175,11 +176,27 @@ class NeuroEvolution:
         self._anomaly_detectors = None
         # Fitness transform applied at each generation boundary (None = disabled)
         self._fitness_transform = None
+        self._auto_fitness_shaping_enabled: bool = False
+        self._auto_fitness_shaping_report = None
+        # Online hyperparameter tuning (UCB1 bandit)
+        self._online_tuning_enabled: bool = False
+        self._online_tuning_bandits: dict[str, Any] = {}
+        self._online_tuning_last_best: float | None = None
+        self._online_tuning_original_struct_floor: float | None = None
         # Validation (None = disabled)
         self._validation_fn: Callable | None = None
         self._last_validation_fitness: float | None = None
         # Track best fitness for "new_best" events
         self._last_best_fitness: float = -float("inf")
+        # Weight inheritance (fitness-weighted crossover blending)
+        self._weight_inheritance_enabled: bool = False
+        self._weight_blend_alpha: float = 0.7
+        # Weight-health N-generation streak tracking
+        self._weight_warning_streak: int = 0
+        self._weight_warning_consecutive_threshold: int = 5
+        # Adaptive Policy System registry
+        self._policy_registry: Any = None  # lazy-imported PolicyRegistry
+        self._policy_tick_enabled: bool = False
         # Adaptive recovery / guarded early stop
         self._adaptive_recovery_enabled: bool = False
         self._recovery_strategies: list[str] = ["diversity_boost", "partial_restart", "lamarck_burst"]
@@ -360,6 +377,10 @@ class NeuroEvolution:
         # Apply compatibility distance override if set before configure().
         if self._compatibility_distance is not None:
             self._population.compatibility_distance = self._compatibility_distance
+        # Apply weight inheritance.
+        self._population._weight_blend_alpha = (
+            self._weight_blend_alpha if self._weight_inheritance_enabled else -1.0
+        )
         # Validate input transform dimensions.
         if self._input_transform is not None and self._n_raw_inputs is not None:
             try:
@@ -448,6 +469,33 @@ class NeuroEvolution:
             self._population._adaptive_pop_min = min_size
             self._population._adaptive_pop_max = max_size
             self._population._adaptive_pop_rate = self._adaptive_pop_rate
+
+    def set_weight_inheritance(
+        self,
+        enabled: bool = True,
+        blend_alpha: float = 0.7,
+    ) -> None:
+        """Enable fitness-weighted blending for crossover.
+
+        When enabled, matching genes between parents are blended instead of
+        randomly picked from either parent:
+
+            weight = blend_alpha * w_fitter + (1 - blend_alpha) * w_weaker
+
+        This preserves Lamarck-optimised weight information and can accelerate
+        convergence on tasks where fine-tuned weights matter.
+
+        Args:
+            enabled:    Pass False to disable (reverts to 50/50 random pick).
+            blend_alpha: Weight given to the fitter parent (default 0.7).
+                         Must be in [0.0, 1.0].
+        """
+        if not 0.0 <= blend_alpha <= 1.0:
+            raise ValueError(f"blend_alpha must be in [0, 1]; got {blend_alpha}")
+        self._weight_inheritance_enabled = enabled
+        self._weight_blend_alpha = blend_alpha
+        if self._population is not None:
+            self._population._weight_blend_alpha = blend_alpha if enabled else -1.0
 
     def set_max_iterations(self, n: int) -> None:
         self.max_iterations = n
@@ -843,6 +891,172 @@ class NeuroEvolution:
         """Return the AdaptiveController for advanced configuration."""
         return self._adaptive_ctrl
 
+    # ── Island Model ────────────────────────────────────────────────────────
+
+    def set_island_model(
+        self,
+        n_islands: int = 4,
+        migration_interval: int = 5,
+        migration_count: int = 3,
+    ) -> Any:
+        """Enable multi-population island model.
+
+        Each island is an independent ``Population`` instance.  Periodically,
+        the best genomes migrate between islands.
+
+        Args:
+            n_islands: Number of independent populations.
+            migration_interval: How many spawn cycles between migrations.
+            migration_count: How many genomes to migrate each time.
+
+        Returns:
+            The ``IslandModel`` instance for advanced configuration.
+        """
+        from yane.evolution.islands import IslandModel
+
+        self._ensure_configured()
+        kw = {
+            "max_size": self._population_size,
+            "initial_genome": self._population._template.copy(),
+            "tracker": self._tracker,
+            "target_species": self.get_target_species() or 5,
+            "_crossover_enabled": self._population._crossover_enabled,
+            "_speciation_enabled": self._population._speciation_enabled,
+            "_compat_threshold": self._population._compat_threshold,
+            "_weight_blend_alpha": self._population._weight_blend_alpha,
+        }
+        self._island_model = IslandModel(
+            n_islands=n_islands,
+            island_kwargs=[dict(kw) for _ in range(n_islands)],
+            migration_interval=migration_interval,
+            migration_count=migration_count,
+        )
+        self._population = self._island_model.islands[0]
+        return self._island_model
+
+    def get_island_diagnostics(self) -> dict:
+        """Return island model diagnostics."""
+        if not hasattr(self, "_island_model") or self._island_model is None:
+            return {}
+        return self._island_model.get_diagnostics()
+
+    # ── Policy System ───────────────────────────────────────────────────────
+
+    def _ensure_policy_registry(self):
+        if self._policy_registry is None:
+            from yane.evolution.policy import PolicyRegistry
+            self._policy_registry = PolicyRegistry()
+
+    def register_policy(self, policy, enabled: bool = True) -> None:
+        """Register an adaptive policy.
+
+        The policy must conform to the ``AdaptivePolicy`` protocol:
+        ``observe(ctx)``, ``decide(ctx) -> Action | None``, ``apply(ctx, action)``.
+        """
+        self._ensure_policy_registry()
+        self._policy_registry.register(policy, enabled=enabled)
+        self._policy_tick_enabled = True
+
+    def set_policy_order(self, names: list[str]) -> None:
+        """Set the policy evaluation order.
+
+        Only registered policy names are used; unknown names are ignored.
+        """
+        self._ensure_policy_registry()
+        self._policy_registry.set_order(names)
+
+    def get_policy_diagnostics(self) -> dict:
+        """Return diagnostics from the policy registry."""
+        if self._policy_registry is None:
+            return {}
+        return self._policy_registry.get_diagnostics()
+
+    def set_online_tuning(
+        self,
+        enabled: bool = True,
+        params: list[str] | None = None,
+    ) -> None:
+        """Enable UCB1 bandit-based hyperparameter tuning during training.
+
+        The bandit tunes discrete values for the specified parameters by
+        treating each (param → value) as an arm and using fitness delta as
+        reward.  Exploration happens during the first 20 % of iterations;
+        thereafter the best-performing arm is exploited.
+
+        Supported parameters and their candidate values:
+
+        ``"mutation_rate"``
+            Structure mutation probability floor (0.1, 0.3, 0.5, 0.8).
+        ``"n_lamarck_steps"``
+            Lamarck refinement steps per genome (0, 1, 3, 5).
+
+        Args:
+            enabled: Pass False to disable.
+            params:  List of parameter names to tune.  Default: all supported.
+        """
+        if not enabled:
+            self._online_tuning_enabled = False
+            self._online_tuning_bandits = {}
+            if self._online_tuning_original_struct_floor is not None:
+                from yane.core.genome import Genome as _G
+                _G._STRUCT_FLOOR = self._online_tuning_original_struct_floor
+                self._online_tuning_original_struct_floor = None
+            return
+
+        from yane.evolution.online_tuning import UCB1Bandit
+        from yane.core.genome import Genome as _G
+        if self._online_tuning_original_struct_floor is None:
+            self._online_tuning_original_struct_floor = _G._STRUCT_FLOOR
+
+        param_candidates: dict[str, list] = {
+            "mutation_rate":    [0.05, 0.15, 0.3, 0.5, 0.8],
+            "n_lamarck_steps":  [0, 1, 3, 5, 10],
+        }
+        if params is None:
+            params = list(param_candidates.keys())
+
+        self._online_tuning_enabled = True
+        self._online_tuning_params = list(params)
+        self._online_tuning_bandits = {}
+        for p in params:
+            cand = param_candidates.get(p)
+            if cand is None:
+                raise ValueError(f"Unknown tunable parameter: {p!r}")
+            self._online_tuning_bandits[p] = UCB1Bandit(p, cand)
+
+    def _tick_online_tuning(self, iteration: int, max_iterations: int) -> None:
+        """Apply bandit selections and record rewards.  Called each generation."""
+        if not self._online_tuning_enabled or not self._online_tuning_bandits:
+            return
+
+        # Get current best fitness for reward calculation
+        try:
+            current_best = self._population.get_best().fitness
+        except RuntimeError:
+            return
+
+        # Apply bandit selections (every generation)
+        for param, bandit in self._online_tuning_bandits.items():
+            value = bandit.select(iteration, max_iterations)
+            self._apply_bandit_value(param, value)
+
+        # Record reward: fitness delta since last call
+        if self._online_tuning_last_best is not None:
+            delta = current_best - self._online_tuning_last_best
+            for bandit in self._online_tuning_bandits.values():
+                bandit.update(delta)
+
+        self._online_tuning_last_best = current_best
+
+    def _apply_bandit_value(self, param: str, value: float) -> None:
+        """Apply a bandit-selected value to the relevant NeuroEvolution setting."""
+        if param == "mutation_rate":
+            if self._population is not None:
+                Genome._STRUCT_FLOOR = float(value)
+        elif param == "n_lamarck_steps":
+            self._lamarck.max_steps = max(1, int(value))
+            self._lamarck_steps = int(value)
+
     def set_operator_scheduler(self, enabled: bool = True) -> None:
         """Enable or disable the adaptive Operator Scheduler.
 
@@ -994,6 +1208,41 @@ class NeuroEvolution:
             )
         self._log_format = format
 
+    @staticmethod
+    def register_activation(name: str, fn: Callable) -> None:
+        """Register a custom activation function available at runtime.
+
+        The function is stored in the module-level ``CUSTOM_ACTIVATION_FNS``
+        registry so it survives ``configure()`` calls and is discovered by
+        ``list_activations()``.
+
+        *fn* should be a named module-level function so that pickling works
+        correctly when saving/loading checkpoints.
+
+        Example::
+
+            def my_activation(v: float) -> float:
+                return v * v if v > 0 else 0.0
+
+            NeuroEvolution.register_activation("my_act", my_activation)
+            yane = NeuroEvolution()
+            # Nodes can now use "my_act" as their activation type.
+        """
+        from yane.util.activation import register_activation as _reg
+        _reg(name, fn)
+
+    @staticmethod
+    def register_example(plugin: Any) -> None:
+        """Register a user-defined evaluator plugin.
+
+        The plugin appears in the GUI example list and is available for API use.
+
+        See ``yane.gui.examples.register_example()`` for details and a
+        code example.
+        """
+        from yane.gui.examples import register_example as _reg
+        _reg(plugin)
+
     def set_tensorboard_logdir(self, path: str | Path | None) -> None:
         """Write scalar summaries to a TensorBoard log directory.
 
@@ -1137,6 +1386,8 @@ class NeuroEvolution:
             "interspecies_crossover_current": (
                 pop._interspecies_crossover_current if pop else self._interspecies_crossover_rate
             ),
+            "weight_inheritance_enabled": self._weight_inheritance_enabled,
+            "weight_blend_alpha": self._weight_blend_alpha,
             "elite_count": self._elite_count,
             "species_elite_count": self._species_elite_count,
             # Stopping criteria
@@ -1337,6 +1588,10 @@ class NeuroEvolution:
         iterations = 0
         _gen_size = max(1, self._population_size)  # generation boundary for periodic ticks
         while True:
+            if self._island_model is not None:
+                self._population = self._island_model.islands[
+                    iterations % self._island_model.n_islands
+                ]
             genome = self._population.select_for_evaluation()
 
             result = self._run_evaluations(genome, fitness_fn)
@@ -1368,7 +1623,28 @@ class NeuroEvolution:
                     )
                 if self._adaptive_ctrl_enabled:
                     self._adaptive_ctrl.tick(self._population, self._lamarck)
+                if self._island_model is not None:
+                    self._island_model.tick()
+                if self._online_tuning_enabled:
+                    self._tick_online_tuning(iterations, self.max_iterations or 100000)
                 self._lamarck.reset_generation_budget()
+                # Auto fitness shaping: analyse every 50 generations
+                if self._auto_fitness_shaping_enabled and iterations % 50 == 0:
+                    _evald = self._population._evaluated
+                    if _evald:
+                        try:
+                            from yane.evolution.fitness_transform import (
+                                FitnessLandscapeAnalyzer,
+                            )
+                            _report = FitnessLandscapeAnalyzer.analyze(_evald)
+                            self._auto_fitness_shaping_report = _report
+                            _rec = FitnessLandscapeAnalyzer.recommend_transform(_report)
+                            if _rec is not None:
+                                _rec_name = getattr(_rec, "name", str(_rec))
+                                _report.applied_transform = _rec_name
+                                self._fitness_transform = _rec
+                        except Exception:
+                            pass
                 # Apply fitness transform to all evaluated genomes
                 if self._fitness_transform is not None:
                     _evald = self._population._evaluated
@@ -1385,6 +1661,30 @@ class NeuroEvolution:
                     try:
                         _vbest = self._population.get_best()
                         self._last_validation_fitness = self._validation_fn(_vbest)
+                    except Exception:
+                        pass
+
+            # --- Policy system tick (once per generation, outside heartbeat) ---
+            if iterations % _gen_size == 0:
+                if self._policy_tick_enabled and self._policy_registry is not None:
+                    try:
+                        from yane.evolution.policy import TrainingContext
+                        _pmem = self.population_memory_info()
+                        _pctx = TrainingContext(
+                            generation=_pmem.get("generation", iterations // _gen_size),
+                            iteration=iterations,
+                            best_fitness=_pmem.get("max_fitness", -float("inf")),
+                            mean_fitness=_pmem.get("avg_fitness", 0.0),
+                            median_fitness=_pmem.get("median_fitness", 0.0),
+                            fitness_iqr=_pmem.get("fitness_iqr", 0.0),
+                            species_count=_pmem.get("species_count", 0),
+                            stagnation_count=_pmem.get("stagnation_count", 0),
+                            n_evaluations=self._n_evaluations_done,
+                            max_iterations=self.max_iterations or 100000,
+                            recovery_events=self._recovery_events,
+                            stopped_early=self.stopped_early,
+                        )
+                        self._policy_registry.tick(_pctx)
                     except Exception:
                         pass
 
@@ -1547,6 +1847,13 @@ class NeuroEvolution:
                     time.sleep(0.5)
 
         # --- on_stop callback ------------------------------------------------
+        if self._island_model is not None:
+            best_island = max(
+                self._island_model.islands,
+                key=lambda pop: pop.get_best().fitness if pop._evaluated else -float("inf"),
+            )
+            self._population = best_island
+
         self.stop_reason = stop_reason or "manual"
         self.stopped_early = bool(
             stop_reason and (
@@ -1566,6 +1873,30 @@ class NeuroEvolution:
             "stop_reason": stop_reason or "manual",
             "iterations": iterations,
         })
+        # Automatic report export if configured
+        if self._report_autosave_template is not None and self._log_run_dir is not None:
+            try:
+                _report_path = self._report_autosave_template.format(
+                    name=name or "run",
+                    date=time.strftime("%Y%m%d_%H%M%S"),
+                    example=name or "run",
+                )
+                # If the template contains a path separator, treat it as absolute
+                # or relative to CWD; otherwise place it in the run directory.
+                if "/" in _report_path or "\\" in _report_path:
+                    _dest = Path(_report_path)
+                else:
+                    _dest = self._log_run_dir / _report_path
+                fmt = _dest.suffix.lstrip(".") or self._report_autosave_format or "html"
+                if not _dest.suffix:
+                    _dest = _dest.with_suffix(f".{fmt}")
+                self.export_run_report(
+                    str(_dest), fmt=fmt,
+                    stop_reason=stop_reason or "manual",
+                    iterations=iterations,
+                )
+            except Exception as _exc:
+                _li("Report autosave failed: %s", _exc)
         if self._tensorboard_writer is not None:
             try:
                 self._tensorboard_writer.close()
@@ -1583,6 +1914,83 @@ class NeuroEvolution:
         """Return the top-k genomes by fitness for ensemble inference."""
         self._ensure_configured()
         return self._population.get_top(k)
+
+    def make_ensemble(self, k: int = 3, mode: str = "mean") -> "EnsembleGenome":
+        """Create an ``EnsembleGenome`` wrapper from the top-k evaluated genomes.
+
+        The wrapper provides a unified ``forward()`` interface that aggregates
+        outputs from all members.
+
+        Args:
+            k: Number of top genomes to include.
+            mode: Aggregation strategy — ``"mean"`` (default), ``"vote"``,
+                  or ``"weighted"``.
+
+        Returns:
+            An ``EnsembleGenome`` instance.
+        """
+        from yane.evolution.ensemble import EnsembleGenome
+        self._ensure_configured()
+        members = self._population.get_top(k)
+        if not members:
+            raise RuntimeError("No evaluated genomes available for ensemble.")
+        return EnsembleGenome(members, mode=mode)
+
+    # --- Report / Run-Postmortem --------------------------------------------
+
+    _report_autosave_template: str | None = None
+
+    def set_report_autosave(
+        self,
+        path_template: str | None,
+        format: str | None = None,
+    ) -> None:
+        """Enable automatic report export when ``train()`` finishes.
+
+        The template may contain ``{name}``, ``{date}``, and ``{example}``
+        placeholders which are substituted at export time.
+
+        Example::
+
+            yane.set_report_autosave("{date}_{example}_report.html")
+
+        Pass ``None`` to disable (default).
+        """
+        self._report_autosave_template = path_template
+        if format is not None:
+            self._report_autosave_format = format
+
+    def export_run_report(
+        self,
+        path: str | None = None,
+        fmt: str | None = None,
+        format: str | None = None,
+        *,
+        stop_reason: str = "manual",
+        iterations: int = 0,
+    ) -> str:
+        """Export a structured post-training report.
+
+        The report includes:
+        - Fitness curve (SVG inline for HTML)
+        - Best genome topology and connections
+        - Configuration snapshot
+        - Recovery events and anomaly diagnostics
+        - Runtime statistics
+
+        Args:
+            path: Destination file path (``.html``, ``.md``, ``.json``).
+                  If omitted the report is returned as a string but not written.
+            fmt: Output format — ``"html"`` (default), ``"md"``, or ``"json"``.
+            format: Alias for *fmt* (supports legacy callers).
+
+        Returns:
+            The rendered report content as a string.
+        """
+        resolved_fmt = fmt or format or "html"
+        from yane.util.report import export_run_report as _export
+        return _export(self, path, resolved_fmt,
+                       stop_reason=stop_reason, iterations=iterations)
 
     def forward_batch(self, batch) -> list[list[float]]:
         """Vectorized forward pass on the best genome for a batch of inputs.
@@ -1654,6 +2062,23 @@ class NeuroEvolution:
             ]
 
         raise ValueError(f"Unknown ensemble mode {mode!r}. Use 'mean', 'vote', or 'weighted'.")
+
+    def landscape_pca(self) -> dict:
+        """Return a 2-component PCA projection of all evaluated genomes.
+
+        The result contains ``x``, ``y``, ``fitness``, and ``species_id``
+        lists, as well as ``explained_var`` for the two components.
+        Useful for fitness-landscape visualization in the GUI or external
+        tools.
+
+        Returns an empty dict if there are fewer than 2 evaluated genomes.
+        """
+        self._ensure_configured()
+        from yane.evolution.landscape import population_pca
+        evald = self._population._evaluated
+        if len(evald) < 2:
+            return {}
+        return population_pca(evald)
 
     def population_memory_info(self) -> dict:
         """Returns node/connection/fitness/species diagnostics for the population."""
@@ -2185,25 +2610,46 @@ class NeuroEvolution:
             "meta_adaptive":              self._meta_adaptive,
             "module_library":             self._module_library,
             "module_insert_rate":         self._module_insert_rate,
-        })
+        }, codec=self._checkpoint_codec)
 
-    def load_checkpoint(self, path: str | Path) -> None:
-        """Restore population state from a checkpoint file.
+    _checkpoint_codec: str = "pickle"
 
-        Replaces the current population and innovation tracker with the saved
-        state.  The NeuroEvolution configuration (n_inputs, n_outputs, etc.) is
-        restored from the checkpoint; any configure() call made before
-        load_checkpoint() is overwritten.
+    def set_checkpoint_codec(self, codec_name: str) -> None:
+        """Set the codec used for checkpoint serialization.
 
-        After loading you can call train() or next_genome() immediately.
+        Built-in codecs: ``"pickle"`` (default), ``"json"``.
+
+        The codec is stored so that ``save_checkpoint()`` uses it
+        automatically.  ``load_checkpoint()`` auto-detects the codec
+        from the file header.
+        """
+        from yane.evolution.codec import get_codec
+        get_codec(codec_name)  # validate
+        self._checkpoint_codec = codec_name
+
+    def migrate_checkpoint(self, path: str | Path, target_codec: str) -> None:
+        """Convert a checkpoint file to a different codec format.
 
         Args:
-            path: Path to a checkpoint file written by save_checkpoint().
+            path: Path to an existing checkpoint.
+            target_codec: Target codec name (``"pickle"`` or ``"json"``).
 
-        Raises:
-            FileNotFoundError: if *path* does not exist.
-            ValueError: if the checkpoint format is unrecognised.
+        The original file is *not* modified; a new file is written with
+        the target codec at ``path.with_suffix(f'.{target_codec}')``.
         """
+        from yane.evolution.codec import detect_codec, get_codec
+        orig_codec = self._checkpoint_codec
+        try:
+            self._checkpoint_codec = detect_codec(Path(path).read_bytes())
+            self.load_checkpoint(path)
+            self._checkpoint_codec = target_codec
+            out_path = Path(path).with_suffix(f".{target_codec}")
+            self.save_checkpoint(str(out_path))
+        finally:
+            self._checkpoint_codec = orig_codec
+
+    def load_checkpoint(self, path: str | Path) -> None:
+        """Restore population state from a checkpoint file."""
         payload = _ckpt.read(path)
         cfg = payload["config"]
         self._population  = payload["population"]
@@ -2345,6 +2791,9 @@ class NeuroEvolution:
         self._population._adaptive_pop_min = self._adaptive_pop_min
         self._population._adaptive_pop_max = self._adaptive_pop_max
         self._population._adaptive_pop_rate = self._adaptive_pop_rate
+        self._population._weight_blend_alpha = (
+            self._weight_blend_alpha if self._weight_inheritance_enabled else -1.0
+        )
         self._population._multi_objective_enabled = self._multi_objective_enabled
         self._population._multi_objective_maximize = self._multi_objective_maximize
         if fitness_fn is None:
@@ -3003,6 +3452,21 @@ class NeuroEvolution:
         """
         self._fitness_transform = transform
 
+    def set_auto_fitness_shaping(self, enabled: bool = True) -> None:
+        """Automatically detect and apply fitness transformations.
+
+        When enabled, the fitness landscape is analysed every 50 generations.
+        If the analysis detects strong skewness or plateaus, a suitable
+        transform (``RankTransform`` or ``SigmaScaling``) is automatically
+        applied to improve selection pressure.
+
+        The analysis results are available via ``population_memory_info()``
+        under the key ``"auto_fitness_shaping"``.
+        """
+        self._auto_fitness_shaping_enabled = enabled
+        if not enabled:
+            self._fitness_transform = None
+
     # ── Validation ───────────────────────────────────────────────────────────
 
     def set_validation_fn(self, fn: Callable | None) -> None:
@@ -3289,92 +3753,107 @@ class NeuroEvolution:
         self._ensure_configured()
         return genome_to_numpy_weights(self._population.get_best())
 
-    # ── Run reports ───────────────────────────────────────────────────────────
+    def export_best_weights_npy(self, path: str | Path) -> None:
+        """Save the best genome's weight matrix as a NumPy ``.npy`` file.
 
-    def set_report_autosave(
-        self,
-        path_template: str | None = "{run_name}_{run_id_short}.{format}",
-        format: str = "html",
-    ) -> None:
-        """Enable automatic report generation at the end of each training run.
-
-        The report is written right after ``_write_run_summary()`` completes.
-        Requires a ``RunDatabase`` to be active (``set_run_database()``).
-
-        Args:
-            path_template: Path template for the report file.  Supports
-                ``{run_name}``, ``{run_id}``, ``{run_id_short}`` (first 8
-                chars), ``{format}`` (the *format* argument).
-                Pass ``None`` to disable autosave.
-            format: ``"html"`` (default), ``"json"``, or ``"md"``.
+        The matrix has shape ``(N, N)`` where N = total nodes.  Row = source,
+        column = target.  Also saves a sidecar ``.csv`` with node labels.
         """
-        self._report_autosave_template = path_template
-        self._report_autosave_format = format
+        import numpy as np
+        weights = self.export_genome_weights()
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(str(path), np.array(weights["W"], dtype=np.float64))
+        # Sidecar CSV with labels
+        csv_path = path.with_suffix(".csv")
+        csv_path.write_text(
+            "index,label\n"
+            + "\n".join(f"{i},{lbl}" for i, lbl in enumerate(weights["labels"]))
+        )
 
-    def export_run_report(
+    def load_genome_as_seed(
         self,
-        path: str | Path | None = None,
-        format: str = "html",
-        run_id: str | None = None,
-    ) -> str:
-        """Generate a postmortem report for a training run.
+        genome: Genome,
+        freeze_layers: list[str] | None = None,
+    ) -> None:
+        """Use a pre-trained genome as the seed for a new population.
 
-        Reads the run record from the active ``RunDatabase``.
+        The genome is adapted to the current I/O dimensions (like
+        ``warm_start_from_checkpoint``) and inserted as the initial genome.
+        Optionally, connection groups can be frozen (not mutated).
 
         Args:
-            path:   Write the report to this file path (optional).
-            format: ``"html"`` (default), ``"json"``, or ``"md"``.
-            run_id: Specific run ID to report on.  Defaults to the most
-                    recently completed run in the active DB.
+            genome: Source genome to use as seed.
+            freeze_layers: List of layer types to freeze.
+                Supported: ``"input"``, ``"output"``, ``"hidden"``.
+        """
+        self._ensure_configured()
+        genome = genome.copy()
+        self._adapt_genome_topology(genome, self._n_inputs, self._n_outputs,
+                                    self._tracker, self._stateful)
+        genome.max_nodes = self._max_nodes
+        genome.max_connections = self._max_connections
+        genome.allow_memory = self._stateful
+        genome._output_sanitize = self._output_sanitize
+        genome._output_fallback = self._output_fallback
+        genome._last_species_id = None
+        genome._species_stale = True
+
+        if freeze_layers:
+            for node in genome.nodes:
+                node_type = node.type.value
+                if node_type in freeze_layers:
+                    # Freeze bias and connections for this node
+                    for conn in node.connections:
+                        conn.mutation.shift_rate = 0.0
+                        conn.mutation.custom_rate = 0.0
+
+        self._population._template = genome.copy()
+        self._population._unevaluated = [genome]
+        self._population._evaluated = []
+        self._population._species = []
+        self._population._generation = 0
+        self._population._stagnation_count = 0
+
+    def behaviour_clone(
+        self,
+        demonstrations: list[tuple[list[float], list[float]]],
+        n_steps: int = 50,
+    ) -> Genome:
+        """Supervised pre-training via weight perturbation on demonstration data.
+
+        Uses the best genome and refines its weights via simple hill-climbing:
+        perturbs weights, keeps changes that reduce demonstration error.
+
+        Args:
+            demonstrations: List of (inputs, targets) pairs.
+            n_steps: Number of refinement steps.
 
         Returns:
-            Report text in the requested format.
-
-        Raises:
-            RuntimeError: if no RunDatabase is active or no runs are found.
+            The cloned (fine-tuned) genome.
         """
-        if self._run_database is None:
-            raise RuntimeError(
-                "export_run_report requires a RunDatabase. Call set_run_database() first."
-            )
-        from yane.util.run_report import generate_run_report
-        if run_id is not None:
-            run = self._run_database.load_run(run_id)
-            if run is None:
-                raise RuntimeError(f"Run '{run_id}' not found in database.")
-        else:
-            runs = self._run_database.list_runs()
-            if not runs:
-                raise RuntimeError("No runs found in the database.")
-            run = runs[-1]
-        text = generate_run_report(run, format=format)
-        if path is not None:
-            Path(path).write_text(text, encoding="utf-8")
-        return text
+        self._ensure_configured()
+        best = self._population.get_best().copy()
 
-    def _autosave_report(self, run_name: str, run_id: str) -> None:
-        """Write the autosave report if configured.  Called at end of train()."""
-        if self._report_autosave_template is None:
-            return
-        if self._run_database is None:
-            return
-        try:
-            from yane.util.run_report import generate_run_report
-            run = self._run_database.load_run(run_id)
-            if run is None:
-                return
-            fmt = self._report_autosave_format
-            short_id = run_id[:8] if run_id else "unknown"
-            safe_name = (run_name or "run").replace("/", "_").replace(" ", "_")
-            out_path = self._report_autosave_template.format(
-                run_name=safe_name,
-                run_id=run_id,
-                run_id_short=short_id,
-                format=fmt,
-            )
-            Path(out_path).write_text(generate_run_report(run, format=fmt), encoding="utf-8")
-        except Exception:
-            pass
+        def _error(g: Genome) -> float:
+            total = 0.0
+            for inp, tgt in demonstrations:
+                out = g.forward(inp)
+                total += sum((o - t) ** 2 for o, t in zip(out, tgt))
+            return total / len(demonstrations)
+
+        current = best
+        best_error = _error(current)
+        for _ in range(n_steps):
+            candidate = current.copy()
+            for src in candidate.nodes:
+                for conn in src.connections:
+                    conn.weight += random.uniform(-0.05, 0.05)
+            err = _error(candidate)
+            if err < best_error:
+                current = candidate
+                best_error = err
+        return current
 
     def _ensure_configured(self) -> None:
         if not self.is_configured:
