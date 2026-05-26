@@ -973,6 +973,118 @@ class SensitivityChart(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# LandscapeScatter — PCA scatterplot for evaluated genomes
+# ---------------------------------------------------------------------------
+
+class LandscapeScatter(QWidget):
+    """Shows a 2D PCA projection of the evaluated population."""
+
+    _COLORS = [
+        QColor("#89b4fa"),
+        QColor("#a6e3a1"),
+        QColor("#f9e2af"),
+        QColor("#f5c2e7"),
+        QColor("#94e2d5"),
+        QColor("#fab387"),
+        QColor("#cba6f7"),
+        QColor("#f38ba8"),
+    ]
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._snapshot: dict = {}
+        self.setMinimumHeight(180)
+
+    def set_snapshot(self, snapshot: dict) -> None:
+        self._snapshot = snapshot or {}
+        self.update()
+
+    def clear(self) -> None:
+        self._snapshot = {}
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
+        w, h = self.width(), self.height()
+        painter.fillRect(0, 0, w, h, _C_BG)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        xs = list(self._snapshot.get("x", []))
+        ys = list(self._snapshot.get("y", []))
+        fitness = list(self._snapshot.get("fitness", []))
+        species = list(self._snapshot.get("species_id", []))
+        if not xs:
+            painter.setPen(_C_TEXT)
+            painter.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter,
+                             "Landscape PCA")
+            return
+
+        pad_l, pad_r, pad_t, pad_b = 44, 14, 24, 34
+        chart_w = max(1, w - pad_l - pad_r)
+        chart_h = max(1, h - pad_t - pad_b)
+
+        painter.setPen(QPen(_C_GRID, 1))
+        for i in range(5):
+            gx = pad_l + i * chart_w / 4
+            gy = pad_t + i * chart_h / 4
+            painter.drawLine(QPointF(gx, pad_t), QPointF(gx, pad_t + chart_h))
+            painter.drawLine(QPointF(pad_l, gy), QPointF(pad_l + chart_w, gy))
+
+        painter.setPen(QPen(_C_TEXT, 1))
+        painter.drawLine(QPointF(pad_l, pad_t + chart_h), QPointF(pad_l + chart_w, pad_t + chart_h))
+        painter.drawLine(QPointF(pad_l, pad_t), QPointF(pad_l, pad_t + chart_h))
+
+        fit_min = min(fitness) if fitness else 0.0
+        fit_max = max(fitness) if fitness else 0.0
+        fit_span = max(fit_max - fit_min, 1e-12)
+
+        for x, y, fit, sid in zip(xs, ys, fitness, species):
+            px = pad_l + ((float(x) + 3.0) / 6.0) * chart_w
+            py = pad_t + chart_h - ((float(y) + 3.0) / 6.0) * chart_h
+            color = QColor(self._COLORS[int(sid) % len(self._COLORS)])
+            color.setAlpha(120 + int(135 * ((float(fit) - fit_min) / fit_span)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            painter.drawEllipse(QRectF(px - 4, py - 4, 8, 8))
+
+        ev = self._snapshot.get("explained_var", [0.0, 0.0])
+        title = (
+            f"PCA: {len(xs)} Genome | "
+            f"PC1 {float(ev[0]) if ev else 0.0:.1%}, "
+            f"PC2 {float(ev[1]) if len(ev) > 1 else 0.0:.1%}"
+        )
+        font = QFont()
+        font.setPixelSize(11)
+        painter.setFont(font)
+        painter.setPen(_C_TEXT)
+        painter.drawText(QRectF(pad_l, 2, chart_w, pad_t - 2),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         title)
+        painter.drawText(QRectF(0, h - pad_b + 8, w, pad_b - 8),
+                         Qt.AlignmentFlag.AlignCenter,
+                         "PC1 / PC2")
+
+    def export_png(self, path: str) -> None:
+        from PySide6.QtGui import QPixmap, QPainter as QP
+        from PySide6.QtCore import Qt as Qt_
+        px = QPixmap(self.size())
+        px.fill(Qt_.GlobalColor.transparent)
+        p = QP(px)
+        self._paint(p)
+        p.end()
+        px.save(path, "PNG")
+
+    def sizeHint(self) -> QSize:
+        return QSize(420, 240)
+
+
+# ---------------------------------------------------------------------------
 # MultiRunChart — overlaid fitness curves for up to 4 runs
 # ---------------------------------------------------------------------------
 

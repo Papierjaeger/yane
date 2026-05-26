@@ -5,12 +5,13 @@ import time as _time
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QGroupBox, QFormLayout,
-    QPlainTextEdit, QSpinBox, QApplication,
+    QPlainTextEdit, QSpinBox, QApplication, QFileDialog,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 
 from yane.gui.worker import ServerThread
+from yane.gui.canvas import LandscapeScatter
 from yane.gui._helpers import _label, _divider
 
 class ServerTab(QWidget):
@@ -107,6 +108,7 @@ class DebugTab(QWidget):
         self._data_lines = 0
         self._t0: float | None = None
         self._ne = None  # set by MainWindow after training starts
+        self._last_landscape: dict = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
@@ -150,11 +152,26 @@ class DebugTab(QWidget):
         self.btn_pca.setEnabled(False)
         ctrl.addWidget(self.btn_pca)
 
+        self.btn_pca_png = QPushButton("PCA PNG")
+        self.btn_pca_png.setFixedWidth(90)
+        self.btn_pca_png.clicked.connect(self._export_landscape_png)
+        self.btn_pca_png.setEnabled(False)
+        ctrl.addWidget(self.btn_pca_png)
+
+        self.btn_pca_csv = QPushButton("PCA CSV")
+        self.btn_pca_csv.setFixedWidth(90)
+        self.btn_pca_csv.clicked.connect(self._export_landscape_csv)
+        self.btn_pca_csv.setEnabled(False)
+        ctrl.addWidget(self.btn_pca_csv)
+
         ctrl.addStretch()
         ctrl.addWidget(hint)
         ctrl.addStretch()
         ctrl.addWidget(self.btn_copy)
         outer.addLayout(ctrl)
+
+        self._landscape = LandscapeScatter()
+        outer.addWidget(self._landscape)
 
         # ── Log area ────────────────────────────────────────────────────────
         self._log = QPlainTextEdit()
@@ -240,6 +257,9 @@ class DebugTab(QWidget):
         self._ne = ne
         self.btn_report.setEnabled(ne is not None)
         self.btn_pca.setEnabled(ne is not None)
+        has_landscape = bool(self._last_landscape.get("x"))
+        self.btn_pca_png.setEnabled(ne is not None and has_landscape)
+        self.btn_pca_csv.setEnabled(ne is not None and has_landscape)
 
     def _run_landscape_pca(self) -> None:
         """Run landscape PCA analysis and show results in the log."""
@@ -250,7 +270,15 @@ class DebugTab(QWidget):
             result = self._ne.landscape_pca()
             if not result or not result.get("x"):
                 self._log.appendPlainText("❌ No result (population empty?).")
+                self._last_landscape = {}
+                self._landscape.clear()
+                self.btn_pca_png.setEnabled(False)
+                self.btn_pca_csv.setEnabled(False)
                 return
+            self._last_landscape = result
+            self._landscape.set_snapshot(result)
+            self.btn_pca_png.setEnabled(True)
+            self.btn_pca_csv.setEnabled(True)
             ev = result.get("explained_var", [0.0, 0.0])
             total = sum(ev) if ev else 0.0
             self._log.appendPlainText(
@@ -266,12 +294,41 @@ class DebugTab(QWidget):
         except Exception as exc:
             self._log.appendPlainText(f"❌ Landscape PCA failed: {exc}")
 
+    def _export_landscape_png(self) -> None:
+        """Export the latest landscape PCA snapshot as PNG."""
+        if self._ne is None or not self._last_landscape.get("x"):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Landscape PNG exportieren", "landscape_pca.png", "PNG (*.png)",
+        )
+        if not path:
+            return
+        try:
+            self._ne.export_landscape_png(path)
+            self._log.appendPlainText(f"\n✅ Landscape PNG exported: {path}")
+        except Exception as exc:
+            self._log.appendPlainText(f"\n❌ Landscape PNG export failed: {exc}")
+
+    def _export_landscape_csv(self) -> None:
+        """Export the latest landscape PCA snapshot as CSV."""
+        if self._ne is None or not self._last_landscape.get("x"):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Landscape CSV exportieren", "landscape_pca.csv", "CSV (*.csv)",
+        )
+        if not path:
+            return
+        try:
+            self._ne.export_landscape_csv(path)
+            self._log.appendPlainText(f"\n✅ Landscape CSV exported: {path}")
+        except Exception as exc:
+            self._log.appendPlainText(f"\n❌ Landscape CSV export failed: {exc}")
+
     def _export_report(self) -> None:
         """Export a run report for the current training session."""
         if self._ne is None:
             return
         from pathlib import Path
-        from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(
             self, "Report exportieren", "report.html",
             "HTML (*.html);;Markdown (*.md);;JSON (*.json)",
@@ -297,4 +354,3 @@ class DebugTab(QWidget):
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
-

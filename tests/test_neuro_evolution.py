@@ -999,6 +999,85 @@ class TestWarmStartTransfer(unittest.TestCase):
             self.assertEqual(len(out), 1)
             self.assertFalse(math.isnan(out[0]))
 
+    def test_load_genome_as_seed_freezes_and_unfreezes_layers(self):
+        from yane import NeuroEvolution
+
+        yane = NeuroEvolution(seed=1)
+        yane.configure(2, 1)
+        seed = yane.population._unevaluated[0]
+        from yane.core.connection import Connection
+        conn = Connection(seed.output_nodes[0], innovation=yane._tracker.next())
+        seed.input_nodes[0].connections.append(conn)
+        seed._invalidate_topology()
+        yane.load_genome_as_seed(seed, freeze_layers=["input"])
+
+        frozen = [
+            conn for node in yane.population._unevaluated[0].nodes
+            for conn in node.connections
+        ]
+        self.assertTrue(frozen)
+        self.assertTrue(yane._transfer_freeze_records)
+        self.assertTrue(all(conn.mutation.shift_rate == 0.0 for conn in frozen))
+        self.assertTrue(all(conn.spike_rate == 0.0 for conn in frozen))
+
+        yane.progressive_unfreeze_transfer(1.0)
+        restored = [
+            conn for node in yane.population._unevaluated[0].nodes
+            for conn in node.connections
+        ]
+        self.assertTrue(any(conn.mutation.shift_rate > 0.0 for conn in restored))
+        self.assertEqual(yane.population_memory_info()["transfer_unfreeze_progress"], 1.0)
+
+    def test_warm_start_supports_freeze_layers(self):
+        from yane import NeuroEvolution
+        tmp, path = self._checkpoint()
+        self.addCleanup(tmp.cleanup)
+
+        dst = NeuroEvolution(seed=1)
+        dst.configure(2, 1)
+        dst.set_population_size(5)
+        n = dst.warm_start_from_checkpoint(path, freeze_layers=["input"])
+        self.assertEqual(n, 5)
+        self.assertTrue(dst._transfer_freeze_records)
+        conns = [
+            conn for genome in dst.population._unevaluated
+            for node in genome.nodes
+            for conn in node.connections
+        ]
+        frozen = [conn for conn in conns if conn.innovation in dst._transfer_freeze_records]
+        self.assertTrue(frozen)
+        self.assertTrue(all(conn.mutation.shift_rate == 0.0 for conn in frozen))
+
+    def test_fine_tune_genome_can_seed_population(self):
+        from yane import NeuroEvolution
+
+        yane = NeuroEvolution(seed=1)
+        yane.configure(2, 1)
+        seed = yane.population._unevaluated[0]
+        before_nodes = len(seed.nodes)
+        before_conns = sum(len(n.connections) for n in seed.nodes)
+
+        tuned = yane.fine_tune_genome(seed, lambda _g: 1.0, n_steps=0, load_as_seed=True)
+        self.assertEqual(len(tuned.nodes), before_nodes)
+        self.assertEqual(sum(len(n.connections) for n in tuned.nodes), before_conns)
+        self.assertEqual(yane.population._unevaluated[0].fitness, tuned.fitness)
+
+    def test_behaviour_clone_can_seed_population(self):
+        from yane import NeuroEvolution
+
+        yane = NeuroEvolution(seed=1)
+        yane.configure(2, 1)
+        yane.set_max_iterations(5)
+        yane.train(lambda _g: 1.0)
+        clone = yane.behaviour_clone(
+            [([0.0, 0.0], [0.0]), ([1.0, 1.0], [1.0])],
+            n_steps=1,
+            seed_population=True,
+        )
+        self.assertEqual(yane.population.unevaluated_count, 1)
+        self.assertEqual(len(yane.population._unevaluated[0].output_nodes), 1)
+        self.assertEqual(yane.population._unevaluated[0].fitness, clone.fitness)
+
 
 if __name__ == "__main__":
     unittest.main()

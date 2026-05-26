@@ -47,6 +47,11 @@ class LamarckRefiner:
         # Per-species diagnostics: {species_id: {"applied": int, "steps": int, "improved": int}}
         self._species_stats: dict[int, dict[str, int]] = {}
 
+        # Lamarck-Momentum: store last weight-delta vector and bias it into mutation.
+        self.momentum_enabled: bool = False
+        self.momentum_prob: float = 0.3   # per-parameter application probability
+        self.momentum_decay: float = 0.9  # exponential decay per generation
+
     def set_budget(self, budget_per_gen: int | None) -> None:
         """Set maximum Lamarck evaluations per generation. None = unlimited."""
         self.budget_per_gen = budget_per_gen
@@ -203,6 +208,24 @@ class LamarckRefiner:
             self.steps = max(1, k)
             self.max_steps = 0
 
+    def _store_momentum(
+        self,
+        genome: Genome,
+        conns: list,
+        nodes: list,
+        orig_w: list[float],
+        orig_b: list[float],
+    ) -> None:
+        """Save per-parameter weight deltas as momentum on the genome."""
+        if not self.momentum_enabled:
+            return
+        genome._lamarck_momentum = {
+            c.innovation: c.weight - w0 for c, w0 in zip(conns, orig_w)
+        }
+        genome._lamarck_bias_momentum = [n.bias - b0 for n, b0 in zip(nodes, orig_b)]
+        genome._lamarck_momentum_prob = self.momentum_prob
+        genome._lamarck_momentum_decay = self.momentum_decay
+
     def refine(
         self,
         genome: Genome,
@@ -224,7 +247,7 @@ class LamarckRefiner:
         if steps <= 0:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
-        conns = [conn for node in genome.nodes for conn in node.connections if conn.enabled]
+        conns = genome.get_lamarck_connections()
         nodes = genome.nodes
         if not conns and not nodes:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
@@ -238,6 +261,8 @@ class LamarckRefiner:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
         t0 = time.perf_counter()
+        orig_w = [c.weight for c in conns]
+        orig_b = [n.bias   for n in nodes]
         baseline_f = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
         best_fitness = baseline_f
         n_evals = 0 if baseline_fitness is not None else 1
@@ -250,6 +275,7 @@ class LamarckRefiner:
             saved_biases  = [n.bias   for n in nodes]
             for c in conns:
                 c.weight += random.gauss(0.0, sigma)
+            genome._sync_groups_from_reps(conns)
             for n in nodes:
                 n.bias += random.gauss(0.0, sigma)
             new_fitness = fitness_fn(genome)
@@ -258,12 +284,14 @@ class LamarckRefiner:
             else:
                 for c, w in zip(conns, saved_weights):
                     c.weight = w
+                genome._sync_groups_from_reps(conns)
                 for n, b in zip(nodes, saved_biases):
                     n.bias = b
 
         self.time_ms += (time.perf_counter() - t0) * 1000.0
         if best_fitness > baseline_f:
             self.n_improved += 1
+        self._store_momentum(genome, conns, nodes, orig_w, orig_b)
         return best_fitness
 
     def refine_cma_es(
@@ -279,7 +307,7 @@ class LamarckRefiner:
         if steps <= 0:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
-        conns = [c for node in genome.nodes for c in node.connections if c.enabled]
+        conns = genome.get_lamarck_connections()
         nodes = genome.nodes
         params = conns + nodes
         if not params:
@@ -304,6 +332,7 @@ class LamarckRefiner:
         def write(vec) -> None:
             for c, value in zip(conns, vec[:len(conns)]):
                 c.weight = float(value)
+            genome._sync_groups_from_reps(conns)
             for n, value in zip(nodes, vec[len(conns):]):
                 n.bias = float(value)
 
@@ -329,10 +358,12 @@ class LamarckRefiner:
         else:
             for c, w in zip(conns, orig_w):
                 c.weight = w
+            genome._sync_groups_from_reps(conns)
             for n, b in zip(nodes, orig_b):
                 n.bias = b
 
         self.time_ms += (time.perf_counter() - t0) * 1000.0
+        self._store_momentum(genome, conns, nodes, orig_w, orig_b)
         return best_fitness
 
     def refine_nes(
@@ -356,7 +387,7 @@ class LamarckRefiner:
         if k <= 0:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
-        conns = [c for node in genome.nodes for c in node.connections if c.enabled]
+        conns = genome.get_lamarck_connections()
         nodes = genome.nodes
         if not conns and not nodes:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
@@ -383,6 +414,7 @@ class LamarckRefiner:
             # Positive perturbation
             for i, c in enumerate(conns):
                 c.weight = orig_w[i] + sigma * noise_w[i]
+            genome._sync_groups_from_reps(conns)
             for i, n in enumerate(nodes):
                 n.bias = orig_b[i] + sigma * noise_b[i]
             f_plus = fitness_fn(genome)
@@ -390,6 +422,7 @@ class LamarckRefiner:
             # Negative perturbation (antithetic for variance reduction)
             for i, c in enumerate(conns):
                 c.weight = orig_w[i] - sigma * noise_w[i]
+            genome._sync_groups_from_reps(conns)
             for i, n in enumerate(nodes):
                 n.bias = orig_b[i] - sigma * noise_b[i]
             f_minus = fitness_fn(genome)
@@ -405,6 +438,7 @@ class LamarckRefiner:
         scale = self.nes_lr / (k * sigma)
         for i, c in enumerate(conns):
             c.weight = orig_w[i] + scale * grad_w[i]
+        genome._sync_groups_from_reps(conns)
         for i, n in enumerate(nodes):
             n.bias = orig_b[i] + scale * grad_b[i]
 
@@ -414,11 +448,13 @@ class LamarckRefiner:
         else:
             for i, c in enumerate(conns):
                 c.weight = orig_w[i]
+            genome._sync_groups_from_reps(conns)
             for i, n in enumerate(nodes):
                 n.bias = orig_b[i]
             best_fitness = baseline
 
         self.time_ms += (time.perf_counter() - t0) * 1000.0
+        self._store_momentum(genome, conns, nodes, orig_w, orig_b)
         return best_fitness
 
     def refine_sa(
@@ -443,7 +479,7 @@ class LamarckRefiner:
         if steps <= 0:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
-        conns = [c for node in genome.nodes for c in node.connections if c.enabled]
+        conns = genome.get_lamarck_connections()
         nodes = genome.nodes
         if not conns and not nodes:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
@@ -454,6 +490,8 @@ class LamarckRefiner:
             return baseline_fitness if baseline_fitness is not None else fitness_fn(genome)
 
         t0 = time.perf_counter()
+        orig_w = [c.weight for c in conns]
+        orig_b = [n.bias   for n in nodes]
         current_fitness = fitness_fn(genome) if baseline_fitness is None else baseline_fitness
         best_fitness = current_fitness
         T = self.sa_t0 if self.sa_t0 is not None else sigma
@@ -464,6 +502,7 @@ class LamarckRefiner:
             saved_b = [n.bias   for n in nodes]
             for c in conns:
                 c.weight += random.gauss(0.0, sigma)
+            genome._sync_groups_from_reps(conns)
             for n in nodes:
                 n.bias += random.gauss(0.0, sigma)
             new_fitness = fitness_fn(genome)
@@ -476,10 +515,12 @@ class LamarckRefiner:
             else:
                 for c, w in zip(conns, saved_w):
                     c.weight = w
+                genome._sync_groups_from_reps(conns)
                 for n, b in zip(nodes, saved_b):
                     n.bias = b
 
         self.time_ms += (time.perf_counter() - t0) * 1000.0
+        self._store_momentum(genome, conns, nodes, orig_w, orig_b)
         return best_fitness
 
     def adaptive_steps(

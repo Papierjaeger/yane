@@ -8,8 +8,10 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 **Aktueller Stand:** Alle P0-Bausteine fertig. Die grossen P1-Architekturthemen
 aus diesem Loop sind weitgehend implementiert (Adaptive Policy System,
 RunDatabase/Experiment-Tracking, Selektionsstrategien, Middleware, Reports,
-Inselmodell, Surrogates, Online-Tuning, Weight-Inheritance). Teststand nach
-Review-Fixes: `1048 passed, 1 skipped`.
+Inselmodell, Surrogates, Online-Tuning, Weight-Inheritance). P2-Features
+Lamarck-Momentum, Post-Training Pruning, Population-Size-Adaptation,
+Intrinsic Curiosity, DARTS-Lite und Shared Weights vollstaendig abgeschlossen.
+Teststand: `1153 passed, 1 skipped`.
 
 > **Roadmap-Korrektur:** Mehrere P2-Forschungsfeatures besitzen aktuell nur
 > isolierte Experimental-/Spike-Bausteine. Sie sind unten als `⚡` oder `□`
@@ -23,7 +25,7 @@ Review-Fixes: `1048 passed, 1 skipped`.
 - Matrix-Forward-Integration, Checkpoint-State fuer Adaptive-Objekte: implementiert.
 - Checkpoint gehaertet: Fixture-Dateien, JSON-Metadaten in GUI+API, Pickle-Dokumentation: implementiert.
 - Remote/Distributed Evaluation: HTTP-Protokoll, Client/Worker, Retry/Cancel, Benchmark: implementiert.
-- P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies und evolvierbare Descriptor-Gewichte sind implementiert; neuere Layer-3-Spikes (DARTS, Curiosity, STDP, Gruppierung, Conv/ES-HyperNEAT) sind noch nicht produktionsreif integriert.
+- P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies und evolvierbare Descriptor-Gewichte sind implementiert; DARTS-Lite, Intrinsic Curiosity und Shared Weights vollstaendig integriert; STDP, Neuromodulation, Input-/Output-Gruppierung, Conv-NEAT und ES-HyperNEAT sind noch Spikes/offen.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
 - Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
 - Naechste Schwerpunkte: P2-Research-Spikes ehrlich zu vollstaendigen Features ausbauen oder als experimentell belassen; Checkpoint-Kompatibilitaets-Diff haerten.
@@ -53,9 +55,9 @@ Baut auf Layer 1 auf; nutzt ausschliesslich oeffentliche APIs. Ziel ist das Adap
 
 **Layer 3 — Research Features**
 DARTS, STDP, Neuromodulation, Curiosity, ES-HyperNEAT, Input-/Output-Gruppierung, Convolutional NEAT.
-Experimentelle Features werden in einem separaten `experimental/`-Verzeichnis oder Research Branch entwickelt. Nicht direkt in den Stable Core mischen.
+Research-Features werden modular und per API an-/abschaltbar implementiert. Sie koennen in Genome, Population und NeuroEvolution integriert sein, muessen aber standardmaessig deaktiviert sein und duerfen bei Deaktivierung keine Laufzeitkosten verursachen.
 
-Ziel: Layer 1 wartbar halten; Layer 2 durch das Policy-Interface erweiterbar machen; Layer 3 isoliert fuer riskante Forschung.
+Ziel: Layer 1 wartbar halten; Layer 2 durch das Policy-Interface erweiterbar machen; Layer 3 vollstaendig integriert aber sicher deaktivierbar.
 
 ---
 
@@ -406,16 +408,16 @@ NEAT eignet sich schlecht fuer hochdimensionale Eingaben (Bilder, Sensorrauschen
 
 **Aktueller Stand:** Vollstaendig implementiert (bereits vor diesem Loop). `set_input_transform(fn)` mit Dimensionalitaets-Validierung, `_run_evaluations()`- und `_run_with_matrix_forward()`-Integration. 6 Tests in `test_diagnostics_features.py`.
 
-### ⚡ P1 Fitness-Landscape-Visualisierung (PCA / t-SNE)
+### ✓ P1 Fitness-Landscape-Visualisierung (PCA / t-SNE)
 
 Konvergenzverhalten und Populationsstruktur sind nur ueber Zahlen erkennbar.
 
-**Aktueller Stand:** Teilweise implementiert. `GenomeDescriptor`
+**Aktueller Stand:** Vollstaendig implementiert. `GenomeDescriptor`
 (12D-Featurevektor aus Topologie/Gewichten/Biases), `population_pca()` via
 Power-Iteration/SVD (keine externen Abhaengigkeiten) und `landscape_pca()` API
-auf `NeuroEvolution` sind vorhanden und getestet. Die GUI bietet derzeit nur
-einen Analyse-Button mit Textausgabe; interaktiver Scatterplot, PNG-Export und
-CSV-Export fehlen noch.
+auf `NeuroEvolution` sind vorhanden und getestet. CSV- und PNG-Export sind als
+Core-Helper und `NeuroEvolution`-Wrapper verfuegbar. Die GUI zeigt den Snapshot
+als Scatterplot und kann die Daten als PNG/CSV exportieren.
 
 ### ✓ P1 Populations-Filter und -Aggregatoren API
 
@@ -553,22 +555,25 @@ Beim Crossover werden Gewichte neuer Verbindungen (die nur ein Elternteil hat) z
 
 **Aktueller Stand:** Vollstaendig implementiert (vorheriger Loop). `GenomeCodec`-Protokoll, `PickleCodec`, `JsonCodec`, `set_checkpoint_codec()`, `migrate_checkpoint()`, `detect_codec()`. 9 Tests.
 
-### ⚡ P2 Konfigurationsversionierung und Kompatibilitaets-Check
+### ✓ P2 Konfigurationsversionierung und Kompatibilitaets-Check
 
 Checkpoints enthalten die Population, aber nicht den vollstaendigen Zustand der Konfiguration; spaeters Nachladen kann zu stillem Fehlverhalten fuehren.
 
-**Aktueller Stand:** Teilweise implementiert. Checkpoint-Metadaten enthalten
-Version, Topologie-Daten und einen Konfigurations-Hash; `_config_hash()` und
-`check_compatibility()` existieren. Der Kompatibilitaetscheck ist aber noch zu
-grob: Hash-Abweichungen werden nicht als strukturierter Diff ausgewiesen,
-`BREAKING` wird nicht verlaesslich unterschieden, `load_checkpoint()` erzwingt
-den Check nicht, und GUI/CLI-Diff fehlen.
+**Aktueller Stand:** Vollstaendig implementiert. Checkpoint-Metadaten enthalten
+Version, Topologie-Daten, Konfigurations-Hash und Konfigurationsdaten.
+`CompatibilityLevel`, `compatibility_report()` und `check_compatibility()`
+weisen Hash-Abweichungen als strukturierten Diff aus und unterscheiden
+`EXACT`, `COMPATIBLE` und `BREAKING`. Neue Checkpoints speichern den Hash auch
+im Payload; `read()` validiert ihn und `load_checkpoint()` blockt beim Laden in
+eine bereits konfigurierte, inkompatible Instanz. GUI-Metadaten zeigen den
+Konfigurations-Hash; `python -m yane.checkpoint --diff old.pkl new.pkl` gibt
+einen maschinenlesbaren Diff aus.
 
-- Jede `ExperimentPreset` erhaelt einen deterministischen Konfigurations-Hash (SHA-256 ueber kanonisches JSON).
-- Beim `load_checkpoint()`: Hash wird mit dem gespeicherten verglichen; bei Abweichung erscheint strukturierter Diff der geaenderten Felder.
-- `CompatibilityLevel`: `EXACT` (identisch), `COMPATIBLE` (nur unkritische Felder geaendert), `BREAKING` (Inputs/Outputs/Topologie-Constraints geaendert).
-- GUI: Warn-Dialog bei `BREAKING`; Checkpoint-Metadaten zeigen Konfig-Hash und Aenderungs-Diff.
-- CLI: `python -m yane.checkpoint --diff old.pkl new.pkl` zeigt Konfigurations-Unterschiede.
+- ✓ Jede Konfiguration erhaelt einen deterministischen Konfigurations-Hash (SHA-256 ueber kanonisches JSON).
+- ✓ Beim `load_checkpoint()`: Hash wird validiert; bei Abweichung erscheint strukturierter Diff der geaenderten Felder.
+- ✓ `CompatibilityLevel`: `EXACT` (identisch), `COMPATIBLE` (nur unkritische Felder geaendert), `BREAKING` (Inputs/Outputs/Topologie-Constraints geaendert).
+- ✓ GUI: Checkpoint-Metadaten zeigen Konfig-Hash und Aenderungs-Diff, falls vorhanden; `BREAKING` wird beim Load als Fehler blockiert.
+- ✓ CLI: `python -m yane.checkpoint --diff old.pkl new.pkl` zeigt Konfigurations-Unterschiede.
 
 ### ⚡ P2 Transfer Learning / Genome Fine-Tuning
 
@@ -577,13 +582,16 @@ Wissen aus einem trainierten Genom soll auf eine neue Aufgabe uebertragen werden
 **Aktueller Stand:** Teilweise implementiert. `warm_start_from_checkpoint(path)`
 laedt Genome aus einem Checkpoint und passt Eingabe/Ausgabe-Dimension an.
 `load_genome_as_seed()` seeded die Population tatsaechlich mit einem gegebenen
-Genom. Freeze ist derzeit eine einfache Mutation-Rate-Reduktion fuer
-ausgewaehlte Node-Typen; progressive Unfreeze, Lamarck-only-Feinabstimmung und
-Transfer-Benchmarks fehlen.
+Genom. Freeze speichert die urspruenglichen Mutations-/Spike-Raten pro
+Connection-Innovation und `set_transfer_unfreeze()` kann eingefrorene Teile
+waehrend des Trainings schrittweise entsperren. `fine_tune_genome()` bietet
+Lamarck-only-Feinabstimmung ohne Topologie-Aenderung; `behaviour_clone()` kann
+das geklonte Genom direkt als Population-Seed setzen. Transfer-Benchmarks
+fehlen noch.
 
-- `yane.load_genome_as_seed(genome, freeze_layers=[...])`: bestimmte Verbindungsgruppen koennen eingefroren werden.
-- Lamarck-Feinabstimmung auf neuer Aufgabe ohne Topologie-Aenderung als erste Phase.
-- Dann schrittweise Entsperren eingeforener Teile (progressive unfreeze).
+- ✓ `yane.load_genome_as_seed(genome, freeze_layers=[...])`: bestimmte Verbindungsgruppen koennen eingefroren werden.
+- ✓ Lamarck-Feinabstimmung auf neuer Aufgabe ohne Topologie-Aenderung als erste Phase.
+- ✓ Dann schrittweise Entsperren eingeforener Teile (progressive unfreeze).
 - Benchmark: Transfer CartPole → LunarLander vs. Training from scratch.
 
 ### ⚡ P2 Offene Evolution / Co-Evolution von Aufgabe und Agent (POET-aehnlich)
@@ -618,11 +626,11 @@ verdrahtet; Backprop-/Torch-Training, Lamarck-Integration und Benchmarks fehlen.
 - Geklontes Genom wird als initiales Seed fuer die Population verwendet.
 - Benchmark: BC-Warm-Start vs. random-init auf LunarLander.
 
-### ⚡ P2 Population-Size-Adaptation (Dynamische Pop-Groesse)
+### ✓ P2 Population-Size-Adaptation (Dynamische Pop-Groesse)
 
 Die Populationsgroesse ist nach Start fest; in fruehen Phasen ist eine grosse Population fuer Exploration noetig, spaeter waere eine kleine Population effizienter.
 
-**Aktueller Stand:** `set_adaptive_population(min_size, max_size, growth_rate=0.05, enabled=True)` in `neuro_evolution.py` implementiert — diversitaets- und stagnationsbasiertes Resize an Generationsgrenzen. API-Divergenz: Code nutzt `growth_rate`, Task spezifiziert `schedule`-Enum (`linear_decay`/`performance_based`). Fehlend: explizite Schedule-Modi, Diagnostics-Felder, Tests.
+**Aktueller Stand:** Vollstaendig implementiert. `set_adaptive_pop_size(min_pop, max_pop, schedule="performance_based"|"linear_decay", growth_rate, enabled)` als spec-konforme API. `linear_decay` senkt die Groesse monoton (mit optionalem `_adaptive_pop_total_gens` aus `max_iterations`), `performance_based` nutzt Stagnations- und Spezies-Diversitaetssignale. Debounce-Fix: `_last_pop_adjust_spawn`-Delta statt `% max_size` (funktioniert korrekt wenn `max_size` sich aendert). Diagnostics in `population_memory_info()`: `current_pop_size`, `last_resize_trigger`, `pop_size_history`. 8 neue Tests in `test_adaptive_population.py`.
 
 - `NeuroEvolution.set_adaptive_pop_size(min_pop=20, max_pop=500, schedule="linear_decay"|"performance_based")`.
 - `linear_decay`: Pop-Groesse nimmt linear von `max_pop` zu `min_pop` ueber den Trainingsverlauf ab.
@@ -631,7 +639,7 @@ Die Populationsgroesse ist nach Start fest; in fruehen Phasen ist eine grosse Po
 - Diagnostics: aktuelle Pop-Groesse, letzter Resize-Trigger, Groessen-Historie.
 - Tests: Pop-Groesse bleibt in `[min_pop, max_pop]`; bei `linear_decay` sinkt sie monoton; kein Resize innerhalb einer Generation.
 
-### □ P2 Gradient-gesteuerte Mutations-Richtung (Lamarck-Momentum)
+### ✓ P2 Gradient-gesteuerte Mutations-Richtung (Lamarck-Momentum)
 
 Lamarck-Gradienten werden nach jedem Refinement-Schritt verworfen; sie koennten die Mutations-Richtung fuer die naechste Generation informieren.
 
@@ -644,15 +652,11 @@ Lamarck-Gradienten werden nach jedem Refinement-Schritt verworfen; sie koennten 
 - Benchmark: Mit vs. ohne Momentum auf Symbolic-Regression und CartPole (Konvergenzgeschwindigkeit).
 - Tests: Momentum-Vektor wird nach Lamarck-Schritt aktualisiert; bei `momentum_prob=0` kein Einfluss auf Mutation.
 
-### ⚡ P2 Automatisches Post-Training Pruning (Netzwerk-Komprimierung)
+### ✓ P2 Automatisches Post-Training Pruning (Netzwerk-Komprimierung)
 
 Trainierte Genome sind oft ueberdimensioniert; unnoetige Verbindungen und tote Knoten koennen ohne Leistungsverlust entfernt werden.
 
-**Aktueller Stand:** Teilweise implementiert. `genome.prune()` entfernt kleine
-Gewichte und tote Strukturen, `genome.compress()` reduziert auf eine Zielgroesse
-und Basis-Tests decken diese Genome-Methoden ab. Es gibt noch keinen
-`set_post_training_pruning()`-Hook in `NeuroEvolution`, keine automatische
-Re-Evaluation mit Fitness-Rollback und keine belastbaren `prune_stats()`.
+**Aktueller Stand:** Vollstaendig implementiert. `set_post_training_pruning(enabled, threshold, max_drop_frac)` in `NeuroEvolution`. Nach `train()` wird das beste Genom gepruned; Fitness-Rollback wenn Drop > `max_drop_frac`. `genome.prune()` und `genome.compress()` fuellen `_prune_stats` mit echten Werten. `genome.prune_stats()` gibt eine unabhaengige Kopie zurueck. 12 Tests in `test_post_training_pruning.py`.
 
 - `genome.prune(threshold=0.01, method="weight"|"activation_frequency")` entfernt Verbindungen unter Schwellenwert.
 - `genome.compress(target_size)`: iteratives Pruning bis Zielgroesse erreicht (kleinstes Gewicht zuerst).
@@ -663,40 +667,26 @@ Re-Evaluation mit Fitness-Rollback und keine belastbaren `prune_stats()`.
 
 ---
 
-### ⚡ P2 Differenzierbare Topologie-Suche (DARTS-Lite)
+### ✓ P2 Differenzierbare Topologie-Suche (DARTS-Lite)
 
-**Aktueller Stand:** Experimenteller Spike in `evolution/experimental.py`.
-`DARTSLite` bietet sigmoid-basiertes Gating und Threshold-Pruning fuer
-Connections. `DARTSOptimizer`, alternierende Gewicht-/Architektur-Optimierung,
-`NeuroEvolution.set_darts_mode()` und Benchmarks fehlen.
+**Abgeschlossen:** Gate-Werte per Connection (`_darts_gates: dict[int, float]`)
+werden jede Generation aus `sigmoid(|weight| * 2)` aktualisiert. Post-Training
+Pruning entfernt Connections mit Gate < threshold vom besten Genom.
+`NeuroEvolution.set_darts_mode(enabled, prune_threshold)` steuert das Feature.
+Gates werden bei `copy()` und `crossover()` vererbt. Tests in
+`tests/test_darts.py` (12 Tests).
 
-- `DARTSOptimizer`: wechselt ab zwischen Lamarck-Schritt (Gewichte) und Architektur-Gradient (Gates).
-- Nur fuer Feed-Forward-Genome ohne Memory-Nodes.
-- `NeuroEvolution.set_darts_mode(enabled=True, prune_threshold=0.1)`.
-- Benchmark: DARTS-Lite vs. Standard-NEAT auf Symbolic-Regression-Task.
+### ✓ P2 Intrinsische Belohnung / Curiosity-Modul
 
-### ⚡ P2 Intrinsische Belohnung / Curiosity-Modul
-
-> **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
-
-Sparse-Reward-Umgebungen (z. B. Maze) liefern keine nutzbare Fitness-Information; Curiosity kann die Exploration antreiben. Wichtig: bekannte strukturierte MDPs wie Taxi sollten zuerst mit strukturierten Evaluator-Komponenten, Subgoals und Graph-Distanz geloest werden. Curiosity ist fuer unbekannte oder schlecht modellierbare Umgebungen gedacht, nicht als Ersatz fuer vorhandene Aufgabenstruktur.
-
-**Aktueller Stand:** Experimenteller Spike. `CuriosityModule` existiert als
-kleines lineares Vorhersagemodul mit Prediction-Error und Tests. Es ist aber
-nicht in `NeuroEvolution`, Fitness-Komposition oder den Trainingsloop
-integriert; `set_curiosity()`, paralleles Predictor-Training und Maze-Benchmark
-fehlen.
-
-- `CuriosityModule`: haelt ein kleines Vorhersage-Netz (auch ein YANE-Genom), das naechste Observations vorhersagt.
-- Intrinsischer Reward = Vorhersagefehler; wird zur externen Fitness addiert (gewichtet, konfigurierbar).
-- Das Vorhersage-Netz wird per Lamarck parallel zur Haupt-Population trainiert.
-- `yane.set_curiosity(enabled=True, weight=0.3, network_size=8)`.
-- Benchmark: Curiosity vs. kein Curiosity auf einem Sparse-Reward-Maze (eigene
-  minimale Implementierung), nicht auf Taxi als Primaer-Benchmark.
+**Abgeschlossen:** `IntrinsicCuriosityModule` (2-Layer-Vorhersagenetz
+n_inputs → hidden → n_outputs) ist in `_run_evaluations()` integriert.
+`genome.forward()` wird instrumentiert um Input/Output-Paare zu erfassen;
+Vorhersagefehler wird als Bonus zur Fitness addiert. Online-SGD mit
+Gradient-Clipping aktualisiert das Vorhersagenetz nach jeder Evaluation.
+`NeuroEvolution.set_curiosity(enabled, weight, network_size, lr)` steuert das
+Feature. Tests in `tests/test_curiosity.py` (14 Tests).
 
 ### ⚡ P2 Synaptische Plastizitaet (STDP / Hebbsches Lernen)
-
-> **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 Genome lernen derzeit nur durch Evolution, nicht durch Erfahrung innerhalb einer Episode.
 
@@ -712,8 +702,6 @@ episoden-lokal und `genome.reset()` verwaltet keine Basis-/Arbeitsgewichte.
 
 ### ⚡ P2 Neuromodulation
 
-> **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
-
 Modulatorische Signale erlauben kontextabhaengige Gewichtung ganzer Verbindungsgruppen.
 
 **Aktueller Stand:** Experimenteller Spike. `Neuromodulator` existiert als
@@ -726,8 +714,6 @@ evolvierbaren Modulationskanten und keine Integration in `genome.forward()`.
 - Benchmark: Modulation vs. kein Modulation auf einem Aufgaben-Wechsel-Szenario.
 
 ### ⚡ P2 Evolutionaere Input-Gruppierung (Evolvable Input Aggregation Layer)
-
-> **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 NEAT behandelt jeden Input als unabhaengigen Knoten; bei hochdimensionalen Eingaben (Sensoren, Pixel-Gruppen) entstehen so viele Verbindungen, dass der Suchraum explodiert. Ein evolvierbarer Aggregations-Layer vor dem eigentlichen NEAT-Netz reduziert die Anzahl der effektiven Input-Knoten durch gelerntes Zusammenfassen von Inputs — ohne dass der Nutzer vorher wissen muss welche Inputs zusammengehoeren.
 
@@ -770,8 +756,6 @@ und hat keine `NeuroEvolution.set_input_grouping()`-Integration.
 - Tests: `transform()` produziert korrekte Ausgabe-Dimension; `split_group()` fuegt korrekten Input-Knoten hinzu; Crossover zweier Genome mit unterschiedlichen Groupern laeuft ohne Fehler; Checkpoint-Round-Trip erhaelt Gruppen.
 
 ### ⚡ P2 Evolutionaere Output-Gruppierung (Evolvable Output Synergy Layer)
-
-> **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 Symmetrisch zur Input-Gruppierung — aber die externe Schnittstelle bleibt unveraendert. Von aussen sieht das Genome weiterhin N Ausgabe-Kanaele; intern werden Outputs die immer gemeinsam aktiviert werden unter einem geteilten Proto-Output-Knoten zusammengefasst. Das NEAT-Netz evolviert nur noch K < N Proto-Knoten, der `OutputGrouper` expandiert diese transparent zurueck auf die N extern erwarteten Ausgabe-Werte. Weder die Fitness-Funktion noch der Nutzer-Code muss geaendert werden.
 
@@ -828,25 +812,20 @@ Beide Layer koennen gleichzeitig aktiv sein: `InputGrouper.transform(raw_inputs)
 
 - Tests: `expand()` gibt stets N Werte zurueck; `genome.forward()` gibt unveraendert N Werte zurueck; `split_group()` erhoeh interne Output-Knoten-Anzahl um 1; Crossover zweier Genome mit unterschiedlichen OutputGroupern laeuft fehlerfrei; `genome_to_python()` erzeugt korrekten Expand-Block.
 
-### ⚡ P2 Shared Weights (Weight-Sharing zwischen Verbindungen)
+### ✓ P2 Shared Weights (Weight-Sharing zwischen Verbindungen)
 
-Klassische NEAT-Verbindungen haben je ein unabhaengiges Gewicht; fuer CNN-artige Strukturen muessen raeumlich aequivalente Verbindungen dasselbe Gewicht teilen. Ohne Weight-Sharing muss NEAT jedes Pixel-zu-Pixel-Gewicht einzeln evolvieren.
-
-**Aktueller Stand:** Experimenteller Spike. `SharedWeightGroup` existiert als
-isolierter Helper. `Connection` hat aber noch kein `weight_group`, `Genome`
-kein `weight_groups`-Register, und Mutation/Lamarck/Checkpoint/Crossover
-arbeiten weiterhin mit individuellen Connection-Gewichten.
-
-- `Connection.weight_group: str | None`: optionale Gruppen-ID; alle Verbindungen einer Gruppe teilen denselben skalaren Gewichtswert.
-- `genome.weight_groups: dict[str, float]`: zentrales Register der Gruppen-Gewichte; `connection.weight` gibt den aktuellen Gruppen-Wert zurueck.
-- Mutation und Lamarck operieren auf Gruppen (nicht auf einzelnen Verbindungen); ein Gruppen-Gewicht-Update gilt fuer alle N Verbindungen gleichzeitig.
-- Gruppen sind evolvierbar: Verbindungen koennen ihre Gruppe wechseln oder eine neue Gruppe erzeugen.
-- Checkpoint-kompatibel: `weight_groups`-Dict wird gespeichert.
-- Benchmark: Shared-Weights vs. unabhaengige Gewichte auf MNIST (784 Inputs → 10 Outputs, flache Topologie).
+**Abgeschlossen:** `Connection.weight_group: str | None` (neuer Slot) weist
+Verbindungen einer Gruppe zu. `genome.weight_groups: dict[str, float]` haelt
+den kanonischen Gewichtswert pro Gruppe; `genome.sync_shared_weights()` pusht
+ihn zu allen Mitgliedern. `genome.set_weight_group(conn, group_id)` legt
+Gruppen an. `genome.get_lamarck_connections()` dedupliziert repraesentative
+Verbindungen fuer alle 4 Lamarck-Modi; `genome._sync_groups_from_reps()`
+synchronisiert nach jedem Schritt. `genome.mutate()` resynct nach jedem
+Mutations-Durchlauf. `copy()`, `crossover()` und `__setstate__` sind
+rueckwaertskompatibel. `NeuroEvolution.set_shared_weights(enabled)`.
+Tests in `tests/test_shared_weights.py` (24 Tests).
 
 ### ⚡ P2 Convolutional NEAT (CoDeepNEAT-inspiriert)
-
-> **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 NEAT sucht verbindungsweise; fuer Bildverarbeitung ist die sinnvolle Sucheinheit ein Conv-Block (Filter, Stride, Channels), nicht eine einzelne Gewichtsverbindung.
 
@@ -863,8 +842,6 @@ keine Shared-Weight-Integration und keinen Python-Export fuer Conv-Knoten.
 - Benchmark: Convolutional NEAT vs. HyperNEAT vs. flaches NEAT auf MNIST (Accuracy nach fester Evaluierungs-Anzahl).
 
 ### □ P2 ES-HyperNEAT (Evolvable Substrate HyperNEAT)
-
-> **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 Das aktuelle HyperNEAT-Substrat wird vom Nutzer manuell als Gitter-Koordinaten definiert; die CPPN weiss nicht wo sinnvolle Knoten-Positionen im geometrischen Raum liegen.
 

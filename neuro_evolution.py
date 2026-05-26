@@ -88,6 +88,7 @@ class NeuroEvolution:
         self._adaptive_pop_min: int = 100
         self._adaptive_pop_max: int = 100
         self._adaptive_pop_rate: float = 0.05
+        self._adaptive_pop_schedule: str = "performance_based"
         self._island_model: Any = None
         self._interspecies_crossover_mode: str = "fixed"
         self._interspecies_crossover_rate: float = 0.0
@@ -124,6 +125,7 @@ class NeuroEvolution:
         self._best_checkpoint_path: str | None = None
         self._last_checkpoint_iteration: int | None = None
         self._last_checkpoint_best_fitness: float = -float("inf")
+        self._last_checkpoint_compatibility: dict | None = None
         # Elitism (applied to population on configure())
         self._elite_count: int = 1
         self._species_elite_count: int = 1
@@ -233,6 +235,27 @@ class NeuroEvolution:
         # Run report autosave (None = disabled)
         self._report_autosave_template: str | None = None
         self._report_autosave_format: str = "html"
+        self._transfer_freeze_records: dict[int, dict[str, float]] = {}
+        self._transfer_frozen_layers: list[str] = []
+        self._transfer_unfreeze_enabled: bool = False
+        self._transfer_unfreeze_start_generation: int = 0
+        self._transfer_unfreeze_generations: int = 0
+        self._transfer_unfreeze_progress: float = 0.0
+        # Post-training pruning
+        self._post_pruning_enabled: bool = False
+        self._post_pruning_threshold: float = 0.01
+        self._post_pruning_max_drop_frac: float = 0.02
+        # Curiosity (intrinsic reward)
+        self._curiosity_enabled: bool = False
+        self._curiosity_weight: float = 0.3
+        self._curiosity_network_size: int = 8
+        self._curiosity_lr: float = 0.01
+        self._curiosity_module = None   # IntrinsicCuriosityModule, created lazily
+        # DARTS-Lite (differentiable architecture search)
+        self._darts_enabled: bool = False
+        self._darts_prune_threshold: float = 0.1
+        # Shared Weights
+        self._shared_weights_enabled: bool = False
 
     @property
     def current_genome(self) -> Genome | None:
@@ -335,6 +358,7 @@ class NeuroEvolution:
         self._population._adaptive_pop_min = self._adaptive_pop_min
         self._population._adaptive_pop_max = self._adaptive_pop_max
         self._population._adaptive_pop_rate = self._adaptive_pop_rate
+        self._population._adaptive_pop_schedule = self._adaptive_pop_schedule
         self._population.configure_interspecies_crossover(
             self._interspecies_crossover_rate,
             mode=self._interspecies_crossover_mode,
@@ -381,6 +405,13 @@ class NeuroEvolution:
         self._population._weight_blend_alpha = (
             self._weight_blend_alpha if self._weight_inheritance_enabled else -1.0
         )
+        # Curiosity: create forward model now that dimensions are known.
+        if self._curiosity_enabled and self._curiosity_module is None:
+            from yane.evolution.experimental import IntrinsicCuriosityModule
+            self._curiosity_module = IntrinsicCuriosityModule(
+                self._n_inputs, self._n_outputs,
+                self._curiosity_network_size, self._curiosity_lr,
+            )
         # Validate input transform dimensions.
         if self._input_transform is not None and self._n_raw_inputs is not None:
             try:
@@ -469,6 +500,57 @@ class NeuroEvolution:
             self._population._adaptive_pop_min = min_size
             self._population._adaptive_pop_max = max_size
             self._population._adaptive_pop_rate = self._adaptive_pop_rate
+            self._population._adaptive_pop_schedule = self._adaptive_pop_schedule
+
+    def set_adaptive_pop_size(
+        self,
+        min_pop: int,
+        max_pop: int,
+        schedule: str = "performance_based",
+        growth_rate: float = 0.05,
+        enabled: bool = True,
+    ) -> None:
+        """Enable adaptive population sizing with an explicit schedule.
+
+        This is the spec-compliant API replacing ``set_adaptive_population()``.
+        Both methods update the same underlying configuration; the difference is
+        this one exposes the *schedule* parameter directly.
+
+        Args:
+            min_pop:     Minimum allowed population size.
+            max_pop:     Maximum allowed population size.
+            schedule:    ``"linear_decay"`` — monotonically shrinks from
+                         *max_pop* towards *min_pop* over the training run
+                         (derived from ``max_iterations`` when set, otherwise
+                         a fixed step of *growth_rate* per generation).
+
+                         ``"performance_based"`` — grows on stagnation / low
+                         diversity, shrinks when convergence is healthy.
+            growth_rate: Fractional step size used by ``performance_based``
+                         and as the per-generation step for ``linear_decay``
+                         when ``max_iterations`` is unknown (default 0.05).
+            enabled:     Pass False to disable without losing config.
+        """
+        _valid = {"linear_decay", "performance_based"}
+        if schedule not in _valid:
+            raise ValueError(
+                f"schedule must be one of {_valid!r}, got {schedule!r}"
+            )
+        self._adaptive_pop_schedule = schedule
+        self.set_adaptive_population(
+            min_size=min_pop,
+            max_size=max_pop,
+            growth_rate=growth_rate,
+            enabled=enabled,
+        )
+        if self._population is not None:
+            self._population._adaptive_pop_schedule = schedule
+            # For linear_decay, derive total generations from max_iterations if available
+            if schedule == "linear_decay" and self.max_iterations is not None:
+                pop_size = self._population.max_size
+                self._population._adaptive_pop_total_gens = max(
+                    1, self.max_iterations // max(1, pop_size)
+                )
 
     def set_weight_inheritance(
         self,
@@ -865,6 +947,135 @@ class NeuroEvolution:
             self._lamarck_eligible_species_indices: list[int] | None = None
         else:
             self._lamarck_eligible_species_indices = list(enabled_species)
+
+    def set_lamarck_momentum(
+        self,
+        enabled: bool = True,
+        momentum_prob: float = 0.3,
+        decay: float = 0.9,
+    ) -> None:
+        """Enable gradient-informed mutation direction via Lamarck-Momentum.
+
+        After each Lamarckian refinement step the net weight-delta vector is
+        stored on the genome.  During subsequent mutation, each parameter is
+        nudged in the stored direction with probability ``momentum_prob``.
+        The stored deltas decay exponentially so the signal fades after a few
+        generations if no further refinement occurs.
+
+        Args:
+            enabled:       Pass False to disable without losing config.
+            momentum_prob: Per-parameter probability of applying the momentum
+                           nudge (default 0.3).
+            decay:         Exponential decay factor applied to stored deltas
+                           each generation (default 0.9; 1.0 = no decay).
+        """
+        if not (0.0 <= momentum_prob <= 1.0):
+            raise ValueError(f"momentum_prob must be in [0, 1], got {momentum_prob}")
+        if not (0.0 < decay <= 1.0):
+            raise ValueError(f"decay must be in (0, 1], got {decay}")
+        self._lamarck.momentum_enabled = enabled
+        self._lamarck.momentum_prob = momentum_prob
+        self._lamarck.momentum_decay = decay
+
+    def set_post_training_pruning(
+        self,
+        enabled: bool = True,
+        threshold: float = 0.01,
+        max_drop_frac: float = 0.02,
+    ) -> None:
+        """Enable automatic pruning of the best genome after ``train()`` completes.
+
+        After training finishes, the best genome is pruned by removing connections
+        whose absolute weight is below *threshold*.  The pruned genome is then
+        re-evaluated once; if its fitness drops by more than *max_drop_frac*
+        relative to the pre-prune fitness the pruning is rolled back and the
+        original genome is restored.
+
+        Results are stored on the genome via ``genome.prune_stats()``, including
+        ``fitness_delta``, ``compression_rate``, and ``rolled_back``.
+
+        Args:
+            enabled:       Pass False to disable without losing config.
+            threshold:     Minimum absolute weight to keep (default 0.01).
+            max_drop_frac: Maximum tolerated relative fitness drop before
+                           rollback.  E.g. 0.02 = up to 2% drop allowed.
+        """
+        if threshold < 0.0:
+            raise ValueError(f"threshold must be >= 0, got {threshold}")
+        if not (0.0 <= max_drop_frac <= 1.0):
+            raise ValueError(f"max_drop_frac must be in [0, 1], got {max_drop_frac}")
+        self._post_pruning_enabled = enabled
+        self._post_pruning_threshold = threshold
+        self._post_pruning_max_drop_frac = max_drop_frac
+
+    # ── Research features (Curiosity / DARTS / Shared Weights) ─────────────
+
+    def set_curiosity(
+        self,
+        enabled: bool = True,
+        weight: float = 0.3,
+        network_size: int = 8,
+        lr: float = 0.01,
+    ) -> None:
+        """Enable intrinsic curiosity reward.
+
+        Adds a prediction-error bonus to fitness: genomes producing surprising
+        (hard-to-predict) outputs receive a positive bonus, encouraging exploration.
+
+        A 2-layer forward model (n_inputs → hidden → n_outputs) predicts each
+        genome's output from its inputs; the prediction error becomes the bonus.
+        The model is updated online after every genome evaluation.
+
+        Args:
+            enabled:      Pass False to disable without losing config.
+            weight:       Bonus scale factor added to base fitness.
+            network_size: Hidden layer size of the forward model.
+            lr:           SGD learning rate for forward model updates.
+        """
+        self._curiosity_enabled = enabled
+        self._curiosity_weight = weight
+        self._curiosity_network_size = network_size
+        self._curiosity_lr = lr
+        if enabled and self._n_inputs > 0 and self._n_outputs > 0:
+            from yane.evolution.experimental import IntrinsicCuriosityModule
+            self._curiosity_module = IntrinsicCuriosityModule(
+                self._n_inputs, self._n_outputs, network_size, lr
+            )
+        elif not enabled:
+            self._curiosity_module = None
+
+    def set_darts_mode(
+        self,
+        enabled: bool = True,
+        prune_threshold: float = 0.1,
+    ) -> None:
+        """Enable DARTS-Lite differentiable architecture search.
+
+        Each connection gets a gate value in [0, 1] updated every generation
+        from |weight| via sigmoid.  At the end of training, connections whose
+        gate falls below *prune_threshold* are removed from the best genome.
+
+        Args:
+            enabled:         Pass False to disable.
+            prune_threshold: Gate cutoff for post-training pruning (default 0.1).
+        """
+        if not (0.0 <= prune_threshold <= 1.0):
+            raise ValueError(f"prune_threshold must be in [0, 1], got {prune_threshold}")
+        self._darts_enabled = enabled
+        self._darts_prune_threshold = prune_threshold
+
+    def set_shared_weights(self, enabled: bool = True) -> None:
+        """Enable shared-weight groups.
+
+        When enabled, connections can be assigned to a named weight group via
+        ``genome.set_weight_group(conn, group_id)``.  All connections in a group
+        share the same weight value; mutations and Lamarck refinement update the
+        group value and sync all members automatically.
+
+        Args:
+            enabled: Pass False to disable.
+        """
+        self._shared_weights_enabled = enabled
 
     def set_adaptive_control(self, enabled: bool = True) -> None:
         """Enable or disable the central Adaptive Control Layer.
@@ -1361,6 +1572,7 @@ class NeuroEvolution:
             "adaptive_pop_min": self._adaptive_pop_min,
             "adaptive_pop_max": self._adaptive_pop_max,
             "adaptive_pop_rate": self._adaptive_pop_rate,
+            "adaptive_pop_schedule": self._adaptive_pop_schedule,
             "n_workers": self._n_workers,
             "target_species": pop._target_species if pop else self._target_species,
             "target_species_min": pop._target_species_min if pop else self._target_species_min,
@@ -1473,6 +1685,14 @@ class NeuroEvolution:
             ),
             "module_library_enabled": self._module_library is not None,
             "module_insert_rate": self._module_insert_rate,
+            # Research features
+            "curiosity_enabled": self._curiosity_enabled,
+            "curiosity_weight": self._curiosity_weight,
+            "curiosity_network_size": self._curiosity_network_size,
+            "curiosity_lr": self._curiosity_lr,
+            "darts_enabled": self._darts_enabled,
+            "darts_prune_threshold": self._darts_prune_threshold,
+            "shared_weights_enabled": self._shared_weights_enabled,
         }
 
     # -------------------------------------------------------------------------
@@ -1609,6 +1829,10 @@ class NeuroEvolution:
 
             # Tick adaptive components once per generation
             if iterations % _gen_size == 0:
+                if self._darts_enabled and self._population is not None:
+                    for _g in self._population._evaluated:
+                        _g.update_darts_gates()
+                self._tick_transfer_unfreeze(iterations // _gen_size)
                 if self._fitness_component_weights is not None:
                     self._fitness_component_weights.tick(self._population)
                 if self._meta_adaptive_enabled and self._meta_adaptive is not None:
@@ -1900,7 +2124,63 @@ class NeuroEvolution:
                 pass
             self._tensorboard_writer = None
 
+        # Post-training pruning
+        if self._post_pruning_enabled:
+            self._apply_post_training_pruning(fitness_fn)
+
+        # DARTS-Lite post-training pruning
+        if self._darts_enabled and self._population is not None:
+            best = self._population.get_best()
+            if best is not None:
+                best.update_darts_gates()  # ensure gates are current
+                n_pruned = best.prune_darts_connections(self._darts_prune_threshold)
+                if n_pruned:
+                    from yane.util.logger import log_info
+                    log_info(
+                        "DARTS post-training pruning: removed %d connections "
+                        "(threshold=%.2f).", n_pruned, self._darts_prune_threshold,
+                    )
+
         return iterations
+
+    def _apply_post_training_pruning(self, fitness_fn) -> None:
+        """Prune best genome post-training; rollback if fitness drop is too large."""
+        best = self._population.get_best()
+        if best is None or fitness_fn is None:
+            return
+        pre_fitness = best.fitness
+        # Snapshot connections for rollback (prune only removes connections, not nodes)
+        saved_conns = {node: list(node.connections) for node in best.nodes}
+        n_removed = best.prune(threshold=self._post_pruning_threshold)
+        if n_removed == 0:
+            return
+        compression_rate = best._prune_stats.get("compression_rate", 0.0)
+        post_fitness = fitness_fn(best)
+        delta = post_fitness - pre_fitness
+        if pre_fitness != 0.0:
+            drop_frac = (pre_fitness - post_fitness) / abs(pre_fitness)
+        else:
+            drop_frac = 0.0 if post_fitness >= pre_fitness else 1.0
+        if drop_frac > self._post_pruning_max_drop_frac:
+            for node in best.nodes:
+                node.connections = saved_conns[node]
+            best._invalidate_topology()
+            best._prune_stats = {
+                "connections_removed": n_removed,
+                "nodes_removed": 0,
+                "fitness_delta": delta,
+                "compression_rate": compression_rate,
+                "rolled_back": True,
+            }
+        else:
+            best.fitness = post_fitness
+            best._prune_stats["fitness_delta"] = delta
+            from yane.util.logger import log_info
+            log_info(
+                "Post-training pruning: removed %d connections (%.1f%%), "
+                "fitness %.4f → %.4f (delta %.4f).",
+                n_removed, compression_rate * 100, pre_fitness, post_fitness, delta,
+            )
 
     def get_best(self) -> Genome:
         self._ensure_configured()
@@ -2076,6 +2356,16 @@ class NeuroEvolution:
             return {}
         return population_pca(evald)
 
+    def export_landscape_csv(self, path: str) -> None:
+        """Export the current PCA landscape snapshot as CSV."""
+        from yane.evolution.landscape import export_landscape_csv
+        export_landscape_csv(self.landscape_pca(), path)
+
+    def export_landscape_png(self, path: str, *, width: int = 900, height: int = 640) -> None:
+        """Export the current PCA landscape snapshot as a PNG scatterplot."""
+        from yane.evolution.landscape import export_landscape_png
+        export_landscape_png(self.landscape_pca(), path, width=width, height=height)
+
     def population_memory_info(self) -> dict:
         """Returns node/connection/fitness/species diagnostics for the population."""
         self._ensure_configured()
@@ -2149,6 +2439,13 @@ class NeuroEvolution:
                 "rolling_checkpoint_count": len(self._checkpoint_paths),
                 "best_checkpoint_path": self._best_checkpoint_path,
             })
+        if self._transfer_freeze_records or self._transfer_unfreeze_enabled:
+            info.update({
+                "transfer_frozen_layers": list(self._transfer_frozen_layers),
+                "transfer_frozen_connections": len(self._transfer_freeze_records),
+                "transfer_unfreeze_enabled": self._transfer_unfreeze_enabled,
+                "transfer_unfreeze_progress": self._transfer_unfreeze_progress,
+            })
         # Selection strategy diagnostics
         if self._population is not None:
             strategy = self._population.selection_strategy
@@ -2166,6 +2463,17 @@ class NeuroEvolution:
                 ),
                 "n_species_overrides": len(self._population.selection_strategies_by_species),
             }
+        # Adaptive population size diagnostics
+        if self._adaptive_pop_enabled and self._population is not None:
+            pop = self._population
+            info.update({
+                "adaptive_pop_enabled": True,
+                "adaptive_pop_schedule": pop._adaptive_pop_schedule,
+                "current_pop_size": pop.max_size,
+                "n_pop_size_adjustments": pop._n_pop_size_adjustments,
+                "last_resize_trigger": pop._last_resize_trigger or None,
+                "pop_size_history": list(pop._pop_size_history[-10:]),
+            })
         return info
 
     def set_target_species(
@@ -2648,6 +2956,21 @@ class NeuroEvolution:
         """Restore population state from a checkpoint file."""
         payload = _ckpt.read(path)
         cfg = payload["config"]
+        self._last_checkpoint_compatibility = None
+        if self.is_configured:
+            report = _ckpt.compatibility_report(
+                cfg,
+                self._config_dict(),
+                stored_hash=payload.get("config_hash"),
+            )
+            self._last_checkpoint_compatibility = report
+            if report["level"] == _ckpt.CompatibilityLevel.BREAKING.value:
+                changed = ", ".join(item["path"] for item in report["diff"][:6])
+                raise ValueError(
+                    "Checkpoint is incompatible with the current configuration "
+                    f"({changed}). Load it into a fresh NeuroEvolution instance "
+                    "or use warm_start_from_checkpoint() for transfer."
+                )
         self._population  = payload["population"]
         self._tracker     = payload["tracker"]
         self._lamarck.n_applied       = payload.get("lamarck_n_applied", 0)
@@ -2719,6 +3042,7 @@ class NeuroEvolution:
         fitness_fn: Callable[[Genome], float] | None = None,
         min_fitness: float | None = None,
         reset_strategy: bool = False,
+        freeze_layers: list[str] | None = None,
     ) -> int:
         """Use genomes from a checkpoint as the current population.
 
@@ -2745,6 +3069,10 @@ class NeuroEvolution:
         if not genomes:
             raise ValueError("Checkpoint population is empty")
 
+        if freeze_layers:
+            self._transfer_freeze_records = {}
+            self._transfer_frozen_layers = []
+            self._transfer_unfreeze_progress = 0.0
         kept: list[Genome] = []
         for genome in genomes:
             self._adapt_genome_topology(genome, self._n_inputs, self._n_outputs,
@@ -2758,6 +3086,8 @@ class NeuroEvolution:
             genome._species_stale = True
             if reset_strategy:
                 self._reset_genome_strategy(genome)
+            if freeze_layers:
+                self._freeze_genome_layers(genome, freeze_layers)
             if fitness_fn is not None:
                 fitness = self._finalize_fitness(
                     self._run_evaluations(genome, fitness_fn).fitness,
@@ -2787,6 +3117,7 @@ class NeuroEvolution:
         self._population._adaptive_pop_min = self._adaptive_pop_min
         self._population._adaptive_pop_max = self._adaptive_pop_max
         self._population._adaptive_pop_rate = self._adaptive_pop_rate
+        self._population._adaptive_pop_schedule = self._adaptive_pop_schedule
         self._population._weight_blend_alpha = (
             self._weight_blend_alpha if self._weight_inheritance_enabled else -1.0
         )
@@ -2801,6 +3132,84 @@ class NeuroEvolution:
             for genome in self._population._evaluated:
                 self._population._assign_one_genome(genome)
         return len(kept[:self._population_size])
+
+    def set_transfer_unfreeze(
+        self,
+        enabled: bool = True,
+        *,
+        start_generation: int = 0,
+        duration_generations: int = 25,
+    ) -> None:
+        """Progressively restore frozen transfer-learning connection rates.
+
+        Frozen connections are those produced by ``load_genome_as_seed`` or
+        ``warm_start_from_checkpoint(..., freeze_layers=[...])``. During the
+        schedule their mutation and spike rates ramp linearly from zero back to
+        their recorded pre-freeze values.
+        """
+        self._transfer_unfreeze_enabled = bool(enabled)
+        self._transfer_unfreeze_start_generation = max(0, int(start_generation))
+        self._transfer_unfreeze_generations = max(1, int(duration_generations))
+        if not enabled:
+            self._transfer_unfreeze_progress = 0.0
+
+    def progressive_unfreeze_transfer(self, progress: float) -> None:
+        """Manually set transfer unfreeze progress in ``[0, 1]``."""
+        progress = max(0.0, min(1.0, float(progress)))
+        self._transfer_unfreeze_progress = progress
+        self._apply_transfer_unfreeze_progress(progress)
+
+    def _tick_transfer_unfreeze(self, generation: int) -> None:
+        if not self._transfer_unfreeze_enabled or not self._transfer_freeze_records:
+            return
+        start = self._transfer_unfreeze_start_generation
+        duration = self._transfer_unfreeze_generations
+        progress = (generation - start) / duration
+        self.progressive_unfreeze_transfer(progress)
+        if self._transfer_unfreeze_progress >= 1.0:
+            self._transfer_unfreeze_enabled = False
+
+    def _apply_transfer_unfreeze_progress(self, progress: float) -> None:
+        if self._population is None:
+            return
+        genomes = list(self._population._evaluated) + list(self._population._unevaluated)
+        template = getattr(self._population, "_template", None)
+        if template is not None:
+            genomes.append(template)
+        for genome in genomes:
+            for node in genome.nodes:
+                for conn in node.connections:
+                    rec = self._transfer_freeze_records.get(conn.innovation)
+                    if rec is None:
+                        continue
+                    conn.mutation.shift_rate = rec["shift_rate"] * progress
+                    conn.mutation.custom_rate = rec["custom_rate"] * progress
+                    conn.mutation.rate_mutation_rate = rec["rate_mutation_rate"] * progress
+                    conn.spike_rate = rec["spike_rate"] * progress
+
+    def _freeze_genome_layers(self, genome: Genome, freeze_layers: list[str]) -> None:
+        from yane.core.node import NodeType as _NT
+        valid = {_NT.INPUT.value, _NT.HIDDEN.value, _NT.OUTPUT.value}
+        layers = {str(layer).lower() for layer in freeze_layers}
+        unknown = layers - valid
+        if unknown:
+            raise ValueError(f"Unknown freeze layers: {sorted(unknown)}")
+        self._transfer_frozen_layers = sorted(layers)
+        for node in genome.nodes:
+            for conn in node.connections:
+                if node.type.value not in layers and conn.target.type.value not in layers:
+                    continue
+                if conn.innovation not in self._transfer_freeze_records:
+                    self._transfer_freeze_records[conn.innovation] = {
+                        "shift_rate": conn.mutation.shift_rate,
+                        "custom_rate": conn.mutation.custom_rate,
+                        "rate_mutation_rate": conn.mutation.rate_mutation_rate,
+                        "spike_rate": conn.spike_rate,
+                    }
+                conn.mutation.shift_rate = 0.0
+                conn.mutation.custom_rate = 0.0
+                conn.mutation.rate_mutation_rate = 0.0
+                conn.spike_rate = 0.0
 
     @staticmethod
     def _reset_genome_strategy(genome: Genome) -> None:
@@ -2983,6 +3392,31 @@ class NeuroEvolution:
             _t = self._input_transform
             _orig_fwd = genome.forward
             genome.__dict__["forward"] = lambda data: _orig_fwd(_t(data))
+        _curiosity_active = False
+        if self._curiosity_enabled and self._curiosity_module is not None:
+            _curiosity_active = True
+            _curiosity_recorded: list = []
+            _cr = _curiosity_recorded
+            _fwd_pre_curiosity = genome.forward
+            def _curiosity_fwd(data):
+                out = _fwd_pre_curiosity(data)
+                _cr.append((list(data), list(out)))
+                return out
+            genome.__dict__["forward"] = _curiosity_fwd
+            _base_fn = fitness_fn
+            _mod = self._curiosity_module
+            _cw = self._curiosity_weight
+            def fitness_fn(g):  # noqa: F821
+                _cr.clear()
+                base = _base_fn(g)
+                if _cr:
+                    total_err = 0.0
+                    for inp, out in _cr:
+                        total_err += _mod.error(inp, out)
+                        _mod.update(inp, out)
+                    bonus = total_err / len(_cr)
+                    return base + _cw * bonus
+                return base
         try:
             original_fn = fitness_fn
             if self._eval_middlewares:
@@ -3000,7 +3434,7 @@ class NeuroEvolution:
                 self._eval_middleware_diagnostics["evaluator_components"] = dict(_cs)
             return result
         finally:
-            if self._input_transform is not None:
+            if self._input_transform is not None or _curiosity_active:
                 genome.__dict__.pop("forward", None)
 
     def _run_with_matrix_forward(
@@ -3795,14 +4229,11 @@ class NeuroEvolution:
         genome._last_species_id = None
         genome._species_stale = True
 
+        self._transfer_freeze_records = {}
+        self._transfer_frozen_layers = []
+        self._transfer_unfreeze_progress = 0.0
         if freeze_layers:
-            for node in genome.nodes:
-                node_type = node.type.value
-                if node_type in freeze_layers:
-                    # Freeze bias and connections for this node
-                    for conn in node.connections:
-                        conn.mutation.shift_rate = 0.0
-                        conn.mutation.custom_rate = 0.0
+            self._freeze_genome_layers(genome, freeze_layers)
 
         self._population._template = genome.copy()
         self._population._unevaluated = [genome]
@@ -3811,10 +4242,47 @@ class NeuroEvolution:
         self._population._generation = 0
         self._population._stagnation_count = 0
 
+    def fine_tune_genome(
+        self,
+        genome: Genome,
+        fitness_fn: Callable[[Genome], float],
+        *,
+        n_steps: int = 20,
+        load_as_seed: bool = False,
+        freeze_layers: list[str] | None = None,
+    ) -> Genome:
+        """Fine-tune a transferred genome with Lamarck only.
+
+        The topology is adapted to the current task and then kept unchanged;
+        only Lamarckian weight refinement is applied. When ``load_as_seed`` is
+        true, the refined genome is inserted as the current population seed.
+        """
+        self._ensure_configured()
+        tuned = genome.copy()
+        self._adapt_genome_topology(tuned, self._n_inputs, self._n_outputs,
+                                    self._tracker, self._stateful)
+        tuned.max_nodes = self._max_nodes
+        tuned.max_connections = self._max_connections
+        tuned.allow_memory = self._stateful
+        tuned._output_sanitize = self._output_sanitize
+        tuned._output_fallback = self._output_fallback
+        baseline = self._finalize_fitness(fitness_fn(tuned), None, tuned)
+        tuned.fitness = baseline
+        tuned.raw_fitness = baseline
+        refined = self._lamarck.refine(tuned, fitness_fn, baseline_fitness=baseline, n_steps=n_steps)
+        tuned.fitness = self._finalize_fitness(refined, None, tuned)
+        tuned.raw_fitness = tuned.fitness
+        if load_as_seed:
+            self.load_genome_as_seed(tuned, freeze_layers=freeze_layers)
+        return tuned
+
     def behaviour_clone(
         self,
         demonstrations: list[tuple[list[float], list[float]]],
         n_steps: int = 50,
+        *,
+        seed_population: bool = False,
+        freeze_layers: list[str] | None = None,
     ) -> Genome:
         """Supervised pre-training via weight perturbation on demonstration data.
 
@@ -3824,6 +4292,7 @@ class NeuroEvolution:
         Args:
             demonstrations: List of (inputs, targets) pairs.
             n_steps: Number of refinement steps.
+            seed_population: If true, load the cloned genome as population seed.
 
         Returns:
             The cloned (fine-tuned) genome.
@@ -3849,6 +4318,10 @@ class NeuroEvolution:
             if err < best_error:
                 current = candidate
                 best_error = err
+        current.fitness = -best_error
+        current.raw_fitness = -best_error
+        if seed_population:
+            self.load_genome_as_seed(current, freeze_layers=freeze_layers)
         return current
 
     def _ensure_configured(self) -> None:

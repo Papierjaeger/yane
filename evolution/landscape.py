@@ -7,6 +7,10 @@ Provides:
 """
 from __future__ import annotations
 
+import csv
+import struct
+import zlib
+from pathlib import Path
 from typing import Any
 
 from yane.core.genome import Genome
@@ -141,3 +145,134 @@ def population_pca(
                        for g in genomes],
         "explained_var": [round(v, 4) for v in explained],
     }
+
+
+def export_landscape_csv(snapshot: dict[str, Any], path: str | Path) -> None:
+    """Write a PCA landscape snapshot as CSV.
+
+    The CSV contains one row per projected genome and a small metadata comment
+    with the explained variance in the first line.
+    """
+    xs = list(snapshot.get("x", []))
+    ys = list(snapshot.get("y", []))
+    fitness = list(snapshot.get("fitness", []))
+    species = list(snapshot.get("species_id", []))
+    explained = list(snapshot.get("explained_var", [0.0, 0.0]))
+    if not (len(xs) == len(ys) == len(fitness) == len(species)):
+        raise ValueError("Landscape snapshot arrays must have equal length")
+
+    with Path(path).open("w", newline="", encoding="utf-8") as fh:
+        fh.write(
+            "# explained_var_pc1="
+            f"{explained[0] if explained else 0.0},"
+            "explained_var_pc2="
+            f"{explained[1] if len(explained) > 1 else 0.0}\n"
+        )
+        writer = csv.writer(fh)
+        writer.writerow(["index", "x", "y", "fitness", "species_id"])
+        for idx, (x, y, fit, sid) in enumerate(zip(xs, ys, fitness, species)):
+            writer.writerow([idx, x, y, fit, sid])
+
+
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    crc = zlib.crc32(kind + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", crc)
+
+
+def _write_rgb_png(path: str | Path, width: int, height: int, pixels: bytearray) -> None:
+    raw = bytearray()
+    stride = width * 3
+    for y in range(height):
+        raw.append(0)
+        start = y * stride
+        raw.extend(pixels[start:start + stride])
+    png = bytearray(b"\x89PNG\r\n\x1a\n")
+    png.extend(_png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)))
+    png.extend(_png_chunk(b"IDAT", zlib.compress(bytes(raw), 9)))
+    png.extend(_png_chunk(b"IEND", b""))
+    Path(path).write_bytes(png)
+
+
+def export_landscape_png(
+    snapshot: dict[str, Any],
+    path: str | Path,
+    *,
+    width: int = 900,
+    height: int = 640,
+) -> None:
+    """Render a PCA landscape snapshot to a simple PNG scatterplot.
+
+    This intentionally uses only the standard library so the export path works
+    in headless benchmark runs and without GUI dependencies.
+    """
+    xs = list(snapshot.get("x", []))
+    ys = list(snapshot.get("y", []))
+    fitness = list(snapshot.get("fitness", []))
+    species = list(snapshot.get("species_id", []))
+    if not (len(xs) == len(ys) == len(fitness) == len(species)):
+        raise ValueError("Landscape snapshot arrays must have equal length")
+    if width < 120 or height < 120:
+        raise ValueError("PNG dimensions must be at least 120x120")
+
+    pixels = bytearray([30, 30, 46] * width * height)
+    margin = 52
+    plot_w = max(width - 2 * margin, 1)
+    plot_h = max(height - 2 * margin, 1)
+
+    def set_pixel(px: int, py: int, color: tuple[int, int, int]) -> None:
+        if 0 <= px < width and 0 <= py < height:
+            idx = (py * width + px) * 3
+            pixels[idx:idx + 3] = bytes(color)
+
+    def draw_line(x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int]) -> None:
+        dx = abs(x2 - x1)
+        dy = -abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx + dy
+        while True:
+            set_pixel(x1, y1, color)
+            if x1 == x2 and y1 == y2:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x1 += sx
+            if e2 <= dx:
+                err += dx
+                y1 += sy
+
+    grid = (42, 42, 62)
+    axis = (170, 170, 190)
+    for i in range(5):
+        gx = margin + int(i * plot_w / 4)
+        gy = margin + int(i * plot_h / 4)
+        draw_line(gx, margin, gx, height - margin, grid)
+        draw_line(margin, gy, width - margin, gy, grid)
+    draw_line(margin, height - margin, width - margin, height - margin, axis)
+    draw_line(margin, margin, margin, height - margin, axis)
+
+    if not xs:
+        _write_rgb_png(path, width, height, pixels)
+        return
+
+    min_fit = min(fitness) if fitness else 0.0
+    max_fit = max(fitness) if fitness else 0.0
+    fit_span = max(max_fit - min_fit, 1e-12)
+    palette = [
+        (137, 180, 250), (166, 227, 161), (249, 226, 175), (245, 194, 231),
+        (148, 226, 213), (250, 179, 135), (203, 166, 247), (243, 139, 168),
+    ]
+
+    for x, y, fit, sid in zip(xs, ys, fitness, species):
+        px = margin + int(((float(x) + 3.0) / 6.0) * plot_w)
+        py = height - margin - int(((float(y) + 3.0) / 6.0) * plot_h)
+        base = palette[int(sid) % len(palette)]
+        strength = (float(fit) - min_fit) / fit_span
+        color = tuple(int(c * (0.45 + 0.55 * strength)) for c in base)
+        for oy in range(-3, 4):
+            for ox in range(-3, 4):
+                if ox * ox + oy * oy <= 9:
+                    set_pixel(px + ox, py + oy, color)
+
+    _write_rgb_png(path, width, height, pixels)

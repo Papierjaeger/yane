@@ -139,6 +139,16 @@ class Genome:
         # the full compatibility check and restore the genome to its last species.
         self._species_stale: bool = True
 
+        # DARTS-Lite: gate values per connection innovation (lazy; None = disabled).
+        # Updated each generation from |weight| via sigmoid by NeuroEvolution.
+        self._darts_gates: dict[int, float] | None = None
+
+        # Shared Weights: group_id → shared weight value.
+        # Connections assigned to a group via set_weight_group() share this value.
+        self.weight_groups: dict[str, float] = {}
+        # group_id → list[Connection] — rebuilt lazily by sync_shared_weights().
+        self._weight_group_members: dict[str, list] = {}
+
     # -------------------------------------------------------------------------
     # Tick mode
     # -------------------------------------------------------------------------
@@ -732,6 +742,38 @@ class Genome:
         for mut_attr in _MUTATION_GENES:
             getattr(self, mut_attr).mutate_rates()
 
+        # Shared weights: resync group values from first-encountered rep per group.
+        if self.weight_groups:
+            _seen_grps: set[str] = set()
+            for _node in self.nodes:
+                for _conn in _node.connections:
+                    _gid = getattr(_conn, 'weight_group', None)
+                    if _gid is not None and _gid not in _seen_grps:
+                        _seen_grps.add(_gid)
+                        self.weight_groups[_gid] = _conn.weight
+            self.sync_shared_weights()
+
+        # Lamarck-Momentum nudge: bias mutation direction toward last Lamarck delta.
+        _mom_prob = getattr(self, '_lamarck_momentum_prob', 0.0)
+        if _mom_prob > 0.0:
+            _mw: dict = getattr(self, '_lamarck_momentum', {})
+            _mb: list = getattr(self, '_lamarck_bias_momentum', [])
+            _decay: float = getattr(self, '_lamarck_momentum_decay', 0.9)
+            bi = 0
+            for node in self.nodes:
+                for conn in node.connections:
+                    if conn.enabled and random.random() < _mom_prob:
+                        m = _mw.get(conn.innovation, 0.0)
+                        if m:
+                            conn.weight += m
+                if bi < len(_mb) and random.random() < _mom_prob:
+                    node.bias += _mb[bi]
+                bi += 1
+            for inn in _mw:
+                _mw[inn] *= _decay
+            for i in range(len(_mb)):
+                _mb[i] *= _decay
+
     def _mutate_gate_source(self) -> None:
         """Randomly assign or clear gate_node on a persistent hidden node."""
         persistent = [n for n in self.nodes
@@ -915,6 +957,12 @@ class Genome:
 
         child._output_sanitize = self._output_sanitize
         child._output_fallback = self._output_fallback
+        # DARTS gates from fitter parent (self); child gets fresh copy to evolve.
+        if self._darts_gates is not None:
+            child._darts_gates = dict(self._darts_gates)
+        # Shared weight groups from fitter parent.
+        child.weight_groups = dict(self.weight_groups)
+        child._weight_group_members = {}
         child._invalidate_topology()
         return child
 
@@ -973,6 +1021,12 @@ class Genome:
         # active_structure_cache holds only integer counts — safe to share until
         # the copy is mutated (which calls _invalidate_topology → clears the cache).
         genome._active_structure_cache = self._active_structure_cache
+        # DARTS gates: copy dict so child can diverge independently.
+        if self._darts_gates is not None:
+            genome._darts_gates = dict(self._darts_gates)
+        # Shared weights: copy group values; members rebuilt lazily on sync.
+        genome.weight_groups = dict(self.weight_groups)
+        genome._weight_group_members = {}
         return genome
 
     # -------------------------------------------------------------------------
@@ -1012,6 +1066,9 @@ class Genome:
         self.__dict__.setdefault('_species_stale', True)
         self.__dict__.setdefault('_values_arr', None)
         self.__dict__.setdefault('_active_structure_cache', None)
+        self.__dict__.setdefault('_darts_gates', None)
+        self.__dict__.setdefault('weight_groups', {})
+        self.__dict__.setdefault('_weight_group_members', {})
         if 'mutation_gate_source' not in state:
             m = Mutation()
             m.bool_rate = 0.05
@@ -1043,6 +1100,111 @@ class Genome:
     def all_connections(self) -> list[tuple[Node, Connection]]:
         """All (source, connection) pairs in the network."""
         return [(node, conn) for node in self.nodes for conn in node.connections]
+
+    # ── Shared Weights ────────────────────────────────────────────────────────
+
+    def set_weight_group(self, conn: "Connection", group_id: str) -> None:
+        """Assign *conn* to a shared weight group.
+
+        All connections in the same group share one weight value stored in
+        ``genome.weight_groups[group_id]``.  The group is initialised to the
+        connection's current weight the first time it is created.
+        """
+        if group_id not in self.weight_groups:
+            self.weight_groups[group_id] = conn.weight
+        conn.weight_group = group_id
+        # Invalidate member cache so it is rebuilt on next sync.
+        self._weight_group_members.pop(group_id, None)
+
+    def sync_shared_weights(self) -> None:
+        """Propagate each group's weight value to all its member connections."""
+        if not self.weight_groups:
+            return
+        # Rebuild member cache lazily.
+        for gid in list(self.weight_groups):
+            if gid not in self._weight_group_members:
+                members = [
+                    conn
+                    for node in self.nodes
+                    for conn in node.connections
+                    if getattr(conn, 'weight_group', None) == gid
+                ]
+                self._weight_group_members[gid] = members
+            w = self.weight_groups[gid]
+            for conn in self._weight_group_members[gid]:
+                conn.weight = w
+
+    def get_lamarck_connections(self) -> list:
+        """Return enabled connections deduplicated by shared weight group.
+
+        For grouped connections, only the first representative of each group is
+        included so Lamarck refinement updates the group value once rather than
+        having the last connection's delta silently overwrite earlier deltas.
+        """
+        conns = []
+        seen_groups: set[str] = set()
+        for node in self.nodes:
+            for conn in node.connections:
+                if not conn.enabled:
+                    continue
+                gid = getattr(conn, 'weight_group', None)
+                if gid is not None:
+                    if gid in seen_groups:
+                        continue
+                    seen_groups.add(gid)
+                conns.append(conn)
+        return conns
+
+    def _sync_groups_from_reps(self, rep_conns: list) -> None:
+        """Update group weights from representative connections, then sync all members.
+
+        Call this after perturbing/reverting representative connection weights in
+        Lamarck refinement so all group members stay in sync.
+        """
+        if not self.weight_groups:
+            return
+        for conn in rep_conns:
+            gid = getattr(conn, 'weight_group', None)
+            if gid is not None:
+                self.weight_groups[gid] = conn.weight
+        self.sync_shared_weights()
+
+    # ── DARTS-Lite ────────────────────────────────────────────────────────────
+
+    def update_darts_gates(self) -> None:
+        """Recompute gate values from |weight| via sigmoid for all connections.
+
+        gate = sigmoid(|weight| * 2).  Initialises _darts_gates on first call.
+        """
+        import math
+        if self._darts_gates is None:
+            self._darts_gates = {}
+        gates = self._darts_gates
+        for node in self.nodes:
+            for conn in node.connections:
+                if conn.innovation >= 0:
+                    gates[conn.innovation] = 1.0 / (1.0 + math.exp(-abs(conn.weight) * 2.0))
+
+    def prune_darts_connections(self, threshold: float = 0.1) -> int:
+        """Remove connections whose DARTS gate is below *threshold*.
+
+        Returns the number of connections removed.
+        """
+        if self._darts_gates is None:
+            return 0
+        removed = 0
+        gates = self._darts_gates
+        for node in list(self.nodes):
+            to_remove = [
+                conn for conn in node.connections
+                if conn.innovation >= 0 and gates.get(conn.innovation, 1.0) < threshold
+            ]
+            for conn in to_remove:
+                node.connections.remove(conn)
+                removed += 1
+        if removed:
+            self._invalidate_topology()
+        return removed
 
     def _get_innov_cache(self) -> tuple:
         """Return (innov_dict, max_innov, n_innov, key_frozenset, sorted_arr) for this genome.
@@ -1259,6 +1421,9 @@ class Genome:
             raise NotImplementedError("prune method 'activation_frequency' is not yet implemented")
         if method != "weight":
             raise ValueError(f"Unknown prune method: {method!r}")
+        total_before = sum(
+            1 for src in self.nodes for c in src.connections if c.enabled
+        )
         removed = 0
         for src in list(self.nodes):
             to_remove = []
@@ -1270,6 +1435,15 @@ class Genome:
                 removed += 1
         if removed:
             self._invalidate_topology()
+        total_after = total_before - removed
+        comp_rate = removed / total_before if total_before > 0 else 0.0
+        self._prune_stats = {
+            "connections_removed": removed,
+            "nodes_removed": 0,
+            "fitness_delta": 0.0,
+            "compression_rate": comp_rate,
+            "rolled_back": False,
+        }
         return removed
 
     def compress(self, target_size: int) -> int:
@@ -1287,28 +1461,39 @@ class Genome:
             for conn in src.connections
             if conn.enabled
         ]
-        n_remove = len(all_conns) - target_size
+        total_before = len(all_conns)
+        n_remove = total_before - target_size
         if n_remove <= 0:
             return 0
         all_conns.sort(key=lambda t: t[0])
         for _, src, conn in all_conns[:n_remove]:
             src.connections.remove(conn)
         self._invalidate_topology()
+        comp_rate = n_remove / total_before if total_before > 0 else 0.0
+        self._prune_stats = {
+            "connections_removed": n_remove,
+            "nodes_removed": 0,
+            "fitness_delta": 0.0,
+            "compression_rate": comp_rate,
+            "rolled_back": False,
+        }
         return n_remove
 
     def prune_stats(self) -> dict:
-        """Return a skeleton pruning-statistics dict (values filled post-prune).
+        """Return pruning statistics from the last ``prune()`` or ``compress()`` call.
 
         Returns:
             Dict with keys: ``connections_removed``, ``nodes_removed``,
-            ``fitness_delta``, ``compression_rate``.
+            ``fitness_delta``, ``compression_rate``, ``rolled_back``.
+            All values are zero / False before any pruning has occurred.
         """
-        return {
+        return dict(getattr(self, '_prune_stats', {
             "connections_removed": 0,
             "nodes_removed": 0,
             "fitness_delta": 0.0,
             "compression_rate": 0.0,
-        }
+            "rolled_back": False,
+        }))
 
     def lineage(self, tracker=None) -> list[int]:
         """Return the ancestor chain (oldest first) for this genome.

@@ -31,11 +31,28 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime
 import base64
+from enum import Enum
 import hashlib
 import json
 
 VERSION = 2
 _REQUIRED_KEYS = frozenset({"config", "population", "tracker"})
+_BREAKING_CONFIG_FIELDS = frozenset({
+    "n_inputs",
+    "n_outputs",
+    "max_nodes",
+    "max_connections",
+    "n_initial_hidden",
+    "stateful",
+})
+
+
+class CompatibilityLevel(str, Enum):
+    """Compatibility level between two checkpoint configurations."""
+
+    EXACT = "EXACT"
+    COMPATIBLE = "COMPATIBLE"
+    BREAKING = "BREAKING"
 
 
 def _config_hash(cfg: dict) -> str:
@@ -44,16 +61,66 @@ def _config_hash(cfg: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
-def check_compatibility(stored_hash: str, current_cfg: dict) -> str:
+def _config_diff(stored_cfg: dict, current_cfg: dict) -> list[dict]:
+    """Return deterministic per-field differences between two flat configs."""
+    keys = sorted(set(stored_cfg) | set(current_cfg))
+    diff = []
+    missing = object()
+    for key in keys:
+        stored = stored_cfg.get(key, missing)
+        current = current_cfg.get(key, missing)
+        if stored == current:
+            continue
+        breaking = key in _BREAKING_CONFIG_FIELDS
+        diff.append({
+            "path": key,
+            "stored": None if stored is missing else stored,
+            "current": None if current is missing else current,
+            "level": CompatibilityLevel.BREAKING.value if breaking else CompatibilityLevel.COMPATIBLE.value,
+        })
+    return diff
+
+
+def compatibility_report(
+    stored_cfg: dict,
+    current_cfg: dict,
+    *,
+    stored_hash: str | None = None,
+) -> dict:
+    """Return a structured compatibility report for two configs."""
+    stored_hash = stored_hash or _config_hash(stored_cfg)
+    current_hash = _config_hash(current_cfg)
+    diff = _config_diff(stored_cfg, current_cfg)
+    if stored_hash == current_hash and not diff:
+        level = CompatibilityLevel.EXACT
+    elif any(item["level"] == CompatibilityLevel.BREAKING.value for item in diff):
+        level = CompatibilityLevel.BREAKING
+    else:
+        level = CompatibilityLevel.COMPATIBLE
+    return {
+        "level": level.value,
+        "stored_hash": stored_hash,
+        "current_hash": current_hash,
+        "diff": diff,
+    }
+
+
+def check_compatibility(
+    stored_hash: str,
+    current_cfg: dict,
+    stored_cfg: dict | None = None,
+) -> str:
     """Compare a stored config hash with the current config.
 
-    Returns ``"EXACT"`` when hashes match, ``"COMPATIBLE"`` otherwise.
-    Breaking-change detection (comparing individual keys) is not yet
-    implemented; callers should treat ``"COMPATIBLE"`` as *unknown*.
+    When ``stored_cfg`` is supplied, the result distinguishes breaking topology
+    changes from compatible config drift. Without it, the function keeps the old
+    hash-only behaviour for backwards compatibility.
     """
     if stored_hash == _config_hash(current_cfg):
-        return "EXACT"
-    return "COMPATIBLE"
+        return CompatibilityLevel.EXACT.value
+    if stored_cfg is None:
+        return CompatibilityLevel.COMPATIBLE.value
+    return compatibility_report(stored_cfg, current_cfg, stored_hash=stored_hash)["level"]
 
 
 def _metadata_for(payload: dict) -> dict:
@@ -62,8 +129,9 @@ def _metadata_for(payload: dict) -> dict:
     return {
         "version": payload.get("version", VERSION),
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "config_hash": _config_hash(cfg),
+        "config_hash": payload.get("config_hash") or _config_hash(cfg),
         "config": cfg,
+        "compatibility": payload.get("compatibility"),
         "population_size": getattr(pop, "max_size", None),
         "evaluated": len(getattr(pop, "_evaluated", ())) if pop is not None else None,
         "unevaluated": len(getattr(pop, "_unevaluated", ())) if pop is not None else None,
@@ -112,6 +180,8 @@ def write(path: str | Path, payload: dict, codec: str = "pickle") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = dict(payload)
     payload["version"] = VERSION
+    cfg = payload.get("config", {}) if isinstance(payload.get("config"), dict) else {}
+    payload["config_hash"] = _config_hash(cfg)
     tmp = path.with_suffix(path.suffix + ".tmp")
     raw = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
     if codec == "pickle":
@@ -154,6 +224,13 @@ def read(path: str | Path) -> dict:
         data = base64.b64decode(wrapper["payload"])
 
     payload = migrate(pickle.loads(data))
+    cfg = payload.get("config", {}) if isinstance(payload.get("config"), dict) else {}
+    stored_hash = payload.get("config_hash")
+    if stored_hash is not None and stored_hash != _config_hash(cfg):
+        raise ValueError(
+            "Checkpoint config hash mismatch: payload config does not match "
+            f"stored hash {stored_hash}."
+        )
 
     missing = _REQUIRED_KEYS - payload.keys()
     if missing:

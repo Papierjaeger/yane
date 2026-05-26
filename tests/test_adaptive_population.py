@@ -207,6 +207,114 @@ class TestAdaptivePopulation(unittest.TestCase):
         self.assertGreaterEqual(yane._population.max_size, 5)
         self.assertLessEqual(yane._population.max_size, 40)
 
+    # ------------------------------------------------------------------
+    # set_adaptive_pop_size() — schedule-aware API
+    # ------------------------------------------------------------------
+
+    def test_set_adaptive_pop_size_api_stores_schedule(self):
+        """set_adaptive_pop_size() stores the schedule and propagates it."""
+        yane = self._make_yane()
+        yane.set_adaptive_pop_size(min_pop=5, max_pop=30, schedule="linear_decay")
+        self.assertEqual(yane._adaptive_pop_schedule, "linear_decay")
+        self.assertEqual(yane._population._adaptive_pop_schedule, "linear_decay")
+
+    def test_set_adaptive_pop_size_performance_based(self):
+        yane = self._make_yane()
+        yane.set_adaptive_pop_size(min_pop=5, max_pop=30, schedule="performance_based")
+        self.assertEqual(yane._adaptive_pop_schedule, "performance_based")
+
+    def test_set_adaptive_pop_size_invalid_schedule_raises(self):
+        yane = self._make_yane()
+        with self.assertRaises(ValueError):
+            yane.set_adaptive_pop_size(min_pop=5, max_pop=30, schedule="random_walk")
+
+    def test_linear_decay_always_shrinks(self):
+        """With linear_decay, pop size must never increase."""
+        pop = Population(max_size=100)
+        pop._adaptive_pop_enabled = True
+        pop._adaptive_pop_min = 10
+        pop._adaptive_pop_max = 100
+        pop._adaptive_pop_rate = 0.1
+        pop._adaptive_pop_schedule = "linear_decay"
+        pop._adaptive_pop_total_gens = 0  # unknown → fixed step mode
+
+        sizes = [100]
+        for _ in range(20):
+            pop._spawn_count += pop.max_size  # advance one generation
+            pop._adjust_population_size()
+            sizes.append(pop.max_size)
+
+        for i in range(1, len(sizes)):
+            self.assertLessEqual(sizes[i], sizes[i - 1],
+                f"linear_decay increased size at step {i}: {sizes[i-1]} → {sizes[i]}")
+
+    def test_linear_decay_stays_in_bounds(self):
+        """linear_decay never goes below min_pop."""
+        pop = Population(max_size=50)
+        pop._adaptive_pop_enabled = True
+        pop._adaptive_pop_min = 20
+        pop._adaptive_pop_max = 50
+        pop._adaptive_pop_rate = 0.5  # large step → should clamp at min
+        pop._adaptive_pop_schedule = "linear_decay"
+        pop._adaptive_pop_total_gens = 0
+
+        for _ in range(30):
+            pop._spawn_count += pop.max_size
+            pop._adjust_population_size()
+
+        self.assertGreaterEqual(pop.max_size, 20)
+
+    def test_linear_decay_monotone_with_total_gens(self):
+        """With total_gens set, linear_decay is monotonically non-increasing."""
+        pop = Population(max_size=100)
+        pop._adaptive_pop_enabled = True
+        pop._adaptive_pop_min = 10
+        pop._adaptive_pop_max = 100
+        pop._adaptive_pop_rate = 0.1
+        pop._adaptive_pop_schedule = "linear_decay"
+        pop._adaptive_pop_total_gens = 10  # 10 generations from 100 to 10
+
+        # Simulate generation boundaries: advance spawn_count by current max_size each step
+        sizes = []
+        for _gen in range(12):
+            pop._spawn_count += pop.max_size
+            pop._adjust_population_size()
+            sizes.append(pop.max_size)
+
+        # Must be monotonically non-increasing
+        for i in range(1, len(sizes)):
+            self.assertLessEqual(sizes[i], sizes[i - 1],
+                f"linear_decay increased size at step {i}: {sizes[i-1]} → {sizes[i]}")
+        # Must converge to min after enough generations
+        self.assertEqual(sizes[-1], pop._adaptive_pop_min)
+
+    def test_diagnostics_include_schedule_fields(self):
+        """population_memory_info() includes schedule diagnostics when enabled."""
+        yane = NeuroEvolution(seed=0)
+        yane.configure(1, 1, n_initial_hidden=1)
+        yane.set_population_size(5)
+        yane.set_adaptive_pop_size(min_pop=3, max_pop=20, schedule="linear_decay")
+        yane.set_max_iterations(5)
+        yane.train(lambda g: sum(g.forward([0.5])))
+        info = yane.population_memory_info()
+        self.assertIn("adaptive_pop_schedule", info)
+        self.assertIn("current_pop_size", info)
+        self.assertIn("last_resize_trigger", info)
+        self.assertIn("pop_size_history", info)
+        self.assertEqual(info["adaptive_pop_schedule"], "linear_decay")
+
+    def test_no_resize_within_generation(self):
+        """_adjust_population_size fires only at generation boundaries."""
+        pop = Population(max_size=50)
+        pop._adaptive_pop_enabled = True
+        pop._adaptive_pop_min = 10
+        pop._adaptive_pop_max = 500
+        pop._adaptive_pop_rate = 0.5
+        pop._adaptive_pop_schedule = "linear_decay"
+        pop._spawn_count = 7  # not a multiple of 50
+        pop._adjust_population_size()
+        self.assertEqual(pop.max_size, 50)
+
 
 if __name__ == "__main__":
     unittest.main()

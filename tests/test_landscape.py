@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import unittest
 import pytest
+import tempfile
+from pathlib import Path
 
 from yane.core.genome import Genome
 from yane.core.connection import Connection
@@ -115,6 +117,46 @@ class TestPopulationPCA(unittest.TestCase):
         self.assertIn("y", result)
         if result:
             self.assertEqual(len(result["x"]), len(result["y"]))
+
+    def test_export_landscape_csv(self):
+        from yane.evolution.landscape import export_landscape_csv, population_pca
+        result = population_pca([_make_genome(w) for w in [0.5, 1.0, 2.0]])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "landscape.csv"
+            export_landscape_csv(result, path)
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("explained_var_pc1", text)
+        self.assertIn("index,x,y,fitness,species_id", text)
+        self.assertEqual(len([line for line in text.splitlines() if line and not line.startswith("#")]), 4)
+
+    def test_export_landscape_png(self):
+        from yane.evolution.landscape import export_landscape_png, population_pca
+        result = population_pca([_make_genome(w) for w in [0.5, 1.0, 2.0]])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "landscape.png"
+            export_landscape_png(result, path, width=160, height=140)
+            data = path.read_bytes()
+        self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertGreater(len(data), 100)
+
+    def test_landscape_export_api(self):
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.set_population_size(20)
+        yane.configure(2, 1)
+        yane.set_max_iterations(60)
+
+        def _eval(g):
+            return sum(abs(c.weight) for src in g.nodes for c in src.connections)
+
+        yane.train(_eval)
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "landscape.csv"
+            png_path = Path(tmp) / "landscape.png"
+            yane.export_landscape_csv(str(csv_path))
+            yane.export_landscape_png(str(png_path), width=160, height=140)
+            self.assertTrue(csv_path.exists())
+            self.assertTrue(png_path.read_bytes().startswith(b"\x89PNG"))
 
 
 if __name__ == "__main__":

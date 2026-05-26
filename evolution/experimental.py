@@ -1,7 +1,7 @@
-"""Experimental Layer-3 research features for YANE.
+"""Layer-3 research features for YANE.
 
-This module contains features that are experimental and may change or break.
-They are isolated from the stable core per the architecture guidelines.
+These features are modular and fully toggleable via the NeuroEvolution API.
+All features are disabled by default and impose no runtime cost when off.
 
 Contents:
 - InputGrouping / OutputGrouping: evolvable aggregation layers
@@ -231,19 +231,109 @@ class DARTSLite:
 # Curiosity Module — intrinsic reward
 # =====================================================================
 
-class CuriosityModule:
-    """Intrinsic reward module based on prediction error.
+class IntrinsicCuriosityModule:
+    """2-layer forward model predicting genome output from input.
 
-    A small forward model predicts the next state given (state, action).
-    High prediction error → high curiosity bonus.
+    Curiosity bonus = prediction error: genomes producing surprising
+    (hard-to-predict) outputs receive a positive bonus, encouraging exploration.
+
+    Architecture: n_inputs → [ReLU hidden] → network_size → n_outputs (linear).
+    Weights updated online via SGD after each genome evaluation.
+    Integrate via NeuroEvolution.set_curiosity().
+    """
+
+    def __init__(self, n_inputs: int, n_outputs: int, network_size: int = 8,
+                 lr: float = 0.01):
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.network_size = network_size
+        self.lr = lr
+        scale1 = math.sqrt(2.0 / max(n_inputs, 1))
+        self._W1 = [[random.gauss(0.0, scale1) for _ in range(n_inputs)]
+                    for _ in range(network_size)]
+        self._b1 = [0.0] * network_size
+        scale2 = math.sqrt(2.0 / max(network_size, 1))
+        self._W2 = [[random.gauss(0.0, scale2) for _ in range(network_size)]
+                    for _ in range(n_outputs)]
+        self._b2 = [0.0] * n_outputs
+        self._n_updates: int = 0
+
+    def _forward(self, inputs: list[float]) -> tuple[list[float], list[float]]:
+        n = min(len(inputs), self.n_inputs)
+        h = []
+        for i in range(self.network_size):
+            val = self._b1[i]
+            for j in range(n):
+                val += self._W1[i][j] * inputs[j]
+            h.append(max(0.0, val))
+        out = []
+        for i in range(self.n_outputs):
+            val = self._b2[i]
+            for j in range(self.network_size):
+                val += self._W2[i][j] * h[j]
+            out.append(val)
+        return h, out
+
+    def predict(self, inputs: list[float]) -> list[float]:
+        _, out = self._forward(inputs)
+        return out
+
+    def error(self, inputs: list[float], targets: list[float]) -> float:
+        """Return prediction error (L2 norm) as curiosity signal."""
+        _, out = self._forward(inputs)
+        n = min(len(out), len(targets))
+        if n == 0:
+            return 0.0
+        return sum((out[i] - targets[i]) ** 2 for i in range(n)) ** 0.5
+
+    def update(self, inputs: list[float], targets: list[float]) -> None:
+        """Online SGD update of predictor weights."""
+        h, out = self._forward(inputs)
+        n = min(len(out), len(targets))
+        if n == 0:
+            return
+        _clip = 1.0
+        d_out = [max(-_clip, min(_clip, (out[i] - targets[i]) * 2.0 / n))
+                 for i in range(self.n_outputs)]
+        for i in range(self.n_outputs):
+            self._b2[i] -= self.lr * d_out[i]
+            for j in range(self.network_size):
+                grad = d_out[i] * h[j]
+                self._W2[i][j] -= self.lr * max(-_clip, min(_clip, grad))
+        d_h = [0.0] * self.network_size
+        for j in range(self.network_size):
+            for i in range(self.n_outputs):
+                d_h[j] += d_out[i] * self._W2[i][j]
+            if h[j] <= 0.0:
+                d_h[j] = 0.0
+            d_h[j] = max(-_clip, min(_clip, d_h[j]))
+        n_in = min(len(inputs), self.n_inputs)
+        for i in range(self.network_size):
+            self._b1[i] -= self.lr * d_h[i]
+            for j in range(n_in):
+                grad = d_h[i] * inputs[j]
+                self._W1[i][j] -= self.lr * max(-_clip, min(_clip, grad))
+        self._n_updates += 1
+
+
+# =====================================================================
+# CuriosityModule — legacy state-action forward model (backward compat)
+# =====================================================================
+
+class CuriosityModule:
+    """State-action forward model for environment-level curiosity.
+
+    Predicts the next state given (state, action); prediction error is the
+    curiosity signal.  For genome I/O curiosity use IntrinsicCuriosityModule
+    and NeuroEvolution.set_curiosity() instead.
     """
 
     def __init__(self, n_state: int, n_action: int, lr: float = 0.01):
         self.n_state = n_state
         self.n_action = n_action
         self.lr = lr
-        # Simple linear predictor: W @ [s, a] + b
-        self.W = [0.0] * (n_state + n_action) * n_state
+        n_in = n_state + n_action
+        self.W = [0.0] * n_in * n_state
         self.b = [0.0] * n_state
 
     def predict(self, state: list[float], action: list[float]) -> list[float]:
@@ -251,9 +341,7 @@ class CuriosityModule:
         inp = state + action
         pred = []
         for i in range(self.n_state):
-            val = self.b[i]
-            for j in range(n_in):
-                val += self.W[i * n_in + j] * inp[j]
+            val = self.b[i] + sum(self.W[i * n_in + j] * inp[j] for j in range(n_in))
             pred.append(val)
         return pred
 
@@ -264,7 +352,6 @@ class CuriosityModule:
 
     def update(self, state: list[float], action: list[float],
                next_state: list[float]) -> None:
-        """Online SGD update of prediction weights."""
         pred = self.predict(state, action)
         n_in = self.n_state + self.n_action
         inp = state + action

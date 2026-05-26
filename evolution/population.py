@@ -200,7 +200,13 @@ class Population:
         self._adaptive_pop_min: int = max_size
         self._adaptive_pop_max: int = max_size
         self._adaptive_pop_rate: float = 0.05
+        self._adaptive_pop_schedule: str = "performance_based"
+        self._adaptive_pop_total_gens: int = 0   # 0 = unknown; used by linear_decay
+        self._adaptive_pop_elapsed_gens: int = 0  # generations since schedule start
         self._n_pop_size_adjustments: int = 0
+        self._pop_size_history: list = []         # [(generation, size)] snapshots
+        self._last_resize_trigger: str = ""
+        self._last_pop_adjust_spawn: int = 0      # spawn_count at last adjustment
 
         # Ablation flags — all default ON.  Set to False to disable the
         # corresponding mechanism for controlled comparison runs.
@@ -1301,35 +1307,61 @@ class Population:
         return chosen
 
     def _adjust_population_size(self) -> None:
-        """Grow or shrink max_size based on species diversity and stagnation.
+        """Grow or shrink max_size according to the active schedule.
 
         Debounced to fire at most once per generation (every max_size spawns).
-        Grows when diversity is low or stagnation is high; shrinks when species
-        count exceeds target and the population is healthy.
+
+        ``performance_based``: grows on stagnation / low diversity, shrinks on
+        excess species and healthy convergence.
+
+        ``linear_decay``: decreases monotonically from max_pop to min_pop over
+        ``_adaptive_pop_total_gens`` generations (or by ``growth_rate`` per
+        generation if total is unknown).
         """
         if not self._adaptive_pop_enabled:
             return
-        if self._spawn_count % max(1, self.max_size) != 0:
+        if self._spawn_count - self._last_pop_adjust_spawn < max(1, self.max_size):
             return
+        self._last_pop_adjust_spawn = self._spawn_count
 
-        sp_count = self.species_count
-        target = max(1, self._target_species)
-        stag_frac = min(1.0, self._stagnation_count / max(1, self.stagnation_threshold))
+        self._adaptive_pop_elapsed_gens += 1
 
-        should_grow = stag_frac > 0.3 or sp_count < int(target * 0.75)
-        should_shrink = sp_count > int(target * 1.25) and stag_frac < 0.2
-
-        if should_grow:
-            new_size = int(self.max_size * (1.0 + self._adaptive_pop_rate))
-        elif should_shrink:
-            new_size = int(self.max_size * (1.0 - self._adaptive_pop_rate))
+        if self._adaptive_pop_schedule == "linear_decay":
+            if self._adaptive_pop_total_gens > 0:
+                frac = min(1.0, self._adaptive_pop_elapsed_gens / self._adaptive_pop_total_gens)
+                target_size = int(
+                    self._adaptive_pop_max
+                    - frac * (self._adaptive_pop_max - self._adaptive_pop_min)
+                )
+            else:
+                step = max(1, int(self.max_size * self._adaptive_pop_rate))
+                target_size = self.max_size - step
+            new_size = max(self._adaptive_pop_min, min(self._adaptive_pop_max, target_size))
+            trigger = "linear_decay"
         else:
-            return
+            # performance_based (default)
+            sp_count = self.species_count
+            target = max(1, self._target_species)
+            stag_frac = min(1.0, self._stagnation_count / max(1, self.stagnation_threshold))
 
-        new_size = max(self._adaptive_pop_min, min(self._adaptive_pop_max, new_size))
+            should_grow = stag_frac > 0.3 or sp_count < int(target * 0.75)
+            should_shrink = sp_count > int(target * 1.25) and stag_frac < 0.2
+
+            if should_grow:
+                new_size = int(self.max_size * (1.0 + self._adaptive_pop_rate))
+                trigger = "stagnation_grow"
+            elif should_shrink:
+                new_size = int(self.max_size * (1.0 - self._adaptive_pop_rate))
+                trigger = "excess_species_shrink"
+            else:
+                return
+            new_size = max(self._adaptive_pop_min, min(self._adaptive_pop_max, new_size))
+
         if new_size != self.max_size:
             self.max_size = new_size
             self._n_pop_size_adjustments += 1
+            self._last_resize_trigger = trigger
+            self._pop_size_history.append((self._adaptive_pop_elapsed_gens, new_size))
 
     def _spawn_offspring(self) -> None:
         if not self._evaluated:

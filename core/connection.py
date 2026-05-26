@@ -10,7 +10,8 @@ if TYPE_CHECKING:
 
 class Connection:
     __slots__ = ('target', '_weight', 'mutation', 'innovation', '__weakref__',
-                 '_weight_arr', '_weight_idx', 'enabled', 'spike_rate')
+                 '_weight_arr', '_weight_idx', 'enabled', 'spike_rate',
+                 'weight_group')
 
     def __init__(self, target: Node, innovation: int = -1) -> None:
         self.target = target
@@ -29,6 +30,8 @@ class Connection:
         # Spike probability: occasionally re-initialise weight completely to
         # escape weight-space local optima.  Self-adapts via mutation.rate_mutation_rate.
         self.spike_rate: float = 0.05
+        # Shared weight group identifier (None = not grouped).
+        self.weight_group: str | None = None
 
     # ------------------------------------------------------------------
     # weight property — keeps _weight_arr in sync on every assignment
@@ -55,17 +58,19 @@ class Connection:
             'target': self.target, 'weight': self._weight,
             'mutation': self.mutation, 'innovation': self.innovation,
             'enabled': self.enabled, 'spike_rate': self.spike_rate,
+            'weight_group': self.weight_group,
         }
 
     def __setstate__(self, state):
-        self.target     = state['target']
-        self._weight    = state.get('weight', state.get('_weight', 0.0))
-        self.mutation   = state['mutation']
-        self.innovation = state.get('innovation', -1)
+        self.target      = state['target']
+        self._weight     = state.get('weight', state.get('_weight', 0.0))
+        self.mutation    = state['mutation']
+        self.innovation  = state.get('innovation', -1)
         self._weight_arr = None
         self._weight_idx = 0
-        self.enabled    = state.get('enabled', True)
-        self.spike_rate = state.get('spike_rate', 0.05)
+        self.enabled     = state.get('enabled', True)
+        self.spike_rate  = state.get('spike_rate', 0.05)
+        self.weight_group = state.get('weight_group', None)
 
     # ------------------------------------------------------------------
     # Mutation / copy
@@ -90,4 +95,5 @@ class Connection:
         conn.mutation = self.mutation.copy()
         conn.enabled = self.enabled
         conn.spike_rate = self.spike_rate
+        conn.weight_group = self.weight_group
         return conn

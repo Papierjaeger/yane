@@ -1986,9 +1986,11 @@ class TrainingTab(QWidget):
         pop_size = meta.get("population_size")
         version = meta.get("version", "?")
         created = meta.get("created_at", "?")
+        config_hash = meta.get("config_hash", "?")
         lines = [
             f"Version:   {version}",
             f"Erstellt:  {created}",
+            f"Config:    {config_hash}",
             f"Pop-Size:  {pop_size if pop_size is not None else '?'}",
         ]
         if cfg:
@@ -1996,6 +1998,14 @@ class TrainingTab(QWidget):
             n_out = cfg.get("n_outputs", "?")
             lines.append(f"Inputs:    {n_in}")
             lines.append(f"Outputs:   {n_out}")
+        compat = meta.get("compatibility") or {}
+        if compat:
+            lines.append(f"Kompat.:   {compat.get('level', '?')}")
+            for item in compat.get("diff", [])[:5]:
+                lines.append(
+                    f"  {item.get('path')}: "
+                    f"{item.get('stored')} -> {item.get('current')}"
+                )
         QMessageBox.information(
             self, "Checkpoint-Metadaten", "\n".join(lines)
         )
