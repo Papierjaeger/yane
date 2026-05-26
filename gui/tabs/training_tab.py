@@ -79,6 +79,7 @@ class TrainingTab(QWidget):
     genome_updated = Signal(object, dict, bool)  # genome, mem, do_heavy → LeftPanel + InspectTab
     example_changed = Signal(object)        # → InspectTab.set_example
     training_started = Signal()             # → InspectTab.reset_genome
+    ne_ready = Signal(object)               # NeuroEvolution instance → aux_tabs
     render_frame = Signal(object)           # numpy array, emitted from worker thread
 
     def __init__(self, parent=None) -> None:
@@ -579,6 +580,47 @@ class TrainingTab(QWidget):
         cfg_form.addRow("Memory limit:",   self.dspin_mem)
         cfg_form.addRow("Target fitness:", self.dspin_target)
 
+        # ── Seed / Stopping / Logging ────────────────────────────────────────
+        self.spin_seed = QSpinBox()
+        self.spin_seed.setRange(-1, 2**31 - 1)
+        self.spin_seed.setValue(0)
+        self.spin_seed.setSpecialValueText("—")
+        self.spin_seed.setToolTip(
+            "Zufalls-Seed für reproduzierbare Läufe.\n"
+            "— = kein fester Seed (nicht deterministisch).\n"
+            "Gleicher Seed = gleiche Startpopulation und Operator-Reihenfolge.")
+        cfg_form.addRow("Seed:", self.spin_seed)
+
+        self.spin_max_iter = QSpinBox()
+        self.spin_max_iter.setRange(0, 10_000_000)
+        self.spin_max_iter.setValue(0)
+        self.spin_max_iter.setSpecialValueText("—")
+        self.spin_max_iter.setSingleStep(1000)
+        self.spin_max_iter.setToolTip(
+            "Maximale Iterationen (Generationen).\n"
+            "— = unbegrenzt (läuft bis Stop oder Target-Fitness).")
+        cfg_form.addRow("Max iterations:", self.spin_max_iter)
+
+        self.spin_max_eval = QSpinBox()
+        self.spin_max_eval.setRange(0, 10_000_000)
+        self.spin_max_eval.setValue(0)
+        self.spin_max_eval.setSpecialValueText("—")
+        self.spin_max_eval.setSingleStep(10000)
+        self.spin_max_eval.setToolTip(
+            "Maximale Fitness-Evaluations-Aufrufe.\n"
+            "— = unbegrenzt.\n"
+            "Zählt tatsächliche Fitness-Funktionsaufrufe, nicht nur Iterationen.")
+        cfg_form.addRow("Max evaluations:", self.spin_max_eval)
+
+        self.combo_log_format = QComboBox()
+        self.combo_log_format.addItems(["csv", "jsonlines", "both"])
+        self.combo_log_format.setToolTip(
+            "Log-Format für Trainingsläufe.\n"
+            "csv: Standard-CSV (Default).\n"
+            "jsonlines: JSON pro Heartbeat (komplettes Diagnostics-Dict).\n"
+            "both: CSV + JSONL gleichzeitig.")
+        cfg_form.addRow("Log format:", self.combo_log_format)
+
         # --- Advanced settings group (collapsed by default) ---
         advance_grp = CollapsibleGroup("Advanced", collapsed=True)
         advance_grp.addRow("Fitness shaping:",   self.chk_fitness_shaping)
@@ -599,6 +641,114 @@ class TrainingTab(QWidget):
             inline_row(self.chk_cppn_substrate, QLabel("hidden"), self.spin_cppn_hidden),
         )
         advance_grp.addRow("Matrix forward:", self.chk_matrix_forward)
+
+        # ── New feature controls ────────────────────────────────────────────
+        self.chk_weight_inheritance = QCheckBox("aktiv")
+        self.chk_weight_inheritance.setToolTip(
+            "Fitness-gewichtetes Blending beim Crossover (blend_alpha=0.7).")
+        advance_grp.addRow("Weight inheritance:", self.chk_weight_inheritance)
+
+        self.chk_online_tuning = QCheckBox("aktiv")
+        self.chk_online_tuning.setToolTip(
+            "UCB1-Bandit-Tuning von mutation_rate und lamarck_steps während des Trainings.")
+        advance_grp.addRow("Online tuning:", self.chk_online_tuning)
+
+        self.combo_codec = QComboBox()
+        self.combo_codec.addItems(["pickle", "json"])
+        self.combo_codec.setToolTip("Checkpoint-Serialisierungsformat.")
+        advance_grp.addRow("Checkpoint codec:", self.combo_codec)
+
+        # ── Island model ────────────────────────────────────────────────────
+        self.chk_island_model = QCheckBox("aktiv")
+        self.chk_island_model.setChecked(False)
+        self.chk_island_model.setToolTip(
+            "Multi-Population Island Model aktivieren.\n"
+            "Jede Insel hat eine eigene Population; regelmäßig migrieren die\n"
+            "besten Genome zwischen Inseln.")
+        self.spin_n_islands = QSpinBox()
+        self.spin_n_islands.setRange(2, 50)
+        self.spin_n_islands.setValue(4)
+        self.spin_n_islands.setEnabled(False)
+        self.spin_migrate_interval = QSpinBox()
+        self.spin_migrate_interval.setRange(1, 100)
+        self.spin_migrate_interval.setValue(5)
+        self.spin_migrate_interval.setEnabled(False)
+        self.spin_migrate_count = QSpinBox()
+        self.spin_migrate_count.setRange(1, 20)
+        self.spin_migrate_count.setValue(3)
+        self.spin_migrate_count.setEnabled(False)
+        self.chk_island_model.toggled.connect(
+            lambda on: (
+                self.spin_n_islands.setEnabled(on),
+                self.spin_migrate_interval.setEnabled(on),
+                self.spin_migrate_count.setEnabled(on),
+            )
+        )
+        advance_grp.addRow(
+            "Island model:",
+            inline_row(
+                self.chk_island_model, QLabel("islands"), self.spin_n_islands,
+                QLabel("migrate every"), self.spin_migrate_interval,
+                QLabel("count"), self.spin_migrate_count,
+            ),
+        )
+
+        # ── Checkpoint policy ───────────────────────────────────────────────
+        self.chk_auto_checkpoint = QCheckBox("aktiv")
+        self.chk_auto_checkpoint.setChecked(False)
+        self.chk_auto_checkpoint.setToolTip(
+            "Rollierende Auto-Checkpoints während des Trainings.\n"
+            "Speichert regelmäßig den Populationszustand.")
+        self.spin_ckpt_interval = QSpinBox()
+        self.spin_ckpt_interval.setRange(10, 10_000)
+        self.spin_ckpt_interval.setValue(100)
+        self.spin_ckpt_interval.setEnabled(False)
+        self.spin_ckpt_max_keep = QSpinBox()
+        self.spin_ckpt_max_keep.setRange(1, 100)
+        self.spin_ckpt_max_keep.setValue(5)
+        self.spin_ckpt_max_keep.setEnabled(False)
+        self.chk_auto_checkpoint.toggled.connect(
+            lambda on: (
+                self.spin_ckpt_interval.setEnabled(on),
+                self.spin_ckpt_max_keep.setEnabled(on),
+            )
+        )
+        advance_grp.addRow(
+            "Auto checkpoint:",
+            inline_row(
+                self.chk_auto_checkpoint, QLabel("every"), self.spin_ckpt_interval,
+                QLabel("keep"), self.spin_ckpt_max_keep,
+            ),
+        )
+
+        # ── Adaptive population ─────────────────────────────────────────────
+        self.chk_adaptive_pop = QCheckBox("aktiv")
+        self.chk_adaptive_pop.setChecked(False)
+        self.chk_adaptive_pop.setToolTip(
+            "Populationsgröße dynamisch anpassen.\n"
+            "Wächst bei Entdeckungsphase, schrumpft bei Konvergenz.")
+        self.spin_adaptive_pop_min = QSpinBox()
+        self.spin_adaptive_pop_min.setRange(2, 500)
+        self.spin_adaptive_pop_min.setValue(20)
+        self.spin_adaptive_pop_min.setEnabled(False)
+        self.spin_adaptive_pop_max = QSpinBox()
+        self.spin_adaptive_pop_max.setRange(10, 2000)
+        self.spin_adaptive_pop_max.setValue(200)
+        self.spin_adaptive_pop_max.setEnabled(False)
+        self.chk_adaptive_pop.toggled.connect(
+            lambda on: (
+                self.spin_adaptive_pop_min.setEnabled(on),
+                self.spin_adaptive_pop_max.setEnabled(on),
+            )
+        )
+        advance_grp.addRow(
+            "Adaptive pop:",
+            inline_row(
+                self.chk_adaptive_pop, QLabel("min"), self.spin_adaptive_pop_min,
+                QLabel("max"), self.spin_adaptive_pop_max,
+            ),
+        )
+
         advance_grp.addRow(
             "Remote eval:",
             inline_row(self.chk_remote_eval, self.edit_remote_urls, stretch_last=True),
@@ -922,7 +1072,7 @@ class TrainingTab(QWidget):
 
 
     # Category display order
-    _CATEGORY_ORDER = ["Dataset", "Toy Text", "Classic Control", "Box2D", "MuJoCo", "Pixel", "Atari", "Sonstiges"]
+    _CATEGORY_ORDER = ["Dataset", "Toy Text", "Classic Control", "Box2D", "MuJoCo", "Pixel", "Atari", "Plugins", "Sonstiges"]
 
     def _build_example_combo(self) -> None:
         """Populate the combo box with group headers and indented example names."""
@@ -942,7 +1092,9 @@ class TrainingTab(QWidget):
         combo_idx = 0
         first_example_combo_idx = None
 
-        for cat in self._CATEGORY_ORDER:
+        ordered_categories = list(self._CATEGORY_ORDER)
+        ordered_categories.extend(cat for cat in groups if cat not in ordered_categories)
+        for cat in ordered_categories:
             if cat not in groups:
                 continue
             # Group header — not selectable
@@ -1312,6 +1464,9 @@ class TrainingTab(QWidget):
         from yane import NeuroEvolution
 
         self._yane = NeuroEvolution()
+        seed = self.spin_seed.value()
+        if seed != 0:
+            self._yane.set_seed(seed if seed > 0 else None)
         self._yane.configure(
             n_inputs=self.spin_inputs.value(),
             n_outputs=self.spin_outputs.value(),
@@ -1358,6 +1513,46 @@ class TrainingTab(QWidget):
         self._yane.set_adaptive_control(self.chk_adaptive_ctrl.isChecked())
         self._yane.set_operator_scheduler(self.chk_operator_scheduler.isChecked())
         apply_research_features(self._yane, research_cfg)
+        # New feature controls
+        self._yane.set_weight_inheritance(enabled=self.chk_weight_inheritance.isChecked())
+        self._yane.set_online_tuning(enabled=self.chk_online_tuning.isChecked())
+        self._yane.set_checkpoint_codec(self.combo_codec.currentText())
+
+        # Seed / Stopping / Logging
+        n_iter = self.spin_max_iter.value()
+        if n_iter > 0:
+            self._yane.set_max_iterations(n_iter)
+        n_eval_max = self.spin_max_eval.value()
+        if n_eval_max > 0:
+            self._yane.set_max_evaluations(n_eval_max)
+        log_fmt = self.combo_log_format.currentText()
+        if log_fmt != "csv":
+            self._yane.set_log_format(log_fmt)
+
+        # Island model
+        if self.chk_island_model.isChecked():
+            self._yane.set_island_model(
+                n_islands=self.spin_n_islands.value(),
+                migration_interval=self.spin_migrate_interval.value(),
+                migration_count=self.spin_migrate_count.value(),
+            )
+
+        # Checkpoint policy
+        if self.chk_auto_checkpoint.isChecked():
+            self._yane.set_checkpoint_policy(
+                interval=self.spin_ckpt_interval.value(),
+                keep_best=True,
+                max_keep=self.spin_ckpt_max_keep.value(),
+                enabled=True,
+            )
+
+        # Adaptive population
+        if self.chk_adaptive_pop.isChecked():
+            self._yane.set_adaptive_population(
+                min_size=self.spin_adaptive_pop_min.value(),
+                max_size=self.spin_adaptive_pop_max.value(),
+            )
+
         n_eval = self.spin_multi_eval.value()
         if n_eval > 1:
             self._yane.set_multi_eval(
@@ -1553,6 +1748,8 @@ class TrainingTab(QWidget):
         worker.start(QThread.Priority.LowPriority)
         self._worker = worker
         self.training_started.emit()
+        if self._yane is not None:
+            self.ne_ready.emit(self._yane)
         self.btn_save_ckpt.setEnabled(True)
         self.btn_run_best.setEnabled(False)
         self._render_widget.clear_frame()

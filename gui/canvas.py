@@ -24,6 +24,17 @@ _C_DISABLED    = QColor("#555566")   # disabled / inactive connections
 _NODE_R        = 13
 
 
+def _linear_percentile(sorted_vals: list[float], p: float) -> float:
+    """Linear-interpolated percentile from a sorted list. p in [0, 1]."""
+    if not sorted_vals:
+        return 0.0
+    k = (len(sorted_vals) - 1) * p
+    lo = int(k)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = k - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
 # ---------------------------------------------------------------------------
 # Force-directed layout
 # ---------------------------------------------------------------------------
@@ -463,16 +474,6 @@ class FitnessChart(QWidget):
         finally:
             painter.end()
 
-    @staticmethod
-    def _percentile(sorted_vals: list[float], p: float) -> float:
-        """p in [0, 1]. Requires sorted input."""
-        if not sorted_vals:
-            return 0.0
-        idx = p * (len(sorted_vals) - 1)
-        lo_i, hi_i = int(idx), min(int(idx) + 1, len(sorted_vals) - 1)
-        frac = idx - lo_i
-        return sorted_vals[lo_i] * (1 - frac) + sorted_vals[hi_i] * frac
-
     def _paint(self, painter: QPainter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), _C_BG)
@@ -504,8 +505,8 @@ class FitnessChart(QWidget):
         actual_lo = sorted_h[0]
         hi = max(self._best_history) if self._best_history else sorted_h[-1]
 
-        q1 = self._percentile(sorted_h, 0.25)
-        q3 = self._percentile(sorted_h, 0.75)
+        q1 = _linear_percentile(sorted_h, 0.25)
+        q3 = _linear_percentile(sorted_h, 0.75)
         iqr = q3 - q1
         lo_fence = (q1 - 1.5 * iqr) if iqr > 0 else actual_lo
         lo = max(actual_lo, lo_fence)
@@ -976,10 +977,14 @@ class SensitivityChart(QWidget):
 # ---------------------------------------------------------------------------
 
 class MultiRunChart(QWidget):
-    """Shows overlaid best-fitness curves for up to 4 runs.
+    """Shows overlaid best-fitness curves for up to 4 runs or config groups.
 
-    Each run is one entry in ``self._runs``:
+    Each run in ``self._runs``::
+
         {"name": str, "iterations": [int, ...], "best_fitness": [float, ...]}
+
+    When a run dict contains ``"median"``, ``"q1"``, ``"q3"`` (same length
+    as iterations), a shaded IQR band is drawn behind the median line.
     """
 
     _COLORS = [
@@ -988,6 +993,8 @@ class MultiRunChart(QWidget):
         QColor("#fab387"),   # peach
         QColor("#cba6f7"),   # mauve
     ]
+
+    _BAND_ALPHA = 40  # alpha for shaded IQR band (0-255)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -1008,6 +1015,58 @@ class MultiRunChart(QWidget):
             self._paint(painter)
         finally:
             painter.end()
+
+    @staticmethod
+    def compute_bands(runs: list[dict]) -> list[dict]:
+        """Group runs by name prefix (same config), compute median/IQR bands.
+
+        Returns a new list of run dicts where runs with the same name
+        prefix are merged into one dict with median/q1/q3 keys.
+        Runs with unique names are returned as-is.
+        """
+        # Group by name prefix (strip trailing " (N)" seed markers)
+        from collections import defaultdict
+        groups: dict[str, list[dict]] = defaultdict(list)
+        for run in runs:
+            name = run.get("name", "Unknown")
+            groups[name].append(run)
+
+        result: list[dict] = []
+        for name, group in groups.items():
+            if len(group) == 1:
+                result.append(group[0])
+                continue
+
+            # Find common iteration points across all runs
+            iterations = group[0].get("iterations", [])
+            step = max(1, len(iterations) // 50) if iterations else 1
+            sample_its = iterations[::step]
+
+            # Gather fitness at each sample point
+            medians: list[float] = []
+            q1s: list[float] = []
+            q3s: list[float] = []
+            for idx, it in enumerate(sample_its):
+                vals = []
+                for run in group:
+                    fits = run.get("best_fitness", [])
+                    if idx < len(fits):
+                        vals.append(fits[idx])
+                if vals:
+                    sv = sorted(vals)
+                    medians.append(_linear_percentile(sv, 0.50))
+                    q1s.append(_linear_percentile(sv, 0.25))
+                    q3s.append(_linear_percentile(sv, 0.75))
+
+            result.append({
+                "name": name,
+                "iterations": sample_its,
+                "best_fitness": medians,
+                "median": medians,
+                "q1": q1s,
+                "q3": q3s,
+            })
+        return result
 
     def _paint(self, painter: QPainter) -> None:
         w, h = self.width(), self.height()
@@ -1041,6 +1100,12 @@ class MultiRunChart(QWidget):
         chart_w = max(1, w - pad_l - pad_r)
         chart_h = max(1, h - pad_t - pad_b)
 
+        def _x(it: int) -> int:
+            return pad_l + int(chart_w * it / iter_max) if iter_max > 0 else pad_l
+
+        def _y(ft: float) -> int:
+            return pad_t + int(chart_h * (1.0 - (ft - fit_min) / (fit_max - fit_min)))
+
         # Grid lines
         painter.setPen(QPen(_C_GRID, 1))
         for step in range(4):
@@ -1058,22 +1123,46 @@ class MultiRunChart(QWidget):
             painter.drawText(0, gy - 4, pad_l - 3, 12,
                              Qt.AlignmentFlag.AlignRight, f"{val:.2f}")
 
-        # Curves
+        # Curves: draw IQR bands first (behind), then median/individual lines
         for run_idx, run in enumerate(runs):
             iters = run.get("iterations", [])
-            fits  = run.get("best_fitness", [])
             if len(iters) < 2:
                 continue
 
             color = self._COLORS[run_idx % len(self._COLORS)]
+
+            # IQR band if available
+            q1 = run.get("q1")
+            q3 = run.get("q3")
+            if q1 and q3 and len(q1) == len(iters):
+                band_color = QColor(color)
+                band_color.setAlpha(self._BAND_ALPHA)
+                painter.setBrush(QBrush(band_color))
+                painter.setPen(Qt.PenStyle.NoPen)
+
+                band_path = QPainterPath()
+                band_path.moveTo(_x(iters[0]), _y(q1[0]))
+                for it, q1v in zip(iters[1:], q1[1:]):
+                    band_path.lineTo(_x(it), _y(q1v))
+                for it, q3v in zip(reversed(iters), reversed(q3)):
+                    band_path.lineTo(_x(it), _y(q3v))
+                band_path.closeSubpath()
+                painter.drawPath(band_path)
+
+            # Determine which y-values to plot (median if available, else individual)
+            fits = run.get("median") or run.get("best_fitness", [])
+            if len(fits) < 2:
+                continue
+
             pen = QPen(color, 1.8)
             painter.setPen(pen)
+            if run.get("median"):
+                pen.setWidth(2.5)
+                painter.setPen(pen)
 
             points = []
             for it, ft in zip(iters, fits):
-                px = pad_l + int(chart_w * it / iter_max) if iter_max > 0 else pad_l
-                py = pad_t + int(chart_h * (1.0 - (ft - fit_min) / (fit_max - fit_min)))
-                points.append(QPointF(px, py))
+                points.append(QPointF(_x(it), _y(ft)))
 
             path = QPainterPath()
             path.moveTo(points[0])

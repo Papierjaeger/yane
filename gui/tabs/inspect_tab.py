@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QPushButton, QFrame, QLabel, QGroupBox, QCheckBox, QDoubleSpinBox,
-    QFormLayout,
+    QSpinBox, QComboBox, QFormLayout,
 )
 from PySide6.QtCore import Qt
 
@@ -208,6 +208,7 @@ class InspectTab(QWidget):
         super().__init__(parent)
         self._genome = None
         self._example = None
+        self._ne = None
         self._test_rows: list[_TestCaseRow] = []
         self._seq_rows: list[_SequenceStepRow] = []
         self._seq_samples: list[tuple] = []
@@ -388,6 +389,48 @@ class InspectTab(QWidget):
         sens_layout.addWidget(self._sens_info_lbl)
         layout.addWidget(self._sens_group)
 
+        # ── Ensemble ────────────────────────────────────────────────────────
+        self._ensemble_group = QGroupBox("Ensemble Inference")
+        self._ensemble_group.setVisible(False)
+        ens_layout = QVBoxLayout(self._ensemble_group)
+
+        ens_row = QWidget()
+        ens_row_layout = QHBoxLayout(ens_row)
+        ens_row_layout.setContentsMargins(0, 0, 0, 0)
+        ens_row_layout.setSpacing(6)
+
+        ens_row_layout.addWidget(QLabel("k:"))
+        self.spin_ensemble_k = QSpinBox()
+        self.spin_ensemble_k.setRange(1, 20)
+        self.spin_ensemble_k.setValue(3)
+        ens_row_layout.addWidget(self.spin_ensemble_k)
+
+        ens_row_layout.addWidget(QLabel("mode:"))
+        self.combo_ensemble_mode = QComboBox()
+        self.combo_ensemble_mode.addItems(["mean", "vote", "weighted"])
+        ens_row_layout.addWidget(self.combo_ensemble_mode)
+
+        self.btn_ensemble_run = QPushButton("▶  Run Ensemble")
+        self.btn_ensemble_run.clicked.connect(self._run_ensemble)
+        self.btn_ensemble_run.setEnabled(False)
+        ens_row_layout.addWidget(self.btn_ensemble_run)
+
+        self.btn_ensemble_forward = QPushButton("▶  Forward (current inputs)")
+        self.btn_ensemble_forward.clicked.connect(self._run_ensemble_forward)
+        self.btn_ensemble_forward.setEnabled(False)
+        ens_row_layout.addWidget(self.btn_ensemble_forward)
+
+        ens_layout.addWidget(ens_row)
+
+        self._ensemble_output = QLabel("—")
+        self._ensemble_output.setWordWrap(True)
+        self._ensemble_output.setStyleSheet(
+            "font-family: monospace; font-size: 12px; color: #a6e3a1; padding: 4px;"
+        )
+        ens_layout.addWidget(self._ensemble_output)
+
+        layout.addWidget(self._ensemble_group)
+
         layout.addStretch()
 
     # ------------------------------------------------------------------
@@ -462,6 +505,58 @@ class InspectTab(QWidget):
             self._update_memory_display()
         self._update_seq_buttons()
         self._update_sensitivity(genome)
+
+    # ── NeuroEvolution reference (set by MainWindow) ─────────────────────────
+
+    def set_ne(self, ne) -> None:
+        """Set NeuroEvolution instance reference (called by MainWindow)."""
+        self._ne = ne
+        self._ensemble_group.setVisible(ne is not None)
+        self.btn_ensemble_run.setEnabled(ne is not None)
+        self.btn_ensemble_forward.setEnabled(ne is not None)
+
+    # ── Ensemble ─────────────────────────────────────────────────────────────
+
+    def _run_ensemble(self) -> None:
+        """Build and run the ensemble on all test cases."""
+        if self._ne is None:
+            return
+        k = self.spin_ensemble_k.value()
+        mode = self.combo_ensemble_mode.currentText()
+        try:
+            ens = self._ne.make_ensemble(k=k, mode=mode)
+            results = []
+            for row in self._test_rows:
+                try:
+                    out = ens.forward(row._inputs)
+                    results.append(list(out))
+                except Exception:
+                    results.append(None)
+            self._ensemble_output.setText(
+                f"Ensemble (k={k}, mode={mode}): "
+                + ", ".join(
+                    _fmt_list(r, None, False) if r is not None else "err"
+                    for r in results
+                )
+            )
+        except Exception as exc:
+            self._ensemble_output.setText(f"❌ Ensemble failed: {exc}")
+
+    def _run_ensemble_forward(self) -> None:
+        """Run ensemble on the current manual input values."""
+        if self._ne is None:
+            return
+        k = self.spin_ensemble_k.value()
+        mode = self.combo_ensemble_mode.currentText()
+        try:
+            inputs = [w.value() for w in self._input_widgets]
+            ens = self._ne.make_ensemble(k=k, mode=mode)
+            out = list(ens.forward(inputs))
+            self._ensemble_output.setText(
+                f"Ensemble (k={k}, mode={mode}): {_fmt_list(out, None, False)}"
+            )
+        except Exception as exc:
+            self._ensemble_output.setText(f"❌ Ensemble forward failed: {exc}")
 
     # ------------------------------------------------------------------
 

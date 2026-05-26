@@ -182,7 +182,15 @@ class ComparisonTab(QWidget):
         self._export_png_btn.setEnabled(n > 0)
         self._export_csv_btn.setEnabled(n > 0)
 
-        self._chart.set_runs([r.to_chart_dict() for r in self._selected])
+        runs = [r.to_chart_dict() for r in self._selected]
+        # Compute median/IQR bands when multiple runs share the same name
+        from yane.gui.canvas import MultiRunChart
+        if len(runs) >= 2:
+            banded = MultiRunChart.compute_bands(runs)
+            # Use bands when at least one group was merged
+            if any("median" in r for r in banded):
+                runs = banded
+        self._chart.set_runs(runs)
         self._update_stats()
 
     def _update_stats(self) -> None:

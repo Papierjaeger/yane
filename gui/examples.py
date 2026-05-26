@@ -1798,4 +1798,96 @@ def load_examples() -> list[ExampleConfig]:
     except ImportError:
         pass
 
+    # Append externally registered plugin examples
+    examples.extend(PLUGIN_EXAMPLES)
     return examples
+
+
+# ---------------------------------------------------------------------------
+# Plugin system for user-defined evaluators
+# ---------------------------------------------------------------------------
+
+PLUGIN_EXAMPLES: list[ExampleConfig] = []
+
+
+def register_example(plugin: ExampleConfig) -> None:
+    """Register a user-defined evaluator plugin.
+
+    The plugin appears alongside the built-in examples in the GUI and API.
+
+    Example::
+
+        from yane.gui.examples import ExampleConfig, register_example
+
+        def my_make_eval():
+            def eval_fn(genome):
+                out = genome.forward([1.0, 2.0])
+                return -abs(out[0] - 3.0)
+            return eval_fn
+
+        register_example(ExampleConfig(
+            name="My Custom Task",
+            description="A simple regression task.",
+            n_inputs=2, n_outputs=1,
+            max_nodes=20, max_connections=50,
+            make_eval=my_make_eval,
+            target_fitness=0.0,
+            category="Plugins",
+        ))
+    """
+    PLUGIN_EXAMPLES.append(plugin)
+
+
+def load_plugins_from_directory(plugin_dir: str | None = None) -> int:
+    """Scan a directory for Python plugins and register them.
+
+    Each ``.py`` file is imported; if it defines a module-level callable
+    ``register``, the function is called with ``register_example`` as its
+    single argument.
+
+    Parameters
+    ----------
+    plugin_dir : str or None
+        Path to the plugin directory.  If None, defaults to
+        ``~/.yane/plugins/``.
+
+    Returns
+    -------
+    int
+        Number of successfully loaded plugins.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    if plugin_dir is None:
+        plugin_dir = str(Path.home() / ".yane" / "plugins")
+    plugin_path = Path(plugin_dir)
+    if not plugin_path.is_dir():
+        return 0
+
+    count = 0
+    for py_file in sorted(plugin_path.glob("*.py")):
+        if py_file.name.startswith("_"):
+            continue
+        try:
+            mod_name = f"_yane_plugin_{py_file.stem}"
+            spec = importlib.util.spec_from_file_location(mod_name, py_file)
+            if spec is None or spec.loader is None:
+                continue
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[mod_name] = mod
+            spec.loader.exec_module(mod)
+            if hasattr(mod, "register"):
+                mod.register(register_example)
+                count += 1
+        except Exception:
+            pass
+    return count
+
+
+# Auto-discovery is intentionally opt-in because importing a plugin executes
+# arbitrary Python code from the user's plugin directory.
+def autoload_user_plugins() -> int:
+    """Load plugins from the default user plugin directory on explicit request."""
+    return load_plugins_from_directory()

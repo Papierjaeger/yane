@@ -106,6 +106,7 @@ class DebugTab(QWidget):
         self._enabled = False
         self._data_lines = 0
         self._t0: float | None = None
+        self._ne = None  # set by MainWindow after training starts
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
@@ -134,6 +135,21 @@ class DebugTab(QWidget):
 
         ctrl.addWidget(self.btn_toggle)
         ctrl.addWidget(btn_clear)
+
+        # Report export button
+        self.btn_report = QPushButton("Export Report")
+        self.btn_report.setFixedWidth(120)
+        self.btn_report.clicked.connect(self._export_report)
+        self.btn_report.setEnabled(False)
+        ctrl.addWidget(self.btn_report)
+
+        # Landscape PCA button
+        self.btn_pca = QPushButton("Landscape PCA")
+        self.btn_pca.setFixedWidth(120)
+        self.btn_pca.clicked.connect(self._run_landscape_pca)
+        self.btn_pca.setEnabled(False)
+        ctrl.addWidget(self.btn_pca)
+
         ctrl.addStretch()
         ctrl.addWidget(hint)
         ctrl.addStretch()
@@ -218,6 +234,56 @@ class DebugTab(QWidget):
     def _clear(self) -> None:
         self._log.clear()
         self._data_lines = 0
+
+    def set_ne(self, ne) -> None:
+        """Set NeuroEvolution instance reference (called by MainWindow)."""
+        self._ne = ne
+        self.btn_report.setEnabled(ne is not None)
+        self.btn_pca.setEnabled(ne is not None)
+
+    def _run_landscape_pca(self) -> None:
+        """Run landscape PCA analysis and show results in the log."""
+        if self._ne is None:
+            return
+        self._log.appendPlainText("\n=== Landscape PCA ===")
+        try:
+            result = self._ne.landscape_pca()
+            if not result or not result.get("x"):
+                self._log.appendPlainText("❌ No result (population empty?).")
+                return
+            ev = result.get("explained_var", [0.0, 0.0])
+            total = sum(ev) if ev else 0.0
+            self._log.appendPlainText(
+                f"  Explained variance (first 2 components): "
+                f"{ev}"
+            )
+            self._log.appendPlainText(
+                f"  Total variance captured: {total:.1%}"
+            )
+            n_genomes = len(result.get("x", []))
+            self._log.appendPlainText(f"  Genomes projected: {n_genomes}")
+            self._log.appendPlainText("✅ Landscape PCA complete.")
+        except Exception as exc:
+            self._log.appendPlainText(f"❌ Landscape PCA failed: {exc}")
+
+    def _export_report(self) -> None:
+        """Export a run report for the current training session."""
+        if self._ne is None:
+            return
+        from pathlib import Path
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Report exportieren", "report.html",
+            "HTML (*.html);;Markdown (*.md);;JSON (*.json)",
+        )
+        if not path:
+            return
+        try:
+            fmt = Path(path).suffix.lstrip(".") or "html"
+            self._ne.export_run_report(path, fmt=fmt)
+            self._log.appendPlainText(f"\n✅ Report exported: {path}")
+        except Exception as exc:
+            self._log.appendPlainText(f"\n❌ Report export failed: {exc}")
 
     def _copy(self) -> None:
         text = self._log.toPlainText()
