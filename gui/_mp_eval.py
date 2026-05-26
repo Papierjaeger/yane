@@ -6,6 +6,7 @@ PySide6 (PyPI-bundled Qt6) never occurs in those workers.
 """
 from __future__ import annotations
 import time
+import traceback
 
 from yane.core.genome import Genome
 from yane.neuro_evolution import _aggregate_fitnesses
@@ -62,3 +63,80 @@ def _mp_evaluate(genome: Genome) -> tuple[float, float]:
     finally:
         if _mp_input_transform is not None:
             genome.__dict__.pop("forward", None)
+
+
+_FRAME_INTERVAL = 1.0 / 30  # display cap shared with worker.py
+
+
+# ---------------------------------------------------------------------------
+# Episode-runner spawn worker (also deliberately PySide6-free)
+# ---------------------------------------------------------------------------
+
+def _close_env(eval_fn) -> None:
+    """Safely close a gym environment attached to *eval_fn*."""
+    env = getattr(eval_fn, "_env", None)
+    if env is not None:
+        try:
+            env.close()
+        except Exception:
+            pass
+
+
+def _episode_spawn_worker(maker, genome, frame_queue, score_queue, cmd_queue) -> None:
+    """Run evaluation episodes in a clean spawn subprocess.
+
+    Parameters
+    ----------
+    maker : SpawnRequired
+        An eval-maker instance (e.g. _AtariEvalMaker).  Must be picklable.
+    genome : Genome
+        The genome to evaluate.
+    frame_queue : multiprocessing.Queue
+        Queue for sending rendered frames (numpy arrays) back to the GUI.
+        A ``None`` value signals episode end.
+    score_queue : multiprocessing.Queue
+        Queue for sending cumulative scores back to the GUI.
+    cmd_queue : multiprocessing.Queue
+        Queue for receiving stop commands from the GUI thread.
+    """
+    import queue
+
+    _running = True
+
+    def _render_cb(frame):
+        if not _running:
+            return
+        try:
+            frame_queue.put(frame, timeout=0.01)
+        except queue.Full:
+            pass
+
+    def _step_cb(total):
+        nonlocal _running
+        if not _running:
+            return 0.0
+        try:
+            score_queue.put(total, timeout=0.01)
+        except queue.Full:
+            pass
+        try:
+            cmd = cmd_queue.get_nowait()
+            if cmd == "stop":
+                _running = False
+        except queue.Empty:
+            pass
+        return 0.0
+
+    eval_fn = maker(_render_cb, _step_cb, demo=True)
+
+    try:
+        while _running:
+            eval_fn(genome)
+    except Exception:
+        traceback.print_exc()
+    finally:
+        _close_env(eval_fn)
+        try:
+            frame_queue.put(None, timeout=0.5)  # sentinel
+        except Exception:
+            pass

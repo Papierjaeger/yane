@@ -43,12 +43,18 @@ from yane.examples.sequence_recall_PI import (
 
 
 def _register_ale_envs(gym) -> bool:
-    """Register ALE/Atari env IDs with Gymnasium when ale_py is available."""
+    """Register ALE/Atari env IDs with Gymnasium when ale_py is available.
+
+    In gymnasium ≥1.3, ``gym.register_envs()`` is a no-op — environments are
+    auto-registered as a side effect of ``import ale_py``.  The *gym* parameter
+    is kept for API compatibility with older gymnasium.
+    """
     try:
-        import ale_py
-        gym.register_envs(ale_py)
+        import ale_py  # noqa: F401 — side-effect: registers ALE namespaces
         return True
-    except Exception:
+    except ImportError as exc:
+        from yane.util.logger import log_warning
+        log_warning("Cannot import ale_py: %s", exc)
         return False
 
 
@@ -655,7 +661,11 @@ class _AtariEvalMaker(SpawnRequired):
 
     def __call__(self, render_callback=None, step_callback=None, demo=False):
         import gymnasium as gym
-        _register_ale_envs(gym)
+        if not _register_ale_envs(gym):
+            raise ImportError(
+                "ale-py is required for Atari environments. "
+                "Install it with: pip install ale-py gymnasium[atari]"
+            )
         env = gym.make(
             self.env_id,
             disable_env_checker=True,

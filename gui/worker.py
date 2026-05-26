@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import math
 import multiprocessing as mp
+import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -11,7 +12,7 @@ from typing import Callable
 from PySide6.QtCore import QThread, Signal
 
 from yane.evolution.remote_evaluation import RemoteEvaluationClient
-from yane.gui._mp_eval import _mp_evaluate, _mp_initializer
+from yane.gui._mp_eval import _mp_evaluate, _mp_initializer, _episode_spawn_worker, _close_env, _FRAME_INTERVAL
 from yane.gui.remote_config import RemoteEvaluationConfig
 from yane.neuro_evolution import _return_memory_to_os
 
@@ -42,14 +43,6 @@ def _optimal_workers(eval_ms: float, batch_size: int, overhead_ms: float, cap: i
     min_beneficial = max(2, min_beneficial)
     optimal = max(min_beneficial, int(seq_time / overhead_ms))
     return min(cap, optimal)
-
-def _close_env(eval_fn) -> None:
-    env = getattr(eval_fn, "_env", None)
-    if env is not None:
-        try:
-            env.close()
-        except Exception:
-            pass
 
 
 class TrainingWorker(QThread):
@@ -592,7 +585,12 @@ class TrainingWorker(QThread):
 
 
 class EpisodeRunner(QThread):
-    """Loops gym episodes with render until stop() is called."""
+    """Loops gym episodes with render until stop() is called.
+
+    For SpawnRequired examples (e.g. Atari/ALE) the evaluation runs in a
+    dedicated spawn subprocess so that ale_py (system Qt6) and PySide6
+    (bundled Qt6) never share the same process.
+    """
 
     frame_ready   = Signal(object)  # numpy array frame
     score_updated = Signal(float)   # cumulative reward after each step
@@ -604,6 +602,16 @@ class EpisodeRunner(QThread):
         self._running = True
 
     def run(self) -> None:
+        from yane.gui._mp_eval import SpawnRequired
+        # Check the underlying eval-maker, not the ExampleConfig wrapper.
+        maker = getattr(self._example, "make_eval", None)
+        if maker is not None and isinstance(maker, SpawnRequired):
+            self._run_spawned(maker)
+        else:
+            self._run_inline()
+
+    def _run_inline(self) -> None:
+        """Original inline evaluation path (non-Atari envs)."""
         last_frame = 0.0
         step_delay = 0.0
 
@@ -612,7 +620,7 @@ class EpisodeRunner(QThread):
             if not self._running:
                 return
             now = time.perf_counter()
-            if now - last_frame < 1 / 30:
+            if now - last_frame < _FRAME_INTERVAL:
                 return
             last_frame = now
             self.frame_ready.emit(frame)
@@ -634,6 +642,58 @@ class EpisodeRunner(QThread):
             pass
         finally:
             _close_env(eval_fn)
+
+    def _run_spawned(self, maker) -> None:
+        """Run evaluation in a spawn subprocess (avoids Qt6 conflict)."""
+        ctx = mp.get_context("spawn")
+        frame_queue: mp.Queue = ctx.Queue()
+        score_queue: mp.Queue = ctx.Queue()
+        cmd_queue: mp.Queue = ctx.Queue()
+
+        worker = ctx.Process(
+            target=_episode_spawn_worker,
+            args=(maker, self._genome, frame_queue, score_queue, cmd_queue),
+            daemon=True,
+        )
+        worker.start()
+
+        last_frame = 0.0
+        try:
+            while self._running and worker.is_alive():
+                # Pump frames from the subprocess
+                try:
+                    frame = frame_queue.get(timeout=0.05)
+                    if frame is None:  # sentinel: episode ended
+                        break
+                    now = time.perf_counter()
+                    if now - last_frame >= _FRAME_INTERVAL:
+                        last_frame = now
+                        self.frame_ready.emit(frame)
+                except (queue.Empty, EOFError):
+                    pass
+
+                # Drain all queued scores; emit only the latest.
+                latest_score = None
+                while True:
+                    try:
+                        latest_score = score_queue.get_nowait()
+                    except (queue.Empty, EOFError):
+                        break
+                if latest_score is not None:
+                    self.score_updated.emit(latest_score)
+        finally:
+            self._running = False
+            try:
+                cmd_queue.put("stop")
+            except Exception:
+                pass
+            worker.join(timeout=5)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=2)
+            cmd_queue.cancel_join_thread()
+            for q in (frame_queue, score_queue, cmd_queue):
+                q.close()
 
     def stop(self) -> None:
         self._running = False
