@@ -2,12 +2,27 @@
 from __future__ import annotations
 
 import dataclasses
+import random
 import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any, Protocol
 
 from yane.core.genome import Genome
+
+
+def _aggregate(values: list[float], aggregation: str) -> float:
+    """Aggregate a list of floats using the named strategy."""
+    if not values:
+        return 0.0
+    if aggregation == "min":
+        return min(values)
+    if aggregation == "max":
+        return max(values)
+    if aggregation == "median":
+        sv = sorted(values)
+        return sv[len(sv) // 2]
+    return sum(values) / len(values)
 
 
 @dataclasses.dataclass
@@ -214,13 +229,69 @@ class CaseBatchMiddleware:
         return fitness
 
     def _aggregate(self, values: list[float]) -> float:
-        if not values:
-            return 0.0
-        if self.aggregation == "min":
-            return min(values)
-        if self.aggregation == "max":
-            return max(values)
-        return sum(values) / len(values)
+        return _aggregate(values, self.aggregation)
+
+
+class NoiseMiddleware:
+    """Perturb genome weights with Gaussian noise for robust evaluation.
+
+    Creates *n_samples* copies of the genome, adds N(0, *sigma*) noise to
+    each copy's connection weights, evaluates all copies, and returns the
+    aggregated result. The original genome is never modified.
+
+    Parameters
+    ----------
+    sigma : float
+        Standard deviation of the Gaussian noise applied to weights.
+    n_samples : int
+        Number of noisy evaluations to average (must be >= 1).
+    aggregation : str
+        How to combine the noisy evaluations: ``"mean"``, ``"min"``,
+        ``"max"``, or ``"median"``.
+    """
+
+    def __init__(
+        self,
+        sigma: float = 0.05,
+        n_samples: int = 3,
+        aggregation: str = "mean",
+    ) -> None:
+        if sigma < 0.0:
+            raise ValueError("sigma must be >= 0")
+        if n_samples < 1:
+            raise ValueError("n_samples must be >= 1")
+        if aggregation not in {"mean", "min", "max", "median"}:
+            raise ValueError("aggregation must be 'mean', 'min', 'max', or 'median'")
+        self.sigma = float(sigma)
+        self.n_samples = int(n_samples)
+        self.aggregation = aggregation
+        self._rng = random.Random()
+
+    def _perturb_weights(self, genome: Genome) -> Genome:
+        """Return a deep copy of *genome* with N(0, sigma) added to weights."""
+        copy = genome.copy()
+        for node in copy.nodes:
+            for conn in node.connections:
+                if conn.enabled:
+                    conn.weight += self._rng.gauss(0.0, self.sigma)
+        return copy
+
+    def __call__(
+        self,
+        genome: Genome,
+        eval_fn: Callable[[Genome], float],
+        ctx: EvalContext,
+    ) -> float:
+        if self.sigma == 0.0:
+            return eval_fn(genome)
+        values: list[float] = []
+        for _ in range(self.n_samples):
+            noisy = self._perturb_weights(genome)
+            values.append(float(eval_fn(noisy)))
+        ctx.diagnostics["noise_sigma"] = self.sigma
+        ctx.diagnostics["noise_n_samples"] = self.n_samples
+        ctx.diagnostics["noise_raw_values"] = values
+        return _aggregate(values, self.aggregation)
 
 
 def apply_middleware(
