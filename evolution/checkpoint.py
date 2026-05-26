@@ -30,10 +30,30 @@ data, not executed.
 from __future__ import annotations
 from pathlib import Path
 from datetime import datetime
+import base64
+import hashlib
 import json
 
 VERSION = 2
 _REQUIRED_KEYS = frozenset({"config", "population", "tracker"})
+
+
+def _config_hash(cfg: dict) -> str:
+    """Deterministic SHA-256 hash of a config dict."""
+    canonical = json.dumps(cfg, indent=2, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def check_compatibility(stored_hash: str, current_cfg: dict) -> str:
+    """Compare a stored config hash with the current config.
+
+    Returns ``"EXACT"`` when hashes match, ``"COMPATIBLE"`` otherwise.
+    Breaking-change detection (comparing individual keys) is not yet
+    implemented; callers should treat ``"COMPATIBLE"`` as *unknown*.
+    """
+    if stored_hash == _config_hash(current_cfg):
+        return "EXACT"
+    return "COMPATIBLE"
 
 
 def _metadata_for(payload: dict) -> dict:
@@ -42,6 +62,7 @@ def _metadata_for(payload: dict) -> dict:
     return {
         "version": payload.get("version", VERSION),
         "created_at": datetime.now().isoformat(timespec="seconds"),
+        "config_hash": _config_hash(cfg),
         "config": cfg,
         "population_size": getattr(pop, "max_size", None),
         "evaluated": len(getattr(pop, "_evaluated", ())) if pop is not None else None,
@@ -84,15 +105,27 @@ def migrate(payload: dict) -> dict:
     return payload
 
 
-def write(path: str | Path, payload: dict) -> None:
-    """Atomically pickle payload to path (via .tmp sibling, then replace)."""
+def write(path: str | Path, payload: dict, codec: str = "pickle") -> None:
+    """Atomically write payload to path (via .tmp sibling, then replace)."""
     import pickle
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = dict(payload)
     payload["version"] = VERSION
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+    raw = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+    if codec == "pickle":
+        tmp.write_bytes(raw)
+    elif codec == "json":
+        wrapper = {
+            "codec": "json",
+            "payload_encoding": "pickle+base64",
+            "version": VERSION,
+            "payload": base64.b64encode(raw).decode("ascii"),
+        }
+        tmp.write_text(json.dumps(wrapper, indent=2), encoding="utf-8")
+    else:
+        raise ValueError(f"Unsupported checkpoint codec: {codec!r}")
     tmp.replace(path)
     meta_path = path.with_suffix(path.suffix + ".json")
     meta_tmp = meta_path.with_suffix(meta_path.suffix + ".tmp")
@@ -113,7 +146,14 @@ def read(path: str | Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {path}")
 
-    payload = migrate(pickle.loads(path.read_bytes()))
+    data = path.read_bytes()
+    if data.lstrip().startswith(b"{"):
+        wrapper = json.loads(data.decode("utf-8"))
+        if wrapper.get("payload_encoding") != "pickle+base64":
+            raise ValueError("Unsupported JSON checkpoint payload encoding")
+        data = base64.b64decode(wrapper["payload"])
+
+    payload = migrate(pickle.loads(data))
 
     missing = _REQUIRED_KEYS - payload.keys()
     if missing:
