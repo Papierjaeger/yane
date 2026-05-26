@@ -68,8 +68,6 @@ def hyperparameter_search(
     if db_path is None:
         db_path = tempfile.mktemp(suffix=".db")
 
-    db = RunDatabase(db_path)
-
     all_configs = _product_dict(param_grid)
     if search_type == "random":
         rng = random.Random(42)

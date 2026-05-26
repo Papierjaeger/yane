@@ -314,7 +314,6 @@ class TrainingWorker(QThread):
                     self._iteration += len(results)
 
                     best_fitness = max(fitnesses)
-                    best_genome  = genomes[fitnesses.index(best_fitness)]
                     if self._yane.min_fitness is not None and best_fitness >= self._yane.min_fitness:
                         self._running = False
 
@@ -535,7 +534,6 @@ class TrainingWorker(QThread):
                             )
 
                     best_fitness = max(fitnesses)
-                    best_genome  = genomes[fitnesses.index(best_fitness)]
                     if self._yane.min_fitness is not None and best_fitness >= self._yane.min_fitness:
                         self._running = False
 

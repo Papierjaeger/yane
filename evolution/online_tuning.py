@@ -101,7 +101,6 @@ class UCB1Bandit:
 
     def get_diagnostics(self) -> dict:
         """Return current bandit state for diagnostics."""
-        total = sum(self.counts) or 1
         return {
             f"bandit_{self.param_name}_counts": list(self.counts),
             f"bandit_{self.param_name}_rewards": [round(r, 4) for r in self.rewards],

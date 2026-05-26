@@ -1038,7 +1038,6 @@ class Population:
         """
         if not self._evaluated:
             return
-        base = self._evaluated[0]  # use first genome's rates as reference
         for mt, gene_attr in (
             ("add_node", "mutation_add_node"),
             ("remove_node", "mutation_remove_node"),

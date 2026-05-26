@@ -1271,16 +1271,12 @@ class NeuroEvolution:
         self._tensorboard_logdir = Path(path)
         # Validate that a SummaryWriter can be created now (fail fast).
         try:
-            from torch.utils.tensorboard import SummaryWriter as _SW
+            from torch.utils.tensorboard import SummaryWriter as _SW  # noqa: F401
         except ImportError:
-            try:
-                from tensorboard.summary.writer.event_file_writer import EventFileWriter as _SW  # noqa: F401
-                from torch.utils.tensorboard import SummaryWriter as _SW  # type: ignore
-            except ImportError:
-                raise ImportError(
-                    "TensorBoard logging requires 'torch' or 'tensorboard'. "
-                    "Install it with:  pip install torch  (or pip install tensorboard)"
-                ) from None
+            raise ImportError(
+                "TensorBoard logging requires 'torch'. "
+                "Install it with:  pip install torch"
+            ) from None
 
     def set_log_callbacks(
         self,
