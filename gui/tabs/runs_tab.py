@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
-    QSplitter,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,

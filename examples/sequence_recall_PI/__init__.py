@@ -4,16 +4,12 @@ Input:  current digit (0–9), normalised to [0, 1] by default.
 Output: next digit (0–9), normalised to [0, 1] by default.
 Pass normalize=False to train on raw digit values 0–9 instead.
 """
-import json
-import os
 
 from yane import NeuroEvolution
+from yane.examples._dataset import load_json_dataset
 from yane.util.normalization import ScaleNormalizer
 
-_here = os.path.dirname(__file__)
-
-with open(os.path.join(_here, "dataset_PI.json")) as f:
-    _raw = json.load(f)
+_raw = load_json_dataset(__file__, "dataset_PI.json")
 
 DECIMAL_PLACES = 10
 _SCALE         = 9.0

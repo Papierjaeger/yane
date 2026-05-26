@@ -308,13 +308,13 @@ class Population:
         # Update eval-time range and compute this genome's efficiency score in O(1).
         # Full rescale of all genomes happens in _spawn_offspring() → _compute_efficiency_scores().
         t = elapsed_ms
+        old_min, old_max = self._eval_time_min, self._eval_time_max
         if t is not None and math.isfinite(t) and t >= 0.0:
             if self._eval_time_min is None or t < self._eval_time_min:
                 self._eval_time_min = t
             if self._eval_time_max is None or t > self._eval_time_max:
                 self._eval_time_max = t
-        old_min, old_max = self._eval_time_min, self._eval_time_max
-        lo, hi = old_min, old_max
+        lo, hi = self._eval_time_min, self._eval_time_max
         span = (hi - lo) if (lo is not None and hi is not None) else 0.0
         if span <= 1e-9 or t is None or not math.isfinite(t):
             genome.efficiency_score = 1.0

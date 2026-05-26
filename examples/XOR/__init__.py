@@ -1,13 +1,9 @@
 """XOR example — teaches the network to compute XOR of two binary inputs."""
-import json
-import os
 
 from yane import NeuroEvolution
+from yane.examples._dataset import load_json_dataset, make_absolute_error_eval
 
-_here = os.path.dirname(__file__)
-
-with open(os.path.join(_here, "dataset_XOR.json")) as f:
-    dataset = json.load(f)
+dataset = load_json_dataset(__file__, "dataset_XOR.json")
 
 N_INPUTS       = 2
 N_OUTPUTS      = 1
@@ -22,14 +18,7 @@ TEST_CASES = [
 
 
 def make_eval(render_callback=None, step_callback=None, demo=False):
-    def evaluate(genome):
-        fitness = 0.0
-        for sample in dataset:
-            genome.reset()   # stateless: clear any persistent memory between samples
-            outputs = genome.forward(sample["input"])
-            fitness -= abs(outputs[0] - sample["output"][0])
-        return fitness
-    return evaluate
+    return make_absolute_error_eval(dataset)
 
 
 def main():

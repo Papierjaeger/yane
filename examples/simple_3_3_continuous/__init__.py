@@ -1,34 +1,23 @@
 """Continuous 3-input 3-output regression example."""
-import json
-import os
 
 from yane import NeuroEvolution
+from yane.examples._dataset import (
+    load_json_dataset,
+    make_absolute_error_eval,
+    sample_pairs,
+)
 
-_here = os.path.dirname(__file__)
-
-with open(os.path.join(_here, "dataset_3_3.json")) as f:
-    dataset = json.load(f)
+dataset = load_json_dataset(__file__, "dataset_3_3.json")
 
 N_INPUTS       = 3
 N_OUTPUTS      = 3
 TARGET_FITNESS = -5.0   # 8 samples × 3 outputs = 24 errors; avg ≤ 0.21 per output (robust to seed variance)
 
-TEST_CASES = [
-    (list(map(float, s["input"])), list(map(float, s["output"])))
-    for s in dataset
-]
+TEST_CASES = sample_pairs(dataset)
 
 
 def make_eval(render_callback=None, step_callback=None, demo=False):
-    def evaluate(genome):
-        fitness = 0.0
-        for sample in dataset:
-            genome.reset()   # stateless: clear persistent memory between samples
-            outputs = genome.forward(sample["input"])
-            for i, target in enumerate(sample["output"]):
-                fitness -= abs(outputs[i] - target)
-        return fitness
-    return evaluate
+    return make_absolute_error_eval(dataset)
 
 
 def main():

@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import csv
 import statistics
-from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QPushButton, QListWidget, QListWidgetItem, QComboBox,
     QFrame, QFileDialog, QScrollArea,
 )
-from PySide6.QtCore import Qt
 
 from yane.gui._helpers import _label, _divider
 from yane.gui.canvas import MultiRunChart

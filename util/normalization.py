@@ -15,7 +15,7 @@ NeuroEvolution.get_normalizer().
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 
@@ -29,6 +29,16 @@ def _broadcast(scale_or_pair: tuple, n: int) -> list:
     if len(s) >= n:
         return s[:n]
     return s + [s[-1]] * (n - len(s))
+
+
+def _normalize_samples(normalizer, samples: Iterable[dict]) -> list[dict[str, list[float]]]:
+    return [
+        {
+            "input": normalizer.normalize_input(sample["input"]),
+            "output": normalizer.normalize_output(sample["output"]),
+        }
+        for sample in samples
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -69,13 +79,7 @@ class ScaleNormalizer:
         return self._apply(values, self.output_scale, lambda v, s: v * s)
 
     def normalize_samples(self, samples: Iterable[dict]) -> list[dict[str, list[float]]]:
-        return [
-            {
-                "input": self.normalize_input(sample["input"]),
-                "output": self.normalize_output(sample["output"]),
-            }
-            for sample in samples
-        ]
+        return _normalize_samples(self, samples)
 
     @property
     def input_scale_list(self) -> list[float] | None:
@@ -143,13 +147,7 @@ class MinMaxNormalizer:
         return self._denorm(values, self.output_range)
 
     def normalize_samples(self, samples: Iterable[dict]) -> list[dict[str, list[float]]]:
-        return [
-            {
-                "input":  self.normalize_input(sample["input"]),
-                "output": self.normalize_output(sample["output"]),
-            }
-            for sample in samples
-        ]
+        return _normalize_samples(self, samples)
 
 
 # ---------------------------------------------------------------------------
@@ -214,13 +212,7 @@ class ZScoreNormalizer:
         return self._denorm(values, self.output_stats, self.eps)
 
     def normalize_samples(self, samples: Iterable[dict]) -> list[dict[str, list[float]]]:
-        return [
-            {
-                "input":  self.normalize_input(sample["input"]),
-                "output": self.normalize_output(sample["output"]),
-            }
-            for sample in samples
-        ]
+        return _normalize_samples(self, samples)
 
 
 # ---------------------------------------------------------------------------
@@ -294,13 +286,7 @@ class ClipNormalizer:
         return self._denorm(values, self.output_clip, self.rescale)
 
     def normalize_samples(self, samples: Iterable[dict]) -> list[dict[str, list[float]]]:
-        return [
-            {
-                "input":  self.normalize_input(sample["input"]),
-                "output": self.normalize_output(sample["output"]),
-            }
-            for sample in samples
-        ]
+        return _normalize_samples(self, samples)
 
 
 # ---------------------------------------------------------------------------
@@ -410,13 +396,7 @@ class RunningStatsNormalizer:
         ]
 
     def normalize_samples(self, samples: Iterable[dict]) -> list[dict[str, list[float]]]:
-        return [
-            {
-                "input":  self.normalize_input(sample["input"]),
-                "output": self.normalize_output(sample["output"]),
-            }
-            for sample in samples
-        ]
+        return _normalize_samples(self, samples)
 
     @property
     def input_means(self) -> list[float]:

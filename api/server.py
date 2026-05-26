@@ -1,6 +1,5 @@
 """YANE API server — run with:  uvicorn yane.api.server:app --reload"""
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from yane.neuro_evolution import NeuroEvolution
 from yane.api.routes import network, population as pop_routes
-from yane.util.logger import setup_logging as _setup_log, log_info, log_warning, log_error
+from yane.util.logger import setup_logging as _setup_log, log_info
 from yane.util.presets import list_presets, load_preset
 
 
@@ -191,26 +190,18 @@ def checkpoint_metadata(path: str) -> dict:
     """Return the JSON metadata written alongside a checkpoint (``.pkl.json``).
 
     Does not load the pickle — safe to call without a running NeuroEvolution instance.
-    Returns 404 if neither the ``.pkl`` nor its ``.json`` sidecar exist.
+    Returns 404 if the ``.json`` sidecar does not exist.
     """
     import json
     from pathlib import Path as _Path
-    from yane.evolution.checkpoint import _metadata_for, read as _read
     pkl_path = _Path(path)
     meta_path = pkl_path.with_suffix(".pkl.json")
-    if meta_path.exists():
-        try:
-            return json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            raise HTTPException(500, f"Could not parse metadata sidecar: {e}")
-    if not pkl_path.exists():
-        raise HTTPException(404, f"Checkpoint not found: {path}")
-    # Fallback: load the pickle and derive metadata on the fly (no sidecar present)
     try:
-        payload = _read(pkl_path)
-        return _metadata_for(payload)
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise HTTPException(404, f"Checkpoint metadata sidecar not found: {meta_path}")
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, f"Could not parse metadata sidecar: {e}")
 
 
 # ── Diagnostics endpoint ────────────────────────────────────────────────────

@@ -196,6 +196,42 @@ class TestRemoteWorkerServerApp(unittest.TestCase):
         self.assertIsNone(body["fitness"])
         self.assertIsNotNone(body["error"])
 
+    def test_malformed_base64_with_valid_characters_returns_error(self):
+        client = self._app()
+        payload = {"job_id": "j5b", "genome_b64": "abcd=", "timeout_s": 5.0}
+        r = client.post("/evaluate", json=payload,
+                        headers={"Authorization": "Bearer secret"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIsNone(body["fitness"])
+        self.assertIn("Deserialise error", body["error"])
+
+    def test_invalid_timeout_is_rejected_before_deserialise(self):
+        client = self._app()
+        payload = {"job_id": "j5c", "genome_b64": self._genome_b64(), "timeout_s": 0.0}
+        r = client.post("/evaluate", json=payload,
+                        headers={"Authorization": "Bearer secret"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_evaluation_timeout_returns_promptly(self):
+        def slow_fn(g):
+            time.sleep(0.25)
+            return 1.0
+
+        client = self._app(fitness_fn=slow_fn)
+        payload = {"job_id": "j5d", "genome_b64": self._genome_b64(), "timeout_s": 0.01}
+
+        start = time.perf_counter()
+        r = client.post("/evaluate", json=payload,
+                        headers={"Authorization": "Bearer secret"})
+        elapsed = time.perf_counter() - start
+
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIsNone(body["fitness"])
+        self.assertIn("timed out", body["error"])
+        self.assertLess(elapsed, 0.15)
+
     def test_duration_s_is_present_in_response(self):
         client = self._app(fitness_fn=lambda g: 0.0)
         payload = {"job_id": "j6", "genome_b64": self._genome_b64(), "timeout_s": 5.0}

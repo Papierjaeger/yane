@@ -1,10 +1,13 @@
 from __future__ import annotations
 import math
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from yane.evolution.mutation import Mutation
-from yane.util.activation import ActivationType, ActivationFunction, ACTIVATION_FNS
-from yane.core.connection import Connection
+from yane.util.activation import ActivationType, ACTIVATION_FNS
+
+if TYPE_CHECKING:
+    from yane.core.connection import Connection
 
 
 class NodeType(Enum):

@@ -10,7 +10,6 @@ from typing import Callable
 
 from PySide6.QtCore import QThread, Signal
 
-from yane.core.genome import Genome
 from yane.evolution.remote_evaluation import RemoteEvaluationClient
 from yane.gui._mp_eval import _mp_evaluate, _mp_initializer
 from yane.gui.remote_config import RemoteEvaluationConfig
@@ -43,15 +42,6 @@ def _optimal_workers(eval_ms: float, batch_size: int, overhead_ms: float, cap: i
     min_beneficial = max(2, min_beneficial)
     optimal = max(min_beneficial, int(seq_time / overhead_ms))
     return min(cap, optimal)
-
-
-
-def _timed_evaluate(eval_fn: Callable, genome: Genome) -> tuple[float, float]:
-    start = time.perf_counter()
-    fitness = eval_fn(genome)
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    return fitness, elapsed_ms
-
 
 def _close_env(eval_fn) -> None:
     env = getattr(eval_fn, "_env", None)

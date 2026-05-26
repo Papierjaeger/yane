@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
-    QPushButton, QFrame, QLabel, QSizePolicy, QFormLayout,
+    QWidget, QVBoxLayout, QScrollArea,
+    QPushButton, QFrame, QLabel, QSizePolicy,
     QFileDialog, QMessageBox,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
 from yane.gui.canvas import (

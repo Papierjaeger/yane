@@ -4,16 +4,12 @@ Inputs 0–9 and outputs 0–81 are normalised to [0, 1] by default so activatio
 functions operate in a useful range and the fitness landscape is scale-independent.
 Pass normalize=False to make_eval() to train on raw values instead.
 """
-import json
-import os
 
 from yane import NeuroEvolution
+from yane.examples._dataset import load_json_dataset, make_absolute_error_eval
 from yane.util.normalization import ScaleNormalizer
 
-_here = os.path.dirname(__file__)
-
-with open(os.path.join(_here, "multiplication_table.json")) as f:
-    _raw = json.load(f)
+_raw = load_json_dataset(__file__, "multiplication_table.json")
 
 _IN_MAX  = 9.0
 _OUT_MAX = 81.0
@@ -34,18 +30,7 @@ TEST_CASES = [
 
 def make_eval(render_callback=None, step_callback=None, demo=False, normalize=True):
     data = dataset if normalize else _raw
-
-    def evaluate(genome):
-        fitness = 0.0
-        for sample in data:
-            # Reset between samples so any persistent hidden nodes (developed
-            # through mutation) can't accumulate state and produce NaN/Inf.
-            genome.reset()
-            outputs = genome.forward(sample["input"])
-            for i, target in enumerate(sample["output"]):
-                fitness -= abs(outputs[i] - target)
-        return fitness
-    return evaluate
+    return make_absolute_error_eval(data)
 
 
 def main():

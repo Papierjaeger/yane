@@ -152,6 +152,25 @@ class TestCheckpointMetadataEndpoint(unittest.TestCase):
                             params={"path": "/nonexistent/run.pkl"})
         self.assertEqual(r.status_code, 404)
 
+    def test_metadata_does_not_unpickle_without_sidecar(self):
+        import pickle
+        from pathlib import Path
+
+        marker = Path(self._tmpdir.name) / "executed.txt"
+
+        class _WriteMarker:
+            def __reduce__(self):
+                return (marker.write_text, ("boom",))
+
+        path = Path(self._tmpdir.name) / "malicious.pkl"
+        path.write_bytes(pickle.dumps(_WriteMarker()))
+
+        r = self.client.get("/checkpoint/metadata", params={"path": str(path)})
+
+        self.assertEqual(r.status_code, 404)
+        self.assertIn("sidecar", r.json()["detail"])
+        self.assertFalse(marker.exists())
+
     def test_metadata_includes_config_fields(self):
         path = self._make_checkpoint()
         r = self.client.get("/checkpoint/metadata", params={"path": path})

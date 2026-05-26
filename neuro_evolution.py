@@ -401,6 +401,8 @@ class NeuroEvolution:
         self.min_fitness = value
 
     def set_population_size(self, n: int) -> None:
+        if n < 1:
+            raise ValueError(f"population size must be >= 1, got {n}")
         self._population_size = n
         if self._population is not None:
             self._population.max_size = n

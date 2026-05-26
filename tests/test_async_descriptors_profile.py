@@ -1,4 +1,6 @@
 import unittest
+import time
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 from yane import NeuroEvolution
 from yane.benchmarks.profile_serialization import profile_one
@@ -22,6 +24,21 @@ class TestAsyncDescriptorsProfile(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0][1], 2.0)
+
+    def test_async_evaluate_batch_timeout_returns_promptly(self):
+        yane = NeuroEvolution()
+        yane.configure(1, 1)
+        genomes = [yane.next_genome()]
+
+        def slow_eval(_genome):
+            time.sleep(0.25)
+            return 1.0
+
+        start = time.perf_counter()
+        with self.assertRaises(FuturesTimeoutError):
+            evaluate_batch_async(genomes, slow_eval, max_workers=1, timeout_s=0.01)
+
+        self.assertLess(time.perf_counter() - start, 0.15)
 
     def test_descriptor_registry_and_scalarization(self):
         yane = NeuroEvolution()

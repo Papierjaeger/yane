@@ -111,6 +111,20 @@ class TestPopulation(unittest.TestCase):
         self.assertAlmostEqual(g1.efficiency_score, 1.0)
         self.assertAlmostEqual(g2.efficiency_score, 0.0)
 
+    def test_efficiency_scores_rescale_when_eval_time_range_expands(self):
+        pop = self._make_population(max_size=10)
+        slow = pop.select_for_evaluation()
+        pop.submit(slow, 1.0, elapsed_ms=30.0)
+        fast = pop.select_for_evaluation()
+        pop.submit(fast, 1.0, elapsed_ms=10.0)
+
+        self.assertTrue(pop._efficiency_dirty)
+        pop._compute_efficiency_scores()
+
+        self.assertAlmostEqual(slow.efficiency_score, 0.0)
+        self.assertAlmostEqual(fast.efficiency_score, 1.0)
+        self.assertFalse(pop._efficiency_dirty)
+
     def test_efficiency_weight_fades_during_stagnation(self):
         pop = self._make_population(max_size=10)
         self.assertAlmostEqual(pop.efficiency_weight, 0.5)

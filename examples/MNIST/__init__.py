@@ -2,7 +2,6 @@
 
 Dataset: https://www.kaggle.com/datasets/oddrationale/mnist-in-csv
 """
-import numpy as np
 import pandas as pd
 
 from yane import NeuroEvolution

@@ -49,6 +49,7 @@ Usage — worker side (run once per machine, with fitness function pre-loaded)::
 from __future__ import annotations
 
 import base64
+import hmac
 import pickle
 import threading
 import time
@@ -60,11 +61,12 @@ from yane.core.genome import Genome
 
 try:
     from pydantic import BaseModel as _BaseModel
+    from pydantic import Field as _Field
 
     class _EvalRequest(_BaseModel):
-        job_id: str = ""
-        genome_b64: str = ""
-        timeout_s: float = 30.0
+        job_id: str = _Field(default="", max_length=128)
+        genome_b64: str = _Field(default="", max_length=64 * 1024 * 1024)
+        timeout_s: float = _Field(default=30.0, gt=0.0, le=3600.0)
 except ImportError:
     _EvalRequest = None  # type: ignore[assignment,misc]
 
@@ -299,13 +301,13 @@ class RemoteWorkerServer:
         @app.post("/evaluate")
         def evaluate(body: _EvalRequest, authorization: str = Header(default="")):
             # Auth check: compare full "Bearer <token>" header value
-            if token and authorization != f"Bearer {token}":
+            if token and not hmac.compare_digest(authorization, f"Bearer {token}"):
                 from fastapi import HTTPException
                 raise HTTPException(status_code=401, detail="Unauthorized")
 
             t0 = time.perf_counter()
             try:
-                genome_bytes = base64.b64decode(body.genome_b64)
+                genome_bytes = base64.b64decode(body.genome_b64, validate=True)
                 # Security: unpickle only from authenticated senders (token checked above)
                 genome = pickle.loads(genome_bytes)
             except Exception as exc:
@@ -315,13 +317,21 @@ class RemoteWorkerServer:
 
             try:
                 import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(fitness_fn, genome)
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = pool.submit(fitness_fn, genome)
+                try:
                     fitness = float(future.result(timeout=body.timeout_s))
-                error = None
-            except concurrent.futures.TimeoutError:
-                fitness = None
-                error = f"Evaluation timed out after {body.timeout_s}s"
+                    error = None
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    fitness = None
+                    error = f"Evaluation timed out after {body.timeout_s}s"
+                except Exception:
+                    pool.shutdown(wait=True, cancel_futures=True)
+                    raise
+                else:
+                    pool.shutdown(wait=True, cancel_futures=True)
             except Exception as exc:
                 fitness = None
                 error = str(exc)

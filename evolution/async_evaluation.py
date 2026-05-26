@@ -1,7 +1,7 @@
 """Async/distributed-friendly evaluation queue primitives."""
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from dataclasses import dataclass
 from typing import Callable
 
@@ -47,8 +47,8 @@ class AsyncEvaluationQueue:
         self._pending.clear()
         return results
 
-    def shutdown(self) -> None:
-        self._executor.shutdown(wait=True, cancel_futures=True)
+    def shutdown(self, wait: bool = True) -> None:
+        self._executor.shutdown(wait=wait, cancel_futures=True)
 
 
 def evaluate_batch_async(
@@ -58,9 +58,13 @@ def evaluate_batch_async(
     timeout_s: float | None = None,
 ) -> list[tuple[Genome, float]]:
     queue = AsyncEvaluationQueue(fitness_fn, max_workers=max_workers, timeout_s=timeout_s)
+    timed_out = False
     try:
         for genome in genomes:
             queue.submit(genome)
         return queue.drain()
+    except FuturesTimeoutError:
+        timed_out = True
+        raise
     finally:
-        queue.shutdown()
+        queue.shutdown(wait=not timed_out)

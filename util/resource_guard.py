@@ -1,4 +1,3 @@
-import gc
 import psutil
 
 _BYTES_PER_GB = 1_073_741_824

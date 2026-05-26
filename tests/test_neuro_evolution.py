@@ -102,6 +102,13 @@ class TestNeuroEvolutionConfig(unittest.TestCase):
         yane.set_population_size(50)
         self.assertEqual(yane._population.max_size, 50)
 
+    def test_set_population_size_rejects_non_positive_values(self):
+        yane = self._make(n_inputs=2, n_outputs=1)
+        with self.assertRaises(ValueError):
+            yane.set_population_size(0)
+        with self.assertRaises(ValueError):
+            yane.set_population_size(-1)
+
     def test_is_configured_property(self):
         from yane import NeuroEvolution
         yane = NeuroEvolution()
