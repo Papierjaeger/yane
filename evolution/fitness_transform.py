@@ -15,6 +15,7 @@ Usage::
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Callable
 
@@ -101,3 +102,123 @@ class ChainTransform:
         for t in self.transforms:
             result = t(result)
         return result
+
+
+# ---------------------------------------------------------------------------
+# Fitness Landscape Analyzer — automatic detection and recommendations
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class FitnessLandscapeReport:
+    """Diagnostic report about the current fitness landscape."""
+
+    sparsity_score: float = 0.0
+    """Fraction of genomes with identical raw fitness (0 = all unique)."""
+
+    plateau_fraction: float = 0.0
+    """Fraction of genomes within 1 % of median fitness (high = plateau)."""
+
+    skewness: float = 0.0
+    """Sample skewness: > 1 = right-skewed (few high), < -1 = left-skewed."""
+
+    cluster_separability: float = 0.0
+    """Mean between-species fitness difference / within-species std (0 = no separation)."""
+
+    recommendations: list[str] = dataclasses.field(default_factory=list)
+    """Suggested actions based on the analysis."""
+
+    applied_transform: str | None = None
+    """Name of the transform that was applied (if auto-mode)."""
+
+
+class FitnessLandscapeAnalyzer:
+    """Analyse the fitness distribution of an evaluated population and
+    recommend / apply fitness transformations.
+
+    Usage::
+
+        report = FitnessLandscapeAnalyzer.analyze(evaluated_genomes)
+        transform = FitnessLandscapeAnalyzer.recommend_transform(report)
+    """
+
+    @staticmethod
+    def analyze(evaluated: list) -> FitnessLandscapeReport:
+        """Analyse the fitness landscape from a list of evaluated genomes.
+
+        Each genome must have a ``raw_fitness`` or ``fitness`` attribute.
+        """
+        if not evaluated:
+            return FitnessLandscapeReport()
+
+        fitnesses = [
+            float(getattr(g, "raw_fitness", getattr(g, "fitness", 0.0)))
+            for g in evaluated
+        ]
+        n = len(fitnesses)
+        report = FitnessLandscapeReport()
+
+        # --- Sparsity: fraction of identical values ---
+        unique = len(set(round(f, 12) for f in fitnesses))
+        report.sparsity_score = 1.0 - (unique / n) if n > 0 else 0.0
+
+        # --- Plateau: fraction of values within 1 % of median ---
+        sorted_f = sorted(fitnesses)
+        median = sorted_f[n // 2] if n > 0 else 0.0
+        if abs(median) > 1e-12:
+            report.plateau_fraction = sum(
+                1 for f in fitnesses if abs(f - median) / abs(median) < 0.01
+            ) / n
+        else:
+            report.plateau_fraction = sum(1 for f in fitnesses if abs(f) < 1e-12) / n
+
+        # --- Skewness ---
+        if n >= 3:
+            mean = sum(fitnesses) / n
+            var = sum((f - mean) ** 2 for f in fitnesses) / (n - 1)
+            if var > 1e-12:
+                std = math.sqrt(var)
+                skew = sum((f - mean) ** 3 for f in fitnesses) / (n * std ** 3)
+                report.skewness = skew
+            else:
+                report.skewness = 0.0
+
+        # --- Cluster separability (requires species info) ---
+        species_map: dict = {}
+        for g in evaluated:
+            sid = getattr(g, "_last_species_id", None)
+            species_map.setdefault(sid, []).append(
+                float(getattr(g, "raw_fitness", getattr(g, "fitness", 0.0)))
+            )
+        if len(species_map) >= 2:
+            species_means = [sum(v) / len(v) for v in species_map.values()]
+            species_stds = []
+            for v in species_map.values():
+                m = sum(v) / len(v)
+                species_stds.append(math.sqrt(sum((f - m) ** 2 for f in v) / len(v)) if len(v) > 1 else 0.0)
+            mean_std = sum(species_stds) / len(species_stds) if species_stds else 0.0
+            if mean_std > 1e-12:
+                report.cluster_separability = (
+                    max(species_means) - min(species_means)
+                ) / mean_std
+
+        # --- Recommendations ---
+        if abs(report.skewness) > 1.5:
+            report.recommendations.append("apply RankTransform")
+        if report.plateau_fraction > 0.5:
+            report.recommendations.append("apply SigmaScaling")
+        if report.sparsity_score > 0.8:
+            report.recommendations.append("inject diversity")
+        if report.cluster_separability < 1.0 and len(species_map) >= 2:
+            report.recommendations.append("improve speciation separation")
+
+        return report
+
+    @staticmethod
+    def recommend_transform(report: FitnessLandscapeReport) -> Callable | None:
+        """Return a recommended FitnessTransform based on the report, or None."""
+        if abs(report.skewness) > 1.5:
+            return RankTransform()
+        if report.plateau_fraction > 0.5:
+            return SigmaScaling()
+        return None
