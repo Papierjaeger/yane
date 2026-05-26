@@ -12,8 +12,9 @@ from PySide6.QtCore import QThread, Signal
 
 from yane.core.genome import Genome
 from yane.evolution.remote_evaluation import RemoteEvaluationClient
+from yane.gui._mp_eval import _mp_evaluate, _mp_initializer
 from yane.gui.remote_config import RemoteEvaluationConfig
-from yane.neuro_evolution import _aggregate_fitnesses, _return_memory_to_os
+from yane.neuro_evolution import _return_memory_to_os
 
 _EMIT_INTERVAL_S    = 0.5    # emit UI update at most every 500 ms
 _MEMORY_CHECK_EVERY = 500    # check resource limits every N iterations
@@ -43,53 +44,6 @@ def _optimal_workers(eval_ms: float, batch_size: int, overhead_ms: float, cap: i
     optimal = max(min_beneficial, int(seq_time / overhead_ms))
     return min(cap, optimal)
 
-
-# ---------------------------------------------------------------------------
-# Multiprocessing helpers — must be at module level to be picklable
-# ---------------------------------------------------------------------------
-
-_mp_eval_fn        = None   # set once per subprocess by _mp_initializer
-_mp_n_evaluations  = 1
-_mp_aggregation    = "mean"
-_mp_sigma_penalty  = 0.0
-_mp_input_transform = None  # set before forking via _set_mp_input_transform
-
-def _mp_initializer(make_eval_fn, render_cb,
-                    n_evaluations=1, aggregation="mean", sigma_penalty=0.0):
-    """Called once in each worker process to create the fitness evaluator.
-    Uses fork semantics: make_eval_fn is inherited from the parent process,
-    so closures (gym environments, datasets) work without pickling.
-    """
-    global _mp_eval_fn, _mp_n_evaluations, _mp_aggregation, _mp_sigma_penalty
-    _mp_eval_fn       = make_eval_fn(render_cb)
-    _mp_n_evaluations = n_evaluations
-    _mp_aggregation   = aggregation
-    _mp_sigma_penalty = sigma_penalty
-
-def _mp_evaluate(genome: Genome) -> tuple[float, float]:
-    """Evaluate a single genome — runs inside a worker process."""
-    if _mp_input_transform is not None:
-        _t = _mp_input_transform
-        _orig = genome.forward
-        genome.__dict__["forward"] = lambda data: _orig(_t(data))
-    try:
-        if _mp_n_evaluations <= 1:
-            start = time.perf_counter()
-            fitness = _mp_eval_fn(genome)
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            return fitness, elapsed_ms
-
-        fitnesses: list[float] = []
-        total_ms = 0.0
-        for _ in range(_mp_n_evaluations):
-            start = time.perf_counter()
-            f = _mp_eval_fn(genome)
-            total_ms += (time.perf_counter() - start) * 1000.0
-            fitnesses.append(f)
-        return _aggregate_fitnesses(fitnesses, _mp_aggregation, _mp_sigma_penalty), total_ms
-    finally:
-        if _mp_input_transform is not None:
-            genome.__dict__.pop("forward", None)
 
 
 def _timed_evaluate(eval_fn: Callable, genome: Genome) -> tuple[float, float]:
@@ -168,16 +122,31 @@ class TrainingWorker(QThread):
             self._run_sequential(last_emit)
             return
 
+        # Some evaluators (e.g. Atari/ALE) link against system Qt6 which
+        # conflicts with PySide6's bundled Qt6 in this process.  They signal
+        # this via _requires_clean_process=True and must run in spawn workers.
+        use_spawn = getattr(self._make_eval_fn, '_requires_clean_process', False)
+
         n_workers = getattr(self._yane, '_n_workers', 1)
         if n_workers == 0:
-            # Auto: let _run_multiprocess measure eval speed and choose
-            self._run_multiprocess(mp.cpu_count(), last_emit, auto=True)
+            self._run_multiprocess(mp.cpu_count(), last_emit, auto=True,
+                                   use_spawn=use_spawn)
         elif n_workers > 1:
             self.workers_resolved.emit(n_workers)
-            self._run_multiprocess(n_workers, last_emit, auto=False)
+            self._run_multiprocess(n_workers, last_emit, auto=False,
+                                   use_spawn=use_spawn)
         else:
-            self.workers_resolved.emit(1)
-            self._run_sequential(last_emit)
+            if use_spawn:
+                # Sequential mode can't call gym.make in this process — run
+                # via a single spawn worker instead.
+                self.workers_resolved.emit(1)
+                self.info_message.emit(
+                    "Atari: läuft in separatem Prozess (kein Qt-Konflikt)."
+                )
+                self._run_multiprocess(1, last_emit, auto=False, use_spawn=True)
+            else:
+                self.workers_resolved.emit(1)
+                self._run_sequential(last_emit)
 
     def _run_sequential(self, last_emit: float, auto: bool = False) -> None:
         _OVERHEAD_MS      = 16.0
@@ -390,26 +359,32 @@ class TrainingWorker(QThread):
 
     def _run_multiprocess(self, n_workers: int, last_emit: float,
                           auto: bool = False,
-                          bootstrap_eval_ms: float | None = None) -> None:
-        """Evaluate genomes in parallel subprocesses using fork.
+                          bootstrap_eval_ms: float | None = None,
+                          use_spawn: bool = False) -> None:
+        """Evaluate genomes in parallel subprocesses.
 
-        Genome objects are pickled for IPC; the fitness function is inherited
-        from the parent process via fork so closures (datasets, gym envs) work
-        without additional pickling.  Each subprocess calls make_eval_fn once
-        in its initializer to set up its own environment.
+        Uses fork by default (fast, no pickling of closures).  Pass
+        use_spawn=True for evaluators that conflict with the GUI process's
+        loaded shared libraries (e.g. Atari/ALE vs PySide6's Qt); spawn
+        workers start with a clean process image and avoid the conflict.
+        make_eval_fn must be picklable when use_spawn=True.
 
         bootstrap_eval_ms: when set, skip the bootstrap eval (caller already
         measured representative eval time, e.g. after switching from sequential).
         """
         import multiprocessing as mp
 
-        ctx = mp.get_context('fork')
+        ctx = mp.get_context('spawn' if use_spawn else 'fork')
+
+        # Build the pool first.  For spawn-based evaluators the bootstrap must
+        # run inside a pool worker (gym.make can't be called in this process).
+        # For fork-based evaluators the sequential bootstrap runs first so we
+        # can measure eval speed before creating the pool.
 
         if bootstrap_eval_ms is not None:
             eval_ms = bootstrap_eval_ms
-        else:
-            # Bootstrap: evaluate the seed genome sequentially, measure speed,
-            # then decide whether MP overhead is worth it (see cost model below).
+        elif not use_spawn:
+            # Sequential bootstrap: measure eval speed before creating the pool.
             try:
                 seed_fn = self._make_eval_fn(None)
                 seed_g  = self._yane.next_genome()
@@ -421,22 +396,14 @@ class TrainingWorker(QThread):
             except Exception as exc:
                 self.error_occurred.emit(str(exc))
                 return
+        else:
+            eval_ms = 500.0  # generous default; EMA will refine quickly
 
         # Decide how many workers to use.
         #
         # Cost model (for a batch of k genomes):
         #   sequential:   k × eval_ms
         #   w workers:    k × eval_ms / w  +  overhead
-        #
-        # MP beats sequential when:  overhead  <  k × eval_ms × (w−1)/w
-        # → MP is NEVER beneficial when seq_time ≤ overhead (any overhead dominates).
-        # → When seq_time > overhead, there exist w≥2 that win.
-        #
-        # Minimum w that beats sequential:
-        #   w ≥ seq_time / (seq_time − overhead)
-        #
-        # "Optimal" w (eval-work-per-worker equals overhead, diminishing returns):
-        #   w_opt = seq_time / overhead  (real-valued; round up to nearest int ≥ min_beneficial)
         _OVERHEAD_MS  = 16.0
         batch_size    = self._yane._population.max_size
         n_workers_max = n_workers   # preserve cpu_count cap before any override
@@ -444,11 +411,6 @@ class TrainingWorker(QThread):
         seq_time      = batch_size * eval_ms
 
         if auto:
-            # In auto mode never fall back to sequential based on the bootstrap
-            # alone: the first genome is often empty (no connections) and evaluates
-            # much faster than later, more complex genomes. Start with at least 2
-            # workers and let the EMA rescaling converge to the right count — it
-            # will switch to sequential after ~10 batches if truly warranted.
             if chosen <= 1:
                 chosen = 2
             n_workers = chosen
@@ -458,22 +420,27 @@ class TrainingWorker(QThread):
                 f"({eval_ms:.2f}ms/Genome, EMA justiert laufend)"
             )
         elif chosen <= 1:
-            self.workers_resolved.emit(1)
-            self.info_message.emit(
-                f"MP-Overhead > Nutzen ({eval_ms:.2f}ms/Genome, "
-                f"seq={seq_time:.0f}ms ≤ overhead={_OVERHEAD_MS:.0f}ms) "
-                f"— Training läuft sequenziell."
-            )
-            self._run_sequential(0.0)
-            return
+            if not use_spawn:
+                self.workers_resolved.emit(1)
+                self.info_message.emit(
+                    f"MP-Overhead > Nutzen ({eval_ms:.2f}ms/Genome, "
+                    f"seq={seq_time:.0f}ms ≤ overhead={_OVERHEAD_MS:.0f}ms) "
+                    f"— Training läuft sequenziell."
+                )
+                self._run_sequential(0.0)
+                return
+            self.workers_resolved.emit(n_workers)
         else:
             self.workers_resolved.emit(n_workers)
 
-        # Expose input transform via module-level slot so fork-child inherits it.
-        import yane.gui.worker as _wmod
-        _wmod._mp_input_transform = getattr(self._yane, '_input_transform', None)
+        # Fork: expose input transform via module-level slot so child inherits it.
+        # Spawn: pass it explicitly via initargs (fork globals aren't inherited).
+        if not use_spawn:
+            import yane.gui._mp_eval as _mp_eval_mod
+            _mp_eval_mod._mp_input_transform = getattr(self._yane, '_input_transform', None)
 
         def _make_pool(nw: int):
+            extra = (getattr(self._yane, '_input_transform', None),) if use_spawn else ()
             return ctx.Pool(
                 processes=nw,
                 initializer=_mp_initializer,
@@ -482,7 +449,7 @@ class TrainingWorker(QThread):
                     self._yane._runner.n_evaluations,
                     self._yane._runner.aggregation,
                     self._yane._runner.sigma_penalty,
-                ),
+                ) + extra,
             )
 
         try:
@@ -491,16 +458,29 @@ class TrainingWorker(QThread):
             self.error_occurred.emit(f"Multiprocessing Pool konnte nicht erstellt werden: {exc}")
             return
 
-        # Evaluate a full generation per round so workers stay busy.
-        batch_size = max(n_workers * 4, self._yane._population.max_size)
+        # For spawn-based evaluators the seed genome hasn't been evaluated yet
+        # (we can't call make_eval_fn in this process).  Do it now via the pool.
+        if use_spawn and bootstrap_eval_ms is None:
+            try:
+                seed_g = self._yane.next_genome()
+                (seed_fit, seed_ms), = pool.map(_mp_evaluate, [seed_g])
+                eval_ms = seed_ms
+                self._yane.submit_fitness(seed_fit, eval_ms)
+                self._iteration += 1
+            except Exception as exc:
+                pool.terminate(); pool.join()
+                self.error_occurred.emit(str(exc))
+                return
 
-        # Adaptive scaling state:
-        # eval_ema — exponential moving average of eval time per genome (ms).
-        # Estimated as: (batch_wall - overhead) * n_workers / batch_size.
-        # Every _RESCALE_EVERY batches the optimal worker count is recomputed;
-        # if it differs by >= 2, the pool is recreated.
-        _ALPHA         = 0.25   # EMA smoothing (higher = reacts faster)
-        _RESCALE_EVERY = 10     # check every N batches
+        # Spawn mode: 1 genome per pool.map() call so the outer loop ticks at
+        # ~eval_ms and the regular _EMIT_INTERVAL_S gate gives smooth updates
+        # without imap IPC overhead or mid-batch signal bursts.
+        # Fork mode: fill workers to amortise IPC/fork overhead.
+        batch_size = n_workers if use_spawn else max(n_workers * 4, self._yane._population.max_size)
+
+        # Adaptive scaling: eval_ema tracks eval time per genome (ms).
+        _ALPHA         = 0.25
+        _RESCALE_EVERY = 10
         eval_ema       = eval_ms
         batch_count    = 0
 
@@ -522,7 +502,7 @@ class TrainingWorker(QThread):
 
                     t_map = time.perf_counter()
                     timed = pool.map(_mp_evaluate, genomes, chunksize=chunksize)
-                    map_ms    = (time.perf_counter() - t_map) * 1000.0
+                    map_ms = (time.perf_counter() - t_map) * 1000.0
 
                     fitnesses = [fitness for fitness, _elapsed_ms in timed]
                     results = [
@@ -544,13 +524,20 @@ class TrainingWorker(QThread):
                             # Switch to sequential (with auto=True so it can switch
                             # back to MP if eval time rises later).
                             pool.terminate(); pool.join()
-                            self.workers_resolved.emit(1)
-                            self.info_message.emit(
-                                f"Auto → sequenziell "
-                                f"({eval_ema:.2f}ms/Genome, Overhead überwiegt)"
-                            )
-                            self._run_sequential(last_emit, auto=True)
-                            return
+                            if use_spawn:
+                                # Cannot fall back to sequential for
+                                # spawn-required evaluators — keep 1 worker.
+                                n_workers = 1
+                                pool = _make_pool(n_workers)
+                                self.workers_resolved.emit(1)
+                            else:
+                                self.workers_resolved.emit(1)
+                                self.info_message.emit(
+                                    f"Auto → sequenziell "
+                                    f"({eval_ema:.2f}ms/Genome, Overhead überwiegt)"
+                                )
+                                self._run_sequential(last_emit, auto=True)
+                                return
                         elif abs(new_opt - n_workers) >= 2:
                             pool.terminate(); pool.join()
                             n_workers  = new_opt

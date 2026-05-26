@@ -41,6 +41,23 @@ from yane.examples.sequence_recall_PI import (
 )
 
 
+def _register_ale_envs(gym) -> bool:
+    """Register ALE/Atari env IDs with Gymnasium when ale_py is available."""
+    try:
+        import ale_py
+        gym.register_envs(ale_py)
+        return True
+    except Exception:
+        return False
+
+
+try:
+    import gymnasium as _gym
+    _register_ale_envs(_gym)
+except Exception:
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Gym examples — optional
 # ---------------------------------------------------------------------------
@@ -620,27 +637,28 @@ def _downsample_grayscale(obs, grid_h: int, grid_w: int):
     return (small.flatten() / 255.0).tolist()
 
 
-def _make_atari_eval(
-    env_id: str,
-    grid_h: int = 14,
-    grid_w: int = 16,
-    max_steps: int = 1000,
-):
-    """Generic ALE/Atari evaluator.
+class _AtariEvalMaker:
+    """Picklable make-eval factory for ALE/Atari environments.
 
-    Uses grayscale observations downsampled from 210x160 to 14x16 inputs.
-    The full Atari 18-action space is enabled so all games share one output
-    shape and can be generated from metadata.
+    Defined as a class instead of a closure so it can be transmitted to
+    spawn-based subprocesses.  ale_py links against system Qt6 which conflicts
+    with PySide6's bundled Qt6 in the GUI process; spawn workers start without
+    PySide6, so the conflict doesn't exist there.
     """
-    def make(render_callback=None, step_callback=None, demo=False):
+    _requires_clean_process = True  # signal to TrainingWorker to use spawn
+
+    def __init__(self, env_id: str, grid_h: int = 14, grid_w: int = 16,
+                 max_steps: int = 1000) -> None:
+        self.env_id = env_id
+        self.grid_h = grid_h
+        self.grid_w = grid_w
+        self.max_steps = max_steps
+
+    def __call__(self, render_callback=None, step_callback=None, demo=False):
         import gymnasium as gym
-        try:
-            import ale_py
-            gym.register_envs(ale_py)
-        except Exception:
-            pass
+        _register_ale_envs(gym)
         env = gym.make(
-            env_id,
+            self.env_id,
             disable_env_checker=True,
             render_mode="rgb_array" if render_callback else None,
             obs_type="grayscale",
@@ -654,9 +672,9 @@ def _make_atari_eval(
             total = 0.0
             done = False
             steps = 0
-            cap = 10_000 if demo else max_steps
+            cap = 10_000 if demo else self.max_steps
             while not done and steps < cap:
-                inputs = _downsample_grayscale(obs, grid_h, grid_w)
+                inputs = _downsample_grayscale(obs, self.grid_h, self.grid_w)
                 out = genome.forward(inputs)
                 action = out.index(max(out))
                 obs, reward, terminated, truncated, _ = env.step(action)
@@ -668,7 +686,15 @@ def _make_atari_eval(
 
         evaluate._env = env
         return evaluate
-    return make
+
+
+def _make_atari_eval(
+    env_id: str,
+    grid_h: int = 14,
+    grid_w: int = 16,
+    max_steps: int = 1000,
+) -> _AtariEvalMaker:
+    return _AtariEvalMaker(env_id, grid_h, grid_w, max_steps)
 
 
 def _make_acrobot_eval(max_steps: int = 500):
