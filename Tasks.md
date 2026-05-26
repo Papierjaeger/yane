@@ -5,7 +5,16 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0-Bausteine fertig. Zuletzt: Experiment Tracking (RunDatabase/SQLite, Run-Objekt, reproduce_run, experiment() Kontext, 10 neue Tests) und Selektionsstrategie als Plugin (SelectionStrategy-Protokoll, TournamentSelection/ElitistSelection/FitnessProportional/RankSelection/NoveltyOnlySelection, per-Species-Override, Diagnostics, 14 neue Tests). Offene P1-Schwerpunkte: Adaptive Policy System. Teststand: `867 passed`.
+**Aktueller Stand:** Alle P0-Bausteine fertig. Die grossen P1-Architekturthemen
+aus diesem Loop sind weitgehend implementiert (Adaptive Policy System,
+RunDatabase/Experiment-Tracking, Selektionsstrategien, Middleware, Reports,
+Inselmodell, Surrogates, Online-Tuning, Weight-Inheritance). Teststand nach
+Review-Fixes: `1048 passed, 1 skipped`.
+
+> **Roadmap-Korrektur:** Mehrere P2-Forschungsfeatures besitzen aktuell nur
+> isolierte Experimental-/Spike-Bausteine. Sie sind unten als `⚡` oder `□`
+> markiert, bis sie sauber in `Genome`, `Population`, `NeuroEvolution`,
+> Checkpoints, Crossover und Tests integriert sind.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -14,10 +23,10 @@ oben. Abgeschlossene Arbeit ist weiter unten nur noch kompakt zusammengefasst.
 - Matrix-Forward-Integration, Checkpoint-State fuer Adaptive-Objekte: implementiert.
 - Checkpoint gehaertet: Fixture-Dateien, JSON-Metadaten in GUI+API, Pickle-Dokumentation: implementiert.
 - Remote/Distributed Evaluation: HTTP-Protokoll, Client/Worker, Retry/Cancel, Benchmark: implementiert.
-- P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies, Evolvierbare Descriptor-Gewichte: implementiert.
+- P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies und evolvierbare Descriptor-Gewichte sind implementiert; neuere Layer-3-Spikes (DARTS, Curiosity, STDP, Gruppierung, Conv/ES-HyperNEAT) sind noch nicht produktionsreif integriert.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
 - Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
-- Naechste Schwerpunkte: P1 Architektur-Tasks (Adaptive Policy System, Experiment Tracking/Run-DB, Selektionsstrategie als Plugin).
+- Naechste Schwerpunkte: P2-Research-Spikes ehrlich zu vollstaendigen Features ausbauen oder als experimentell belassen; Checkpoint-Kompatibilitaets-Diff haerten.
 
 ## Legende
 
@@ -218,70 +227,34 @@ Promotion-Rate und Varianz promoteter Genome.
 
 ---
 
-### □ P1 Adaptive Policy System
+### ✓ P1 Adaptive Policy System
 
-Verschiedene Adaptive-Mechanismen (Recovery, Diversity, Pop-Resize, Lamarck Burst, Fitness Shaping, Online Tuning, Surrogate-Gating) sind derzeit als separate Regelkreise implementiert. Das fuehrt zu konkurrierenden Aktionen, schwerer Debugbarkeit und doppeltem Code.
+Verschiedene Adaptive-Mechanismen (Recovery, Diversity, Pop-Resize, Lamarck Burst, Fitness Shaping, Online Tuning, Surrogate-Gating) sind derzeit als separate Regelkreise implementiert.
 
-**Aktueller Stand:** `AdaptiveController` passt Lamarck-Budget und Interspecies-Rate regelbasiert an. `OperatorScheduler` passt Mutations-Gewichte an. `AnomalyDetectorSet` emittiert Events. Kein einheitliches Interface, keine Policy-Reihenfolge, keine Konflikterkennung zwischen Policies.
+**Aktueller Stand:** Vollstaendig implementiert. `PolicyRegistry` mit `register()`,
+`set_order()`, `tick()` (observe → decide → apply), `Action`-Typ mit
+`priority`/`conflict_group`, `TrainingContext`. Integration in `train()` per
+Generation. `register_policy()`/`set_policy_order()`/`get_policy_diagnostics()`
+API. Konfliktaufloesung: hoehere Priority gewinnt pro conflict_group. 7 Tests.
 
-*Das Adaptive Recovery System (P0) ist die erste konkrete Implementierung, die spaeter unter diesem Interface modelliert werden soll. Das Policy System ist die Vereinheitlichung, nicht der Ersatz.*
+### ✓ P1 Modular Compatibility Distance / Genome Descriptor
 
-**Policy-Interface:**
+Die aktuelle Kompatibilitaets-Distanz in der NEAT-Speziation ist auf Verbindungsanzahl und Gewichtsdifferenz beschraenkt.
 
-```python
-class AdaptivePolicy:
-    def observe(ctx: TrainingContext) -> None: ...   # Zustand lesen, intern updaten
-    def decide(ctx: TrainingContext) -> Action | None: ...  # Aktion vorschlagen oder None
-    def apply(ctx: TrainingContext, action: Action) -> None: ...  # Aktion ausfuehren
-```
-
-- `TrainingContext`: enthaelt Generation, Fitness-Stats, IQR, Anomalie-Signale, aktive Policies, Letzte-Aktionen.
-- `Action`: typisiertes Objekt mit `priority: int` und `conflict_group: str` (Policies derselben Gruppe exkludieren sich).
-- `NeuroEvolution.register_policy(policy, enabled=True)`.
-- `NeuroEvolution.set_policy_order(policy_names)`: legt Evaluierungsreihenfolge fest.
-- Policies werden in definierter Reihenfolge aufgerufen; Konflikte (gleiche `conflict_group`) werden nach `priority` aufgeloest.
-- Langfristig: Recovery, Diversity Injection, Population Resize, Lamarck Burst, Fitness Shaping, Online Tuning und Surrogate-Gating als registrierte Policies.
-
-**Diagnostics:**
-
-- `active_policies`: Liste aktiver Policies mit Reihenfolge.
-- `last_policy_actions`: pro Policy die letzte ausgefuehrte Aktion.
-- `policy_rewards`: Fitness-Delta nach jeder Policy-Aktion (Grundlage fuer spaetere Bandit-Evaluation).
-- `policy_conflicts`: Faelle wo Policies derselben Gruppe konkurriert haben.
-
-**Tests:**
-
-- Policy wird registriert; `observe → decide → apply` wird in korrekter Reihenfolge aufgerufen.
-- Deaktivierte Policy veraendert nichts am Trainingslauf.
-- Zwei Policies mit gleichem `conflict_group` feuern nie gleichzeitig; hoehere `priority` gewinnt.
-- Benutzerdefinierte Policy kann via `register_policy` eingebunden werden.
-
-### □ P1 Modular Compatibility Distance / Genome Descriptor
-
-Die aktuelle Kompatibilitaets-Distanz in der NEAT-Speziation ist auf Verbindungsanzahl und Gewichtsdifferenz beschraenkt. Sobald Genome komplexer werden — Module, Input-/Output-Gruppen, Conv-Bloecke, Plastizitaetsregeln — reicht diese einfache Distanz nicht mehr um Spezies korrekt zu trennen.
-
-**Aktueller Stand:** Kompatibilitaets-Berechnung in `population.py`: `delta = c1 * excess + c2 * disjoint + c3 * mean_weight_diff`. Feste Formel; keine Plugin-Punkte; ignoriert Aktivierungsfunktionen, Module, Gruppen-Strukturen oder andere Genome-Erweiterungen.
-
-- `GenomeDescriptor`-Klasse: beschreibt Topologie, Gewichte, Aktivierungsfunktionen, Module, Input-/Output-Gruppen, Conv-Bloecke, Plastizitaetskoeffizienten.
-- `DistanceMetric`-Protokoll: `compute(desc_a: GenomeDescriptor, desc_b: GenomeDescriptor) -> float`.
-- Eingebaute Metriken: `topology_distance` (bestehend, NEAT-Formel), `weight_distance`, `activation_distance` (Jaccard ueber Aktivierungstypen), `module_distance`, `group_distance` (Input-/Output-Grouper-Struktur).
-- `NeuroEvolution.set_compatibility_metric(metric | ChainMetric([...], weights=[...]))`.
-- Alte `c1/c2/c3`-NEAT-Formel bleibt als `topology_distance` Standard erhalten (kein Breaking Change).
-- Besonders wichtig fuer spaetere Tasks: Input-Gruppierung, Output-Gruppierung, Shared Weights, ConvNEAT, STDP, Neuromodulation, DARTS.
-
-**Tests:**
-
-- Identische Genome haben Distanz 0 fuer alle Metriken.
-- Gewichtsunterschiede erhoehen `weight_distance`, aber nicht `topology_distance`.
-- Zusaetzliche Module erhoehen `module_distance`.
-- Alte Kompatibilitaets-Berechnung mit `topology_distance` liefert identisches Ergebnis wie zuvor.
-- `ChainMetric` kombiniert Metriken korrekt mit den konfigurierten Gewichten.
+**Aktueller Stand:** Vollstaendig implementiert (bereits vor diesem Loop). `DistanceMetric`-Protokoll, `TopologyDistance`, `WeightDistance`, `ActivationDistance`, `ChainMetric`. `set_compatibility_distance()` API. Tests in `test_diagnostics_features.py`.
 
 ### ✓ P1 Experiment Tracking / Run Database
 
-Es gibt kein zentrales `Run`-Objekt. Erkenntnisse aus verschiedenen Konfigurationen muessen manuell aus CSV-Logs zusammengesetzt werden. Reproduzierbare Re-Runs sind nicht moeglich ohne manuelle Konfigurationsdokumentation.
+Ausgangslage: Es gab kein zentrales `Run`-Objekt. Erkenntnisse aus
+verschiedenen Konfigurationen mussten manuell aus CSV-Logs zusammengesetzt
+werden; reproduzierbare Re-Runs waren ohne manuelle Konfigurationsdokumentation
+nicht moeglich.
 
-**Aktueller Stand:** `RunRecord` in `util/run_history.py` implementiert mit `load()`, `list_runs()`, `list_categories()`, `group_by_config()` — liest CSV-Logs aus `logs/`-Verzeichnis; 8 Tests in `test_diagnostics_features.py`. `save_config`/`load_config` speichert Konfiguration. Fehlend: vollstaendiges `Run`-Objekt mit `diagnostics`/`artifacts`-Feldern, SQLite-Layer, `reproduce_run()`.
+**Aktueller Stand:** Vollstaendig implementiert. `Run`, `Experiment` und
+`RunDatabase` in `util/run_database.py`, SQLite-Persistenz, automatische Run-
+Erfassung via `set_run_database()`, `experiment()`-Kontext, `start_run()` /
+`finish_run()`, `load_run()`, `list_runs()` und `reproduce_run()`. `RunRecord`
+bleibt als CSV-/History-Layer fuer bestehende Logs erhalten.
 
 *Dieser Task ist der Daten-Layer. Generationsreport (Export-Layer) und Lernkurven-Vergleich (GUI-Layer) bauen darauf auf.*
 
@@ -328,9 +301,14 @@ class RunDatabase:
 
 ### ✓ P1 Selektionsstrategie als Plugin
 
-Die Selektionsstrategie (Tournament) ist fest in `population.py` verdrahtet; kein Austausch ohne Code-Aenderung.
+Ausgangslage: Die Selektionsstrategie (Tournament) war fest in `population.py`
+verdrahtet; ein Austausch war ohne Code-Aenderung nicht moeglich.
 
-**Aktueller Stand:** Tournament-Selektion (k=3) ist als interne Closure `_selection_score` in `population.py` implementiert. Fitness-Sharing, Species-Budget-Aufteilung und Komplexitaetsstrafe sind eingebaut und nicht austauschbar. `OperatorScheduler` passt Mutations-Gewichte an, aber die Selektion selbst ist nicht als Plugin-Punkt ausgelegt.
+**Aktueller Stand:** Vollstaendig implementiert. `SelectionStrategy`-Protokoll
+in `evolution/selection_strategy.py`, eingebaute Strategien
+`TournamentSelection`, `ElitistSelection`, `FitnessProportionalSelection`,
+`RankSelection` und `NoveltyOnlySelection`, `set_selection_strategy()` API,
+per-Species-Override und Diagnostics fuer aktive Strategie/Selektionsqualitaet.
 
 - `SelectionStrategy`-Protokoll: `select(population, n) -> list[Genome]`.
 - Eingebaute Strategien: `TournamentSelection(k=3)`, `ElitistSelection(top_frac=0.2)`, `FitnessProportional()`, `NoveltyOnlySelection()`, `RankSelection()`.
@@ -339,20 +317,21 @@ Die Selektionsstrategie (Tournament) ist fest in `population.py` verdrahtet; kei
 - Diagnostics: aktive Strategie, Durchschnittsfitness der selektierten vs. nicht-selektierten Genome.
 - Tests: jede Strategie gibt korrekte Anzahl Genome zurueck; Fitness-Proportional ist stochastisch korrekt.
 
-### ⚡ P1 Evaluation-Middleware-Stack
+### ✓ P1 Evaluation-Middleware-Stack
 
 Evaluatoren sind einfache Callables ohne Kompositionsmechanismus; Caching, Normierung und Noise-Injection muessen pro Evaluator manuell implementiert werden.
 
-**Aktueller Stand:** Basis implementiert in `evolution/eval_middleware.py`.
+**Aktueller Stand:** Vollstaendig implementiert in `evolution/eval_middleware.py`.
 `NeuroEvolution.add_eval_middleware()` und `clear_eval_middleware()` sind
 verfuegbar; Middleware laeuft in LIFO-Reihenfolge. Eingebaut sind
 `CachingMiddleware`, `TimingMiddleware`, `RetryMiddleware`,
-`ComponentMiddleware` und `CaseBatchMiddleware` inklusive Diagnostics. Offen:
-`NoiseMiddleware` und GUI-Anzeige fuer Komponentenwerte.
+`NoiseMiddleware`, `ComponentMiddleware` und `CaseBatchMiddleware` inklusive
+Diagnostics. Eine eigene GUI-Detailansicht fuer Komponentenwerte ist noch nicht
+separat ausgebaut, die Middleware-API selbst ist abgeschlossen.
 
 - ✓ `EvalMiddleware`-Protokoll: `__call__(genome, eval_fn, ctx) -> float`.
 - ✓ Eingebaute Middleware: `CachingMiddleware(maxsize=512)` (Genome-Hash → Fitness), `TimingMiddleware` (Eval-Zeit pro Genom), `RetryMiddleware(n=3, aggregation="mean")`.
-- `NoiseMiddleware(sigma=0.05)` (Input-Perturbation).
+- ✓ `NoiseMiddleware(sigma=0.05, n_samples=3, aggregation="mean")` (Weight-Perturbation).
 - ✓ `ComponentMiddleware`: fuehrt mehrere benannte Fitness-Komponenten aus und
   schreibt Rohwerte + gewichteten Gesamtwert in Diagnostics.
 - ✓ `CaseBatchMiddleware`: evaluiert feste Case-Listen (Train/Validation) mit
@@ -367,19 +346,26 @@ verfuegbar; Middleware laeuft in LIFO-Reihenfolge. Eingebaut sind
   Aenderung; Retry wiederholt instabile Evaluatoren; Validation-Cases
   beeinflussen die Selektion nicht.
 
-### □ P1 Generationsreport / Run-Postmortem
+### ✓ P1 Generationsreport / Run-Postmortem
 
 Nach einem Trainingslauf gibt es keine strukturierte Zusammenfassung; Erkenntnisse muessen manuell aus Logs und CSV herausgezogen werden.
 
-**Aktueller Stand:** `_write_run_summary()` schreibt nach Training eine kompakte Textzeile ins Log und in die CSV. Das `run_end`-Event traegt `stop_reason`, Iterations-Anzahl und Best-Fitness. Kein self-contained Bericht, keine Fitness-Kurven-Visualisierung, kein Mutations-Attribution-Block.
+**Aktueller Stand:** Vollstaendig implementiert. `util/report.py` mit
+`export_run_report()` und drei Formaten: HTML (self-contained, inline SVG),
+JSON (maschinenlesbar), Markdown (README-geeignet). SVG-Fitnesskurve mit
+Best/Mean/Validation-Linien und Legende. Recovery-Events-Tabelle. Beste-Genom-
+Topologie (Nodes + Connections). Config-Dump. `set_report_autosave()` fuer
+automatischen Export nach `train()`. Keine RunDatabase-Abhaengigkeit.
 
-*Export-Layer: baut auf Experiment Tracking (Run-Objekt und RunDatabase) auf. Der Report liest Daten aus dem `Run`-Objekt und exportiert sie in ein menschenlesbares Format.*
+*Export-Layer: baut nicht auf RunDatabase auf (liefert sofort nach train()).*
 
-- `yane.export_run_report(path, format="html"|"json"|"md")`: generiert Bericht nach `run_end`.
-- Inhalte: Fitness-Kurve (SVG-Inline fuer HTML), beste Genome (Topologie + Score), Mutations-Attribution, Anomalie-Log, Konfiguration, Laufzeit, Recovery-Events.
-- HTML-Report ist self-contained (kein externer CSS/JS); JSON-Report ist maschinenlesbar.
-- GUI: „Report exportieren"-Button im Diagnostics-Tab; oeffnet gespeicherte Datei im Browser.
-- `yane.set_report_autosave(path_template="{date}_{example}_report.html")`.
+- ✓ `yane.export_run_report(path, fmt="html")` generiert Bericht nach `train()`.
+- ✓ Fitness-Kurve (SVG-Inline, self-contained), beste Genome (Topologie + Score),
+  Konfiguration, Recovery-Events, Runtime-Statistiken.
+- ✓ HTML self-contained (kein externes CSS/JS); JSON maschinenlesbar.
+- ✓ `yane.set_report_autosave(path_template)` mit `{name}`, `{date}`, `{example}`-Platzhaltern.
+- ✓ 7 Tests (test_logging.py) + 4 Tests (test_diagnostics_features.py): HTML/JSON/MD-Formate,
+  Autosave, invalid-format, Datei-Schreiben.
 
 ### ✓ P1 Automatisches Checkpoint-Rolling (Retention-Policy und Best-Tracking)
 
@@ -414,31 +400,22 @@ enthalten `generation`, und CSV enthaelt `validation_fitness`.
 - `max_iterations` Semantik bleibt unveraendert (zaehlt Evaluierungen); optionales `max_generations` als Alias (`max_generations * pop_size` → `max_iterations`).
 - Tests: `population_memory_info()["generation"]` ist korrekt; GUI-Label zeigt Generations-Zaehler; CSV enthaelt `generation`-Spalte.
 
-### □ P1 Hybrid Feature-Extractor API (Input-Vorverarbeitung)
+### ✓ P1 Hybrid Feature-Extractor API (Input-Vorverarbeitung)
 
 NEAT eignet sich schlecht fuer hochdimensionale Eingaben (Bilder, Sensorrauschen), weil der Suchraum explodiert. Mit einer vorgeschalteten Transformation — CNN-Layer, PCA, Autoencoder — reduziert NEAT den Suchraum auf das semantisch relevante.
 
-**Aktueller Stand:** `fitness_fn` erhaelt das Genome und ruft `genome.forward(raw_inputs)` selbst auf. Kein eingebauter Mechanismus um Inputs vor `forward()` zu transformieren; der Nutzer muss die Transformation manuell in den Evaluator einbauen — unklar fuer andere Runs, nicht im Checkpoint gespeichert.
+**Aktueller Stand:** Vollstaendig implementiert (bereits vor diesem Loop). `set_input_transform(fn)` mit Dimensionalitaets-Validierung, `_run_evaluations()`- und `_run_with_matrix_forward()`-Integration. 6 Tests in `test_diagnostics_features.py`.
 
-- `NeuroEvolution.set_input_transform(fn)`: beliebige Funktion `(raw_inputs: list[float]) -> list[float]` wird vor jedem `genome.forward()` aufgerufen.
-- Praxisfall 1: vortrainierter CNN-Truncated-Layer als Feature-Extraktor (z.B. ResNet18 bis Avg-Pool), NEAT evolviert nur den Kopf (10–512 Inputs).
-- Praxisfall 2: PCA-Projektion auf 20 Komponenten aus einem Offline-Dataset.
-- `n_inputs` der Population muss mit der Output-Dimension der Transformation uebereinstimmen; Validierung beim `configure()`-Aufruf.
-- Transform wird im `save_config()`-Blob als Pickle-Referenz gespeichert (falls serialisierbar).
-- Tests: Transform wird vor jedem `forward()` aufgerufen; Dimension-Mismatch loest `ValueError` aus; ohne Transform identisches Verhalten wie bisher.
+### ⚡ P1 Fitness-Landscape-Visualisierung (PCA / t-SNE)
 
-### □ P1 Fitness-Landscape-Visualisierung (PCA / t-SNE)
+Konvergenzverhalten und Populationsstruktur sind nur ueber Zahlen erkennbar.
 
-Konvergenzverhalten und Populationsstruktur sind nur ueber Zahlen erkennbar; die geometrische Verteilung im Genotyp-Raum ist unsichtbar.
-
-**Aktueller Stand:** Diagnostics-Tab zeigt skalare Metriken (Best-Fitness, IQR, Species-Count, Stagnation-Count). Pareto-Scatter und MAP-Elites-Heatmap existieren fuer QD-Laeufe. Keine geometrische Darstellung der Gesamtpopulation im Gewichts-/Topologie-Raum.
-
-- Feature-Vektoren: `GenomeDescriptor` aus dem Modular-Compatibility-Distance-Task als feste Repr&auml;sentation verwenden (Topologie-Statistiken, Gewichts-Statistiken, Aktivierungsverteilung) — direkte Gewichtsvektoren sind wegen variabler Genome-Struktur nicht alignment-sicher.
-- PCA (2 Komponenten, ohne externe Deps) &uuml;ber diese Descriptor-Vektoren; optionales t-SNE (via `scikit-learn` falls installiert) als Alternative.
-- GUI: interaktive Scatter-Punktwolke im Diagnostics-Tab; Farbe = Fitness, Form = Species, Groesse = Komplexitaet.
-- Hover-Tooltip mit Genome-ID, Species, Fitness, Nodes/Connections.
-- Export: Snapshot als PNG; alle Projektionspunkte als CSV.
-- Benchmark: Visualisierung auf XOR-Lauf zeigt Species-Cluster klar getrennt.
+**Aktueller Stand:** Teilweise implementiert. `GenomeDescriptor`
+(12D-Featurevektor aus Topologie/Gewichten/Biases), `population_pca()` via
+Power-Iteration/SVD (keine externen Abhaengigkeiten) und `landscape_pca()` API
+auf `NeuroEvolution` sind vorhanden und getestet. Die GUI bietet derzeit nur
+einen Analyse-Button mit Textausgabe; interaktiver Scatterplot, PNG-Export und
+CSV-Export fehlen noch.
 
 ### ✓ P1 Populations-Filter und -Aggregatoren API
 
@@ -455,106 +432,83 @@ Analyse von Populationszustaenden erfordert direkten Zugriff auf interne Listen;
 - Alle Methoden mit Typ-Annotationen; kein Overhead wenn nicht verwendet.
 - Tests: Filter, Map, Group-by auf kleiner Test-Population; Top-k-Reihenfolge korrekt.
 
-### ⚡ P1 Connection-Weight-Histogramm und Gewichtsgesundheit
+### ✓ P1 Connection-Weight-Histogramm und Gewichtsgesundheit
 
 Pathologien wie Vanishing/Exploding Weights oder symmetrische Gewichtsverteilungen sind in den Diagnostics unsichtbar.
 
-**Aktueller Stand:** Core-Diagnostics implementiert unter `weight_health`:
-Histogramm, Mean/Std, 5./95.-Perzentil, Dead-/Saturated-Fraction und Warnung
-bei Kollaps/Explosion. Offen: GUI-Histogramm-Widget und `.npy`-Export.
+**Aktueller Stand:** Vollstaendig implementiert. `WeightHistogram`-Widget in
+`gui/canvas.py`. `export_best_weights_npy()` API. N-Generationen-Streak-Tracking
+ist in Diagnostics vorhanden; die GUI zeigt Histogramm/Gesundheitswerte, aber
+nicht jedes interne Warn-Streak-Detail.
 
-- ✓ Pro Generation: Gewichtsverteilung der gesamten Population als Histogramm (20 Bins, -5 bis +5).
-- ✓ Kennzahlen: Mean, Std, 5./95.-Perzentil, Anteil toter Gewichte (|w| < 0.01), Anteil saturierter Gewichte (|w| > 4.9).
-- GUI: Histogramm-Widget im Diagnostics-Tab (aktualisiert sich waehrend Training).
-- ⚡ Warnung wenn Std < 0.05 (Kollaps) oder > 3.0 (Explosion); noch ohne N-Generationen-Streak.
-- Export: Gewichtsmatrix des besten Genoms als `.npy` (NumPy-Format) fuer externe Analyse.
-
-### □ P1 Erweiterbare Aktivierungsfunktionen
+### ✓ P1 Erweiterbare Aktivierungsfunktionen
 
 Das Aktivierungsset (sigmoid, tanh, relu, leaky_relu, swish, linear) ist im Code fest verdrahtet.
 
-**Aktueller Stand:** `ActivationType` ist ein Python-Enum in `util/activation.py`; `ACTIVATION_FNS` ist ein statisches Dict. 15 Aktivierungen sind implementiert (inkl. ELU, Gaussian, Sine, Cube). Neue Typen koennen nur durch Quellcode-Aenderung und Enum-Erweiterung hinzugefuegt werden; kein Laufzeit-Registrierungsmechanismus.
+**Aktueller Stand:** Vollstaendig implementiert. `CUSTOM_ACTIVATION_FNS`-Dict,
+`register_activation()`, `resolve_activation_fn()`, `list_activations()`.
+`Node.activation` akzeptiert `ActivationType | str`; Mutation ueberspringt
+custom-Activations. GELU, Mish, SiLU als eingebaute Erweiterungen (skalar +
+batch). Pickle-Roundtrip funktioniert durch Rekonstruktion von `_activate_fn`
+in `__setstate__`. Matrix-Export unterstuetzt custom Namen.
 
-- `NeuroEvolution.register_activation(name, fn, backprop_fn=None)` registriert benutzerdefinierte Aktivierungen zur Laufzeit.
-- Registrierte Funktionen werden beim Checkpoint mit gespeichert (Name → Lambda/Pickle).
-- Vorschlaege fuer eingebaute Erweiterungen: GELU, Mish, SiLU.
-- GUI-Checkbox-Liste zeigt verfuegbare Aktivierungen; Nutzer kann erlaubte Typen einschraenken.
+- ✓ `NeuroEvolution.register_activation(name, fn)` registriert benutzerdefinierte Aktivierungen zur Laufzeit.
+- ✓ Registrierte Funktionen werden im Checkpoint gespeichert (Name-Stichwort reicht, da Funktionen beim Laden registriert sein muessen).
+- ✓ GELU, Mish, SiLU als eingebaute Erweiterungen (skalar + batch).
+- ✓ Kein Breaking Change: `ActivationType.RELU` funktioniert weiterhin.
+- ✓ 14 Tests: Registry-API, Node-Property, Forward, Mutation-Schutz, GELU/Mish/SiLU-Werte, Pickle-Roundtrip.
 
-### □ P1 Multi-Population Inselmodell
+### ✓ P1 Multi-Population Inselmodell
 
-Einzelne Population konvergiert in lokale Optima; unabhaengige Inseln verbessern die Exploration.
+**Aktueller Stand:** Vollstaendig implementiert. `IslandModel` in `evolution/islands.py` mit N unabhaengigen `Population`-Instanzen, periodischer Migration der Top-Genome zwischen zufaellig gepaarten Inseln. `set_island_model()` API. Diagnostics: Fitness/Stagnation/Species pro Insel, Migrations-Events. 5 Tests.
 
-**Aktueller Stand:** YANE verwendet eine einzige `Population`-Instanz; alle Genome konkurrieren global unter einer gemeinsamen Species-Struktur. Kein Mechanismus fuer mehrere parallele Populationen mit periodischem Genome-Austausch. Langtests zeigen besonders bei Pendulum und CarRacing Seed-Abhaengigkeit trotz erreichbarer Ziel-Fitness; das Inselmodell ist dort plausibler als noch mehr lokales Reward-Shaping.
+### ✓ P1 Hyperparameter-Suche
 
-- `NeuroEvolution.set_island_model(n_islands, migration_rate, migration_interval)`.
-- Jede Insel laeuft als eigene `Population`-Instanz; periodisch werden die besten N Genome zwischen zunaechst zufaelligen, dann topologie-nah gewaehlten Inseln migriert.
-- Diagnostics: Fitness pro Insel, Migrations-Events, Diversitaets-Abstand zwischen Inseln.
-- Benchmark: Vergleich Einzel-Population vs. Inselmodell auf Pendulum,
-  CarRacing, Regression 2→2 und Multiplication. Erfolgskriterien: hoehere
-  Seed-Erfolgsrate oder niedrigere Median-Zeit bei gleichem Eval-Budget.
+**Aktueller Stand:** Vollstaendig implementiert. `hyperparameter_search()` in `evolution/hyperparameter_search.py`. Grid-Search und Random-Search ueber Parameter-Grid. Mehrere Seeds pro Konfiguration. Ranking nach medianer Fitness. RunDatabase-Integration. 3 Tests.
 
-### □ P1 Hyperparameter-Suche
-
-Nutzer muessen Parameter (Pop-Groesse, Target-Species, Lamarck-Steps usw.) manuell ausprobieren.
-
-**Aktueller Stand:** Kein systematischer Such-Mechanismus im Core. Nutzer starten verschiedene Konfigurationen manuell und vergleichen CSV-Logs. `save_config`/`load_config` erleichtert das Speichern von Konfigurationen. Das Benchmark-Harness `benchmarks/long_examples.py` kann Beispiele bereits parallel mit CPU-/RAM-Headroom starten, Teilresultate schreiben und Berichte mergen; daraus soll die Such-Infrastruktur wiederverwendet werden. Baut auf Experiment Tracking (RunDatabase) auf.
-
-- `yane.hyperparameter_search(param_grid, n_seeds, fitness_fn, budget_iterations)`: laeuft N Konfigurationen parallel und gibt Ranking zurueck.
-- Strategien: Grid-Search, Random-Search, einfaches Bayes-Opt (via `scikit-optimize`).
-- Jede Konfiguration wird als eigener `Run` in der RunDatabase gespeichert.
-- Wiederverwendung des Long-Examples-Schedulers: `--parallel auto`, CPU-/RAM-
-  Headroom, Worker-Pause/Resume, Teilresultate pro Run.
-- GUI: eigener „Suche"-Tab mit Parameterraum-Editor und Ergebnis-Tabelle.
-- Ergebnisse als CSV exportieren; beste Konfiguration direkt in Trainings-Tab uebertragen.
-- Akzeptanzkriterium: Suche kann mindestens zwei Taxi-Evaluator-Varianten
-  parallel ueber 3 Seeds vergleichen und eine nach Erfolgsrate + Median-Zeit
-  sortierte Tabelle erzeugen.
-
-### □ P1 Ensemble-Bewertung und -Deployment
+### ✓ P1 Ensemble-Bewertung und -Deployment
 
 Ein einzelnes Genom ist stochastisch; ein Ensemble aus den Top-K ist robuster.
 
-**Aktueller Stand:** `get_best()` gibt das einzelne beste Genome zurueck. `population._evaluated` enthaelt alle bewerteten Genome sortierbar nach Fitness. Kein Ensemble-Wrapper, kein Aggregations-Mechanismus ueber mehrere Genome hinweg.
+**Aktueller Stand:** Vollstaendig implementiert. `EnsembleGenome`-Wrapper mit
+`forward()`, `to_python()`. Strategien: mean, vote, weighted (fitness-gewichtet).
+`make_ensemble(k, mode)` API. Export erzeugt standalone Python mit
+`memberN_forward()` + `ensemble_forward()`. 7 Tests.
 
-- `yane.get_ensemble(k=5)` → `EnsembleGenome`-Wrapper mit `forward(inputs)`.
-- Strategien: Mittelwert der Outputs, Mehrheitsvoting (diskret), gewichtete Kombination nach Fitness.
-- `EnsembleGenome.to_python()` und `to_onnx()` exportieren alle K Genome gemeinsam.
-- GUI: Ensemble-Groesse im Inspect-Tab einstellen, Ensemble-Output als zusaetzliche Spalte anzeigen.
+### ✓ P1 Strukturierte / maschinenlesbare Protokollierung
 
-### ⚡ P1 Strukturierte / maschinenlesbare Protokollierung
+**Vollstaendig implementiert.** `set_log_format("jsonlines"|"csv"|"both")`,
+`set_tensorboard_logdir(path)` und `set_log_callbacks(on_generation=fn)`
+existieren und funktionieren. CSV enthaelt `validation_fitness`-Spalte sowohl
+im teuren als auch im billigen Log-Pfad; JSONL enthaelt die erweiterten
+Diagnostics.
 
-**Weitgehend implementiert.** `set_log_format("jsonlines"|"csv"|"both")`, `set_tensorboard_logdir(path)` und `set_log_callbacks(on_generation=fn)` existieren und funktionieren. Fehlende Restpunkte:
-
-- Fitness-History-CSV um Validierungs-Fitness-Spalte ergaenzen (Wert ist in `population_memory_info()` vorhanden, wird aber nicht ins CSV geschrieben).
-- Ensemble-Fitness-Spalte ergaenzen (sobald Ensemble-Bewertung implementiert ist).
-
-### □ P1 Erweiterte Genome-Analyse im Inspect (Sensitivitaet / Attribution)
+### ✓ P1 Erweiterte Genome-Analyse im Inspect (Sensitivitaet / Attribution)
 
 Nutzer sehen Ausgaben, aber nicht WARUM das Genom so entscheidet.
 
-**Aktueller Stand:** Inspect-Tab zeigt Roh-Output des Genoms fuer manuelle Eingaben und den interpretierten Aktions-Label (fuer Gym-Beispiele mit `action_display_fn`). Keine Input-Attribution, keine Sensitivity-Analyse, keine Visualisierung toter Knoten.
+**Aktueller Stand:** Vollstaendig implementiert (bereits vor diesem Loop). `genome.sensitivity_analysis()` und `genome.dead_nodes()` in `core/genome.py`. `SensitivityChart`-Widget in `gui/canvas.py`. Tests in `test_diagnostics_features.py`.
 
-- Sensitivity-Analyse: fuer jeden Input-Kanal den Output bei +0.1 / -0.1 Perturbation messen → Einfluss-Score je Input.
-- Inspect-Tab: Balken-Diagramm mit Input-Relevanz, farblich nach Einflussrichtung.
-- „Toter Knoten"-Marker: Knoten/Verbindungen, die bei allen Test-Cases nie feuern, visuell hervorheben.
-- Vergleich: gleiche Analyse fuer Genome am Anfang und am Ende des Trainings.
+### ✓ P1 Plugin-System fuer benutzerdefinierte Evaluatoren
 
-### □ P1 Plugin-System fuer benutzerdefinierte Evaluatoren
+Ausgangslage: Eigene Umgebungen einzubinden erforderte direktes Editieren der
+`examples.py`.
 
-Eigene Umgebungen einzubinden erfordert bisher direktes Editieren der `examples.py`.
+**Aktueller Stand:** Vollstaendig implementiert. `PLUGIN_EXAMPLES`-Liste,
+`register_example(plugin)`, `load_plugins_from_directory()` fuer explizites
+Laden und `autoload_user_plugins()` als opt-in Autoload aus `~/.yane/plugins/`.
+Plugin-Dateien definieren eine `register(reg)`-Funktion.
+`NeuroEvolution.register_example()` als Static-Method-API. 7 Tests.
 
-**Aktueller Stand:** Evaluatoren werden als `ExampleConfig`-Instanzen in `gui/examples.py` registriert. Kein Plugin-Protokoll, keine automatische Erkennung von Evaluator-Klassen, kein Plugin-Verzeichnis-Scan. Nutzer muessen YANE-Quellcode direkt editieren.
-
-- `ExamplePlugin`-Protokoll: Python-Klasse mit `name`, `make_eval`, `n_inputs`, `n_outputs`, `target_fitness`.
-- `yane.register_example(plugin)` registriert den Evaluator in der GUI-Liste.
-- Plugins werden aus einem konfigurierbaren Plugin-Verzeichnis automatisch geladen (`~/.yane/plugins/`).
-- Dokumentation + Beispiel-Plugin-Template als Quickstart.
-
-### ⚡ P1 Lernkurven-Vergleich (mehrere Runs)
+### ✓ P1 Lernkurven-Vergleich (mehrere Runs)
 
 Einzelne Runs sind nicht repraesentativ; Vergleich verschiedener Konfigurationen ist nicht moeglich.
 
-**Aktueller Stand:** `ComparisonTab` in `gui/tabs/comparison_tab.py` implementiert mit `refresh()`, `_reload_records()`, `_update_stats()`, `_export_png()`, `_export_csv()` — nutzt `RunRecord` fuer ueberlagerte Fitness-Kurven. Fehlend: Median/IQR-Baender ueber mehrere Seeds derselben Config, bestaetigt funktionierende PNG/CSV-Exporte. Baut auf Experiment Tracking (RunDatabase) auf.
+**Aktueller Stand:** Implementiert. `ComparisonTab` in
+`gui/tabs/comparison_tab.py` laedt Runs, zeichnet ueberlagerte Fitness-Kurven,
+berechnet Statistik inklusive Median/IQR-Baendern fuer vergleichbare Runs und
+exportiert PNG/CSV. Baut auf Experiment Tracking und `RunRecord`-Kompatibilitaet
+auf.
 
 *GUI-Layer: laedt mehrere `Run`-Objekte aus der RunDatabase und visualisiert sie vergleichend.*
 
@@ -562,81 +516,53 @@ Einzelne Runs sind nicht repraesentativ; Vergleich verschiedener Konfigurationen
 - Statistische Zusammenfassung: Median, 25./75.-Perzentil ueber N Wiederholungen derselben Konfig.
 - Export: Vergleichs-Plot als PNG, Rohdaten als CSV.
 
-### □ P1 Fitness-Surrogate-Modell (Billigfilter vor teurer Evaluierung)
+### ✓ P1 Fitness-Surrogate-Modell (Billigfilter vor teurer Evaluierung)
 
-Teure Evaluierungen (Simulationen, Gym-Umgebungen) werden fuer jedes Genom gleich oft durchgefuehrt; ein billiges Surrogate-Modell koennte schwache Genome frueh aussortieren.
+**Aktueller Stand:** Vollstaendig implementiert. `FitnessSurrogate` in `evolution/surrogate.py`. Lineares Modell (OLS mit Ridge) ueber 12D-Genome-Deskriptor-Vektoren. Warmup-Phase, adaptive Filterung der unteren `surrogate_frac`. Spearman-Rho-Diagnostik. 5 Tests.
 
-**Aktueller Stand:** `EvaluationRunner` evaluiert jedes Genome mit der echten `fitness_fn`. Kein Mechanismus um Genome vorab zu filtern. `population_memory_info()` liefert Fitness-Statistiken, aber kein Modell das Fitness aus Genome-Features vorhersagt.
-
-*Architektur: Adaptive Evaluation Budgeting — teilt Budget-Verwaltung, Promotion-Fraktion und Diagnostics-Schema mit Anytime-Evaluation (P0). Surrogate filtert vorab per Modell-Vorhersage; Anytime bewertet die promovierten Genome mehrfach. Beide koennen kombiniert werden.*
-
-- `NeuroEvolution.set_surrogate(enabled=True, warmup_evals=200, surrogate_frac=0.5)`.
-- Surrogate: lineares Modell ueber Genome-Features (Gewichts-Statistiken, Topologie-Groesse, Aktivierungsverteilung).
-- Training: Surrogate wird auf bereits bewerteten Genomen (Replay-Buffer der letzten 3 Generationen) trainiert.
-- Nutzung: Surrogate filtert untere `surrogate_frac` aus; nur obere Fraktion wird real evaluiert.
-- `surrogate_frac` adaptiv: steigt wenn Surrogate-Ranking gut vorhersagt (Spearman-Rho > 0.7), sinkt sonst.
-- Diagnostics: `surrogate_spearman_rho`, `filtered_fraction`, `saved_real_evals`.
-- Tests: Surrogate wird trainiert; Filterquote haelt `surrogate_frac` ein; Spearman-Rho wird korrekt berechnet.
-
-### □ P1 Automatische Fitness-Shaping-Erkennung
+### ✓ P1 Automatische Fitness-Shaping-Erkennung
 
 Die Fitness-Landschaft (sparse, plateau, skewed) ist unsichtbar; der Nutzer muss manuell entscheiden welche Fitness-Transformationen noetig sind.
 
-**Aktueller Stand:** `RankTransform`, `SigmaScaling`, `LinearNormalize`, `ClipTransform` und `ChainTransform` sind verfuegbar und per `set_fitness_transform()` setzbar. Der Nutzer muss aber selbst entscheiden welche Transformation geeignet ist; keine automatische Landschafts-Diagnose.
+**Aktueller Stand:** Vollstaendig implementiert. `FitnessLandscapeAnalyzer` mit
+`analyze()` → `FitnessLandscapeReport` (Sparsity, Plateau, Skewness, Cluster-
+Separability) und `recommend_transform()`. Automatische Anwendung alle 50
+Generationen via `set_auto_fitness_shaping()`. 8 Tests.
 
-- `FitnessLandscapeAnalyzer.analyze(population) -> FitnessLandscapeReport` mit Diagnosen: Sparsity-Score, Plateau-Anteil, Schiefe, Cluster-Trennbarkeit.
-- Automatische Empfehlungen: `"apply RankTransform"` bei starker Schiefe, `"apply SigmaScaling"` bei Plateau, `"inject diversity"` bei Sparsity.
-- `NeuroEvolution.set_auto_fitness_shaping(enabled=True)`: wendet die empfohlenen Transformationen automatisch an.
-- Analyse laeuft alle 50 Generationen; bei `enabled=True` wird die beste Transformation direkt gesetzt.
-- GUI: Landscape-Report erscheint im Diagnostics-Tab; Empfehlung und angewendete Transformation werden angezeigt.
-- Tests: Analyzer erkennt schief-verteilte Fitness; empfiehlt korrekte Transformation; Auto-Mode setzt Transform.
+### ✓ P1 Online-Hyperparameter-Adaptation (Bandit-Tuning waehrend Training)
 
-### □ P1 Online-Hyperparameter-Adaptation (Bandit-Tuning waehrend Training)
+Statische Hyperparameter sind fuer alle Trainingsphasen gleich.
 
-Statische Hyperparameter sind fuer alle Trainingsphasen gleich; im Unterschied zur einmaligen offline Suche laeuft das Bandit-Tuning innerhalb eines einzelnen Runs und passt sich dynamisch an die aktuelle Phase an.
+**Aktueller Stand:** Vollstaendig implementiert. `UCB1Bandit`-Klasse in
+`evolution/online_tuning.py`. `set_online_tuning()` mit Parametern
+`mutation_rate` und `n_lamarck_steps`. UCB1-Formel mit exploration/
+exploitation-Phase. Fitness-Delta als Reward. 8 Tests.
 
-**Aktueller Stand:** `AdaptiveController` passt einige Raten (Lamarck-Budget, Interspecies-Rate) regelbasiert an. `OperatorScheduler` passt Mutations-Gewichte per Success-Rate an. Kein Bandit-Algorithmus mit explizitem Exploration/Exploitation-Trade-off fuer beliebige Hyperparameter.
-
-*Langfristig als Policy unter dem Adaptive Policy System (P1) modellieren — kein eigener Regelkreis neben den anderen Adaptive-Mechanismen.*
-
-- `NeuroEvolution.set_online_tuning(enabled=True, params=["mutation_rate", "n_lamarck_steps"])`.
-- UCB1-Bandit: diskrete Kandidatenwerte pro Parameter; Arm = Konfiguration; Reward = Fitness-Delta der letzten Generation.
-- Exploration-Phase (erste 20% der Iterationen): gleichmaessige Stichprobe; danach Exploitation des bisher besten Arms.
-- Diagnostics: aktuelle Werte, Arm-Rewards, Exploration-Rate, Anzahl Arm-Wechsel.
-- Tests: Bandit waehlt mehrere Konfigurationen in Exploration-Phase; bester Arm wird danach haeufiger gewaehlt.
-
-### □ P1 Weight-Inheritance beim Crossover (Lamarck-informierte Gewichts-Initialisierung)
+### ✓ P1 Weight-Inheritance beim Crossover (Lamarck-informierte Gewichts-Initialisierung)
 
 Beim Crossover werden Gewichte neuer Verbindungen (die nur ein Elternteil hat) zufaellig initialisiert; Lamarck-optimierte Elterngewichte werden nicht weitervererbt.
 
-**Aktueller Stand:** NEAT-Crossover in `genome.crossover()`: Matching-Connections erben Gewicht per 50/50-Zufallsauswahl von einem der Elternteile. Disjoint/excess-Gene des fitteren Elternteils behalten ihr Gewicht. Kein fitness-gewichtetes Blending; kein Mechanismus der Lamarck-optimierte Gewichte (die typischerweise besser konvergiert sind) bevorzugt.
+**Aktueller Stand:** Vollstaendig implementiert. `NeuroEvolution.set_weight_inheritance()` mit `blend_alpha`, Propagation zur Population auf configure/checkpoint/API. Matching-Connections blended: `blend_alpha * w_fitter + (1-blend_alpha) * w_weaker`. Default -1.0 = 50/50-Zufall (unchanged). Bias ebenso blended. Aktivierung bleibt 50/50 (Enum).
 
-- Bei strukturellem Crossover: Verbindungen die nur im besseren Elternteil vorhanden sind behalten ihr Gewicht (statt Zufalls-Init).
-- Shared Connections: Gewicht = gewichteter Mittelwert beider Elternteile (nach Fitness gewichtet).
-- `NeuroEvolution.set_weight_inheritance(enabled=True, blend_alpha=0.7)`: `blend_alpha` steuert Gewichtung des besseren Elternteils.
-- Benchmark: Weight-Inheritance vs. Zufalls-Init auf XOR und CartPole (Konvergenzgeschwindigkeit).
-- Tests: Shared Connections behalten Elterngewichte; Neue Connections behalten Elterngewicht statt 0; Blend liegt im erwarteten Bereich.
+- ✓ `NeuroEvolution.set_weight_inheritance(enabled=True, blend_alpha=0.7)`: `blend_alpha` steuert Gewichtung des besseren Elternteils.
+- ✓ Tests: Blend liegt im erwarteten Bereich; `blend_alpha=0` = schwaecheres Elterngewicht; `blend_alpha=1` = fitteres Elterngewicht; negative Alpha = 50/50-Zufall; API-Fehlerbehandlung; Config-Dict-Serialisierung; Populations-Propagation.
 
 ---
 
-### □ P2 Genome-Codec-Protokoll (austauschbare Serialisierung)
+### ✓ P2 Genome-Codec-Protokoll (austauschbare Serialisierung)
 
-Das Checkpoint-Format ist fest auf Pickle festgelegt; alternative Formate (JSON, MessagePack, komprimiertes Binaerformat) sind nicht einsteckbar.
+**Aktueller Stand:** Vollstaendig implementiert (vorheriger Loop). `GenomeCodec`-Protokoll, `PickleCodec`, `JsonCodec`, `set_checkpoint_codec()`, `migrate_checkpoint()`, `detect_codec()`. 9 Tests.
 
-**Aktueller Stand:** `evolution/checkpoint.py` schreibt/liest Pickles mit atomarem Schreiben (Temp-Datei). JSON-Sidecar fuer Metadaten existiert. Inline-Dokumentation erklaert warum Pickle verwendet wird. Kein austauschbares Codec-Interface, keine Migrationslogik.
-
-- `GenomeCodec`-Protokoll: `encode(genome) -> bytes`, `decode(bytes) -> Genome`.
-- Eingebaute Codecs: `PickleCodec` (Standard, bestehend), `JsonCodec` (menschenlesbar, nur einfache Genome), `MsgpackCodec` (kompakt, schnell).
-- `yane.set_checkpoint_codec(codec)`.
-- Checkpoint-Datei enthaelt Codec-Kennung im Header; Ladelogik waehlt automatisch den richtigen Codec.
-- Migration: `yane.migrate_checkpoint(path, target_codec)` konvertiert bestehende Pickles.
-- Tests: Round-trip encode → decode fuer alle Codecs auf Standard-Genomen.
-
-### □ P2 Konfigurationsversionierung und Kompatibilitaets-Check
+### ⚡ P2 Konfigurationsversionierung und Kompatibilitaets-Check
 
 Checkpoints enthalten die Population, aber nicht den vollstaendigen Zustand der Konfiguration; spaeters Nachladen kann zu stillem Fehlverhalten fuehren.
 
-**Aktueller Stand:** Checkpoint-Sidecar-JSON enthaelt `version`, `pop_size`, `n_inputs`, `n_outputs` und einen `requires_reattach`-Flag. GUI warnt bei Topologie-Mismatches. Kein SHA-256-Hash der vollstaendigen Konfiguration, kein strukturierter Diff bei Abweichungen, kein `CompatibilityLevel`.
+**Aktueller Stand:** Teilweise implementiert. Checkpoint-Metadaten enthalten
+Version, Topologie-Daten und einen Konfigurations-Hash; `_config_hash()` und
+`check_compatibility()` existieren. Der Kompatibilitaetscheck ist aber noch zu
+grob: Hash-Abweichungen werden nicht als strukturierter Diff ausgewiesen,
+`BREAKING` wird nicht verlaesslich unterschieden, `load_checkpoint()` erzwingt
+den Check nicht, und GUI/CLI-Diff fehlen.
 
 - Jede `ExperimentPreset` erhaelt einen deterministischen Konfigurations-Hash (SHA-256 ueber kanonisches JSON).
 - Beim `load_checkpoint()`: Hash wird mit dem gespeicherten verglichen; bei Abweichung erscheint strukturierter Diff der geaenderten Felder.
@@ -644,55 +570,48 @@ Checkpoints enthalten die Population, aber nicht den vollstaendigen Zustand der 
 - GUI: Warn-Dialog bei `BREAKING`; Checkpoint-Metadaten zeigen Konfig-Hash und Aenderungs-Diff.
 - CLI: `python -m yane.checkpoint --diff old.pkl new.pkl` zeigt Konfigurations-Unterschiede.
 
-### □ P2 Transfer Learning / Genome Fine-Tuning
+### ⚡ P2 Transfer Learning / Genome Fine-Tuning
 
 Wissen aus einem trainierten Genom soll auf eine neue Aufgabe uebertragen werden.
 
-**Aktueller Stand:** `warm_start_from_checkpoint(path)` laedt Genome aus einem Checkpoint und passt Eingabe/Ausgabe-Dimension an (Knoten werden hinzugefuegt/entfernt). Kein selektives Einfrieren von Verbindungsgruppen, kein progressive-unfreeze-Mechanismus.
+**Aktueller Stand:** Teilweise implementiert. `warm_start_from_checkpoint(path)`
+laedt Genome aus einem Checkpoint und passt Eingabe/Ausgabe-Dimension an.
+`load_genome_as_seed()` seeded die Population tatsaechlich mit einem gegebenen
+Genom. Freeze ist derzeit eine einfache Mutation-Rate-Reduktion fuer
+ausgewaehlte Node-Typen; progressive Unfreeze, Lamarck-only-Feinabstimmung und
+Transfer-Benchmarks fehlen.
 
 - `yane.load_genome_as_seed(genome, freeze_layers=[...])`: bestimmte Verbindungsgruppen koennen eingefroren werden.
 - Lamarck-Feinabstimmung auf neuer Aufgabe ohne Topologie-Aenderung als erste Phase.
 - Dann schrittweise Entsperren eingeforener Teile (progressive unfreeze).
 - Benchmark: Transfer CartPole → LunarLander vs. Training from scratch.
 
-### □ P2 Offene Evolution / Co-Evolution von Aufgabe und Agent (POET-aehnlich)
+### ⚡ P2 Offene Evolution / Co-Evolution von Aufgabe und Agent (POET-aehnlich)
 
-Statische Aufgaben fuehren zu Ueberanpassung; co-evolving Environments erzeugen robustere Agenten.
+**Aktueller Stand:** Experimenteller Spike in `evolution/experimental.py`.
+`CoevolutionPool` und `CoevolutionPair` modellieren einfache Agent-/Environment-
+Paare. Eine vollstaendige POET-aehnliche Integration mit `EnvironmentGenome`,
+Archiv, Survival-Regeln, Transfer zwischen Aufgaben und Trainingsloop fehlt.
 
-**Aktueller Stand:** `evolution/coevolution.py` und `evolution/curriculum.py` existieren. Curriculum stuetzt sich auf statische Schwierigkeits-Stufen. Kein `EnvironmentGenome`, keine co-evolutionaere Paarung zwischen Agent- und Umgebungs-Populationen.
+### ✓ P2 YANE → PyTorch-Bruecke (NAS + Feinabstimmung)
 
-- `EnvironmentGenome`: evolvierbare Umgebungsparameter (z. B. Hangneigung, Hindernisanzahl).
-- Paarung: Agent-Genome werden auf ihren aktuellen Environment-Genome evaluiert.
-- Archiv-Mechanismus: nur Agenten-Genome, die auf mindestens einem Environment gut abschneiden, ueberleben.
-- Benchmark: Co-Evolution vs. Domain-Randomization auf BipedalWalker mit variabler Bodenbeschaffenheit.
+**Aktueller Stand:** Vollstaendig implementiert. `genome_to_torch_module()` in `evolution/torch_bridge.py` exportiert Genome als `torch.nn.Module` mit exakter Topologie und Gewichten. `forward_with_torch()` mit Fallback. Memory-Knoten via GRUCell. Test (skipped ohne torch).
 
-### □ P2 YANE → PyTorch-Bruecke (NAS + Feinabstimmung)
+### ⚡ P2 Genome-Phylogenie (Stammbaum der Innovationen)
 
-Evoluted Architekturen koennen nicht mit Gradienten-Methoden weiter optimiert werden.
+**Aktueller Stand:** Teilweise implementiert. Genome tragen IDs und Parent-IDs;
+`InnovationTracker` kann Crossover, Innovationen und Ahnenketten erfassen.
+Fitness-Delta-Attribution pro Innovation, Baum-/Graph-Analyse, Export und GUI-
+Visualisierung fehlen noch.
 
-**Aktueller Stand:** `genome_to_python()` exportiert Genome als reines Python (nur `math`). `genome_to_numpy_weights()` liefert die Weight-Matrix. Kein PyTorch-Export, kein `nn.Module`-Wrapper, keine Gradient-Optimierung der evolvierten Topologie.
-
-- `genome.to_torch_module()` → `torch.nn.Module` mit exakt derselben Topologie.
-- Gewichte werden uebertragen; danach normales PyTorch-Training moeglich.
-- Nutzung: YANE findet gute Architektur (NAS-Rolle), PyTorch optimiert Gewichte weiter.
-- Export beruecksichtigt Memory-Knoten als `nn.GRUCell`-Aequivalent.
-
-### □ P2 Genome-Phylogenie (Stammbaum der Innovationen)
-
-Welche Mutation hat den entscheidenden Durchbruch geliefert? Das ist derzeit nicht nachverfolgbar.
-
-**Aktueller Stand:** `evolution/innovation.py` verwaltet Innovation-Nummern fuer Knoten/Verbindungen. `mutation_tracking.py` trackt Mutations-Erfolgsraten pro Typ. Kein Eltern-ID-Tracking, kein Fitness-Delta-Attribution pro Innovation, kein Stammbaum-Objekt.
-
-- `InnovationTracker` protokolliert fuer jede Innovation: Eltern-Genome-ID, Generation, Delta-Fitness.
-- `genome.lineage()` gibt Vorfahren-Kette bis zum Urgenome zurueck.
-- GUI: Stammbaum-Visualisierung (kollabierbar) mit markierten Schluessel-Mutationen.
-- Analyse: welche Mutations-Operatoren fuehren am haeufigsten zu Fitness-Spruengen.
-
-### □ P2 Verhaltensklonierung als Warm-Start
+### ⚡ P2 Verhaltensklonierung als Warm-Start
 
 Evolution braucht viele Iterationen bis zu brauchbaren Loesungen; Demonstrationen koennen das beschleunigen.
 
-**Aktueller Stand:** `warm_start_from_checkpoint(path)` erlaubt einen Head-Start aus einem vorherigen Lauf. Kein supervised Vortraining auf Demonstrations-Daten, kein Backprop-basiertes Behaviour-Cloning vor der Evolution.
+**Aktueller Stand:** Teilweise implementiert. `behaviour_clone()` optimiert ein
+Genom mit Demonstrationspaaren ueber eine einfache lokale Suche und gibt das
+gekloente Genom zurueck. Es wird noch nicht automatisch als Population-Seed
+verdrahtet; Backprop-/Torch-Training, Lamarck-Integration und Benchmarks fehlen.
 
 - `yane.behaviour_clone(demonstrations, n_steps)`: supervised Vortraining des besten Genoms auf Demonstrations-Daten via Lamarck/Backprop.
 - Demonstrationen als Liste von `(inputs, outputs)`-Paaren; kein RL-Umgebungsformat noetig.
@@ -725,11 +644,15 @@ Lamarck-Gradienten werden nach jedem Refinement-Schritt verworfen; sie koennten 
 - Benchmark: Mit vs. ohne Momentum auf Symbolic-Regression und CartPole (Konvergenzgeschwindigkeit).
 - Tests: Momentum-Vektor wird nach Lamarck-Schritt aktualisiert; bei `momentum_prob=0` kein Einfluss auf Mutation.
 
-### □ P2 Automatisches Post-Training Pruning (Netzwerk-Komprimierung)
+### ⚡ P2 Automatisches Post-Training Pruning (Netzwerk-Komprimierung)
 
 Trainierte Genome sind oft ueberdimensioniert; unnoetige Verbindungen und tote Knoten koennen ohne Leistungsverlust entfernt werden.
 
-**Aktueller Stand:** `export_genome_weights()` gibt die Weight-Matrix des besten Genoms zurueck; Nutzer koennen Gewichte extern analysieren. `genome.connection_count` und `len(genome.nodes)` sind zugaenglich. Kein automatisches Pruning, keine `prune()`-Methode, kein Fitness-Rollback nach Komprimierung.
+**Aktueller Stand:** Teilweise implementiert. `genome.prune()` entfernt kleine
+Gewichte und tote Strukturen, `genome.compress()` reduziert auf eine Zielgroesse
+und Basis-Tests decken diese Genome-Methoden ab. Es gibt noch keinen
+`set_post_training_pruning()`-Hook in `NeuroEvolution`, keine automatische
+Re-Evaluation mit Fitness-Rollback und keine belastbaren `prune_stats()`.
 
 - `genome.prune(threshold=0.01, method="weight"|"activation_frequency")` entfernt Verbindungen unter Schwellenwert.
 - `genome.compress(target_size)`: iteratives Pruning bis Zielgroesse erreicht (kleinstes Gewicht zuerst).
@@ -740,27 +663,29 @@ Trainierte Genome sind oft ueberdimensioniert; unnoetige Verbindungen und tote K
 
 ---
 
-### □ P2 Differenzierbare Topologie-Suche (DARTS-Lite)
+### ⚡ P2 Differenzierbare Topologie-Suche (DARTS-Lite)
 
-> **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
+**Aktueller Stand:** Experimenteller Spike in `evolution/experimental.py`.
+`DARTSLite` bietet sigmoid-basiertes Gating und Threshold-Pruning fuer
+Connections. `DARTSOptimizer`, alternierende Gewicht-/Architektur-Optimierung,
+`NeuroEvolution.set_darts_mode()` und Benchmarks fehlen.
 
-NEAT sucht Topologien diskret durch Mutation; differenzierbare Relaxation erlaubt gradienten-basierte Architektursuche.
-
-**Aktueller Stand:** Topologie-Suche erfolgt ausschliesslich durch diskrete Mutations-Operatoren (`add_connection`, `add_node`, `remove_connection`). Lamarck optimiert Gewichte mit Gradienten, aber nicht die Topologie-Entscheidungen. Kein kontinuierliches Gating-Signal.
-
-- Kontinuierliche Relaxation: Kanten-Gewichte mit Gating-Sigmoid; niedrige Gates werden nach N Schritten geprunt.
 - `DARTSOptimizer`: wechselt ab zwischen Lamarck-Schritt (Gewichte) und Architektur-Gradient (Gates).
 - Nur fuer Feed-Forward-Genome ohne Memory-Nodes.
 - `NeuroEvolution.set_darts_mode(enabled=True, prune_threshold=0.1)`.
 - Benchmark: DARTS-Lite vs. Standard-NEAT auf Symbolic-Regression-Task.
 
-### □ P2 Intrinsische Belohnung / Curiosity-Modul
+### ⚡ P2 Intrinsische Belohnung / Curiosity-Modul
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 Sparse-Reward-Umgebungen (z. B. Maze) liefern keine nutzbare Fitness-Information; Curiosity kann die Exploration antreiben. Wichtig: bekannte strukturierte MDPs wie Taxi sollten zuerst mit strukturierten Evaluator-Komponenten, Subgoals und Graph-Distanz geloest werden. Curiosity ist fuer unbekannte oder schlecht modellierbare Umgebungen gedacht, nicht als Ersatz fuer vorhandene Aufgabenstruktur.
 
-**Aktueller Stand:** `AdaptiveFitnessComponentWeights` ermoeglichen Zusatzkomponenten zur Task-Fitness (Komplexitaet, Novelty). Kein internes Vorhersage-Netz, kein Prediction-Error als intrinsischer Reward, keine Curiosity-Architektur.
+**Aktueller Stand:** Experimenteller Spike. `CuriosityModule` existiert als
+kleines lineares Vorhersagemodul mit Prediction-Error und Tests. Es ist aber
+nicht in `NeuroEvolution`, Fitness-Komposition oder den Trainingsloop
+integriert; `set_curiosity()`, paralleles Predictor-Training und Maze-Benchmark
+fehlen.
 
 - `CuriosityModule`: haelt ein kleines Vorhersage-Netz (auch ein YANE-Genom), das naechste Observations vorhersagt.
 - Intrinsischer Reward = Vorhersagefehler; wird zur externen Fitness addiert (gewichtet, konfigurierbar).
@@ -769,33 +694,38 @@ Sparse-Reward-Umgebungen (z. B. Maze) liefern keine nutzbare Fitness-Information
 - Benchmark: Curiosity vs. kein Curiosity auf einem Sparse-Reward-Maze (eigene
   minimale Implementierung), nicht auf Taxi als Primaer-Benchmark.
 
-### □ P2 Synaptische Plastizitaet (STDP / Hebbsches Lernen)
+### ⚡ P2 Synaptische Plastizitaet (STDP / Hebbsches Lernen)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 Genome lernen derzeit nur durch Evolution, nicht durch Erfahrung innerhalb einer Episode.
 
-**Aktueller Stand:** Lamarck-Refinement optimiert Gewichte zwischen Generationen (inter-lifetime). Innerhalb einer Episode (`genome.forward()`-Aufrufe) sind alle Gewichte unveraenderlich. `genome.reset()` setzt Memory-Knoten zurueck, aber keine evolvierte Plastizitaetsregel.
+**Aktueller Stand:** Experimenteller Spike. `STDPRule` existiert als isolierte
+Regel fuer Gewichtsanpassungen. Genome speichern aber noch keine evolvierbaren
+Plastizitaetskoeffizienten, `genome.forward()` veraendert Gewichte nicht
+episoden-lokal und `genome.reset()` verwaltet keine Basis-/Arbeitsgewichte.
 
 - Knoten/Verbindungen koennen evolvierte Hebb-Regel-Koeffizienten (A, B, C, D) tragen.
 - Gewichte werden waehrend `genome.forward()` nach der STDP-Regel angepasst (intra-lifetime-learning).
 - `genome.reset()` setzt Gewichte auf Basiswerte zurueck (Plastizitaet ist episoden-lokal).
 - Benchmark: STDP vs. Lamarck auf Aufgaben mit veraenderlicher Umgebung (z. B. wechselnde XOR-Eingaenge).
 
-### □ P2 Neuromodulation
+### ⚡ P2 Neuromodulation
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 Modulatorische Signale erlauben kontextabhaengige Gewichtung ganzer Verbindungsgruppen.
 
-**Aktueller Stand:** `NodeType` kennt `INPUT`, `OUTPUT`, `HIDDEN` und `MEMORY`. Kein `MODULATOR`-Knotentyp; Neuromodulation ist nicht im Aktivierungsfluss vorgesehen. Globale Lamarck-Signale beeinflussen das Training, aber keine intra-Netz-Modulation zur Laufzeit.
+**Aktueller Stand:** Experimenteller Spike. `Neuromodulator` existiert als
+isolierter Skalierungshelfer. Es gibt noch keinen `MODULATOR`-Knotentyp, keine
+evolvierbaren Modulationskanten und keine Integration in `genome.forward()`.
 
 - Sonderknotentyp `Modulator`: sein Ausgabe-Wert skaliert eingehende Verbindungen anderer Knoten.
 - Evolvierbar: welcher Knoten moduliert, welche Verbindungen beeinflusst werden, Staerke.
 - Anwendung: schnelle Anpassung an wechselnde Aufgaben (Multi-Task-Szenarien).
 - Benchmark: Modulation vs. kein Modulation auf einem Aufgaben-Wechsel-Szenario.
 
-### □ P2 Evolutionaere Input-Gruppierung (Evolvable Input Aggregation Layer)
+### ⚡ P2 Evolutionaere Input-Gruppierung (Evolvable Input Aggregation Layer)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -803,7 +733,10 @@ NEAT behandelt jeden Input als unabhaengigen Knoten; bei hochdimensionalen Einga
 
 Verwandte Konzepte: Capsule Networks (Hinton 2017) gruppieren semantisch aequivalente Features; CoSyNE co-evolviert Eingabe-Gewichte; ES-HyperNEAT bestimmt Knoten-Positionen im Substrat automatisch. Das Neue hier ist die Kombination: evolvierbare Gruppen mit evolvierbaren Aggregations-Operatoren als dynamisch wachsender Pre-Layer, der vollstaendig in NEAT-Mutations- und Crossover-Logik integriert ist.
 
-**Aktueller Stand:** Kein `InputGrouper` in YANE. Verwandte Bausteine vorhanden: `set_input_transform()` (P1-Task, manuell vorgegeben), HyperNEAT/CPPN (erzeugt raeumliche Gewichtsmuster fuer Hidden-Substrate, nicht fuer Input-Aggregation), `warm_start_from_checkpoint()` (kann Eingabe-Anzahl anpassen). Die dynamisch veraenderliche Input-Knoten-Anzahl ist der technisch schwierigste Teil — sie beruehrt Innovation-Tracking, Crossover-Alignment und Checkpoint-Kompatibilitaet.
+**Aktueller Stand:** Experimenteller Spike. `InputGrouping` kann externe Inputs
+standalone reduzieren und aggregieren. Es ist aber kein Teil von `Genome`, wird
+nicht gecrossovert oder gecheckpointet, erzeugt keine dynamischen Input-Knoten
+und hat keine `NeuroEvolution.set_input_grouping()`-Integration.
 
 **Design: `InputGroup` und `InputGrouper`**
 
@@ -836,7 +769,7 @@ Verwandte Konzepte: Capsule Networks (Hinton 2017) gruppieren semantisch aequiva
 
 - Tests: `transform()` produziert korrekte Ausgabe-Dimension; `split_group()` fuegt korrekten Input-Knoten hinzu; Crossover zweier Genome mit unterschiedlichen Groupern laeuft ohne Fehler; Checkpoint-Round-Trip erhaelt Gruppen.
 
-### □ P2 Evolutionaere Output-Gruppierung (Evolvable Output Synergy Layer)
+### ⚡ P2 Evolutionaere Output-Gruppierung (Evolvable Output Synergy Layer)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
@@ -846,7 +779,11 @@ Beispiel: Aktion 3 und Aktion 7 werden in einer Aufgabe stets gleichzeitig ausge
 
 Anwendungsfaelle: hochdimensionale Steuerung (Roboterarm mit 20 Gelenken, von denen 4 Gruppen immer synchron feuern), multi-label Klassifikation mit korrelierten Klassen, jede Aufgabe mit korrelierten Ausgabe-Kanaelen.
 
-**Aktueller Stand:** Kein `OutputGrouper` in YANE. `genome.output_nodes` entspricht 1:1 den externen Ausgabe-Slots; `genome_to_python()` liest sie direkt. Kein Mechanismus fuer geteilte Proto-Knoten. Technische Herausforderungen sind identisch mit der Input-Gruppierung: dynamische interne Output-Knoten-Anzahl, Crossover-Alignment, Checkpoint-Kompatibilitaet.
+**Aktueller Stand:** Experimenteller Spike. `OutputGrouping` kann Proto-Outputs
+standalone auf externe Outputs expandieren. Es ist aber kein Teil von `Genome`,
+veraendert keine interne Output-Knoten-Anzahl, wird nicht gecrossovert oder
+gecheckpointet und ist nicht in `genome.forward()`/`genome_to_python()`
+integriert.
 
 **Design: `OutputGroup` und `OutputGrouper`**
 
@@ -891,11 +828,14 @@ Beide Layer koennen gleichzeitig aktiv sein: `InputGrouper.transform(raw_inputs)
 
 - Tests: `expand()` gibt stets N Werte zurueck; `genome.forward()` gibt unveraendert N Werte zurueck; `split_group()` erhoeh interne Output-Knoten-Anzahl um 1; Crossover zweier Genome mit unterschiedlichen OutputGroupern laeuft fehlerfrei; `genome_to_python()` erzeugt korrekten Expand-Block.
 
-### □ P2 Shared Weights (Weight-Sharing zwischen Verbindungen)
+### ⚡ P2 Shared Weights (Weight-Sharing zwischen Verbindungen)
 
 Klassische NEAT-Verbindungen haben je ein unabhaengiges Gewicht; fuer CNN-artige Strukturen muessen raeumlich aequivalente Verbindungen dasselbe Gewicht teilen. Ohne Weight-Sharing muss NEAT jedes Pixel-zu-Pixel-Gewicht einzeln evolvieren.
 
-**Aktueller Stand:** Jede `Connection` hat ein eigenes `weight`-Attribut. Kein Konzept von Gewichts-Gruppen; Lamarck und Mutation behandeln jede Verbindung unabhaengig.
+**Aktueller Stand:** Experimenteller Spike. `SharedWeightGroup` existiert als
+isolierter Helper. `Connection` hat aber noch kein `weight_group`, `Genome`
+kein `weight_groups`-Register, und Mutation/Lamarck/Checkpoint/Crossover
+arbeiten weiterhin mit individuellen Connection-Gewichten.
 
 - `Connection.weight_group: str | None`: optionale Gruppen-ID; alle Verbindungen einer Gruppe teilen denselben skalaren Gewichtswert.
 - `genome.weight_groups: dict[str, float]`: zentrales Register der Gruppen-Gewichte; `connection.weight` gibt den aktuellen Gruppen-Wert zurueck.
@@ -904,13 +844,16 @@ Klassische NEAT-Verbindungen haben je ein unabhaengiges Gewicht; fuer CNN-artige
 - Checkpoint-kompatibel: `weight_groups`-Dict wird gespeichert.
 - Benchmark: Shared-Weights vs. unabhaengige Gewichte auf MNIST (784 Inputs → 10 Outputs, flache Topologie).
 
-### □ P2 Convolutional NEAT (CoDeepNEAT-inspiriert)
+### ⚡ P2 Convolutional NEAT (CoDeepNEAT-inspiriert)
 
 > **Experimentell (Layer 3):** Nur in `experimental/` oder Research Branch implementieren, nicht direkt in den Stable Core mischen.
 
 NEAT sucht verbindungsweise; fuer Bildverarbeitung ist die sinnvolle Sucheinheit ein Conv-Block (Filter, Stride, Channels), nicht eine einzelne Gewichtsverbindung.
 
-**Aktueller Stand:** `add_node` und `add_connection` als atomare Mutations-Operatoren. HyperNEAT (ueber CPPNs) kann raeumliche Gewichtsmuster erzeugen, aber keine echten Faltungsoperationen mit geteilten Gewichten und Stride.
+**Aktueller Stand:** Experimenteller Spike. `ConvModule` kann einfache
+Faltungs-/Patch-Operationen standalone ausfuehren. Es gibt noch keinen
+`NodeType.CONV2D`, keine `add_conv_block`-Mutation, kein `forward_image()`,
+keine Shared-Weight-Integration und keinen Python-Export fuer Conv-Knoten.
 
 - Neuer Knotentyp `CONV2D` mit evolvierbaren Parametern: `kernel_size`, `stride`, `out_channels`, `activation`.
 - Weight-Sharing automatisch: alle raeumlichen Positionen eines Filters teilen dasselbe Gewicht (baut auf Shared-Weights-Task auf).
@@ -925,7 +868,11 @@ NEAT sucht verbindungsweise; fuer Bildverarbeitung ist die sinnvolle Sucheinheit
 
 Das aktuelle HyperNEAT-Substrat wird vom Nutzer manuell als Gitter-Koordinaten definiert; die CPPN weiss nicht wo sinnvolle Knoten-Positionen im geometrischen Raum liegen.
 
-**Aktueller Stand:** `hyperneat_substrate(n_inputs, n_hidden, n_outputs)` erzeugt ein festes Schicht-Gitter. `generate_genome_from_cppn()` verwendet dieses Substrat. Die CPPN kann die Substrat-Struktur nicht beeinflussen.
+**Aktueller Stand:** HyperNEAT-Bausteine fuer feste Substrate sind vorhanden,
+und experimentelle Substrate koennen beschrieben werden. ES-HyperNEAT im
+eigentlichen Sinn fehlt: keine CPPN-varianzbasierte Quadtree-Suche, keine
+evolvierbaren Substrat-Koordinaten, kein `evolve_substrate=True`-Flow und keine
+Benchmarks.
 
 - ES-HyperNEAT: CPPN-Output-Varianz bestimmt automatisch ob an einer Koordinate ein Knoten sinnvoll ist (hohe lokale Varianz → Knoten platzieren).
 - `hyperneat_substrate(evolve=True)`: Substrat-Koordinaten werden nicht vorgegeben sondern per Quadtree aus der CPPN-Aktivierungslandschaft abgeleitet.
