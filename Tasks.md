@@ -13,9 +13,18 @@ Lamarck-Momentum, Post-Training Pruning, Population-Size-Adaptation,
 Intrinsic Curiosity, DARTS-Lite und Shared Weights vollstaendig abgeschlossen.
 Teststand: `1153 passed, 1 skipped`.
 
-> **Roadmap-Erweiterung (2026-05-26):** 26 neue Features geplant — 5 P1
-> (Benchmarking-Suite, WandB/MLflow, Interactive Evolution, Hardware-Aware,
-> Data Augmentation) und 21 P2 (ONNX-Export, Distillation, Gradient-Hybrid,
+> **Paradigmenwechsel (2026-05-26):** Der P0 Meta-Adaptive Orchestration Layer
+> ist das zentrale Architektur-Feature der naechsten Evolutionsstufe. Er
+> integriert ALLE existierenden adaptiven Systeme (Mutationsraten, Speziation,
+> Recovery, Online-Tuning, Pop-Size, Fitness-Shaping, Anytime-Eval, Surrogate)
+> und ALLE zukuenftigen P2-Features unter einem gemeinsamen Meta-Optimizer.
+> Ziel: `yane.auto_train(evaluator)` — kein einziger manueller Parameter mehr.
+> Dieser Task sollte VOR den meisten anderen offenen Tasks implementiert werden.
+
+> **Roadmap-Erweiterung (2026-05-26):** 28 neue Features geplant — 1 P0
+> (Meta-Adaptive Orchestration), 6 P1 (Benchmarking-Suite, WandB/MLflow,
+> Interactive Evolution, Hardware-Aware, ResourceBudget-System, Data
+> Augmentation) und 21 P2 (ONNX-Export, Distillation, Gradient-Hybrid,
 > WASM-Export, Attention-Heads, LTC-Nodes, Temporal Speciation, Self-Play,
 > H-NEAT, GRN-Encoding, Developmental NEAT, Continual Learning, Meta-Learning,
 > Reservoir Computing, Open-Endedness, Multi-Agent Cooperation, Bayesian NEAT,
@@ -36,7 +45,7 @@ Teststand: `1153 passed, 1 skipped`.
 - P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies und evolvierbare Descriptor-Gewichte sind implementiert; DARTS-Lite, Intrinsic Curiosity und Shared Weights vollstaendig integriert; STDP, Neuromodulation, Input-/Output-Gruppierung, Conv-NEAT und ES-HyperNEAT sind noch Spikes/offen.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
 - Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
-- Naechste Schwerpunkte: P2-Research-Spikes ehrlich zu vollstaendigen Features ausbauen oder als experimentell belassen; Checkpoint-Kompatibilitaets-Diff haerten; 26 neue P1/P2-Features (Benchmark-Suite, WandB/MLflow, ONNX/WASM/TFLite-Export, Distillation, Gradient-Hybrid, Attention, LTC, Temporal Speciation, Self-Play, H-NEAT, GRN-Encoding, Developmental NEAT, Continual/Meta-Learning, Reservoir Computing, Open-Endedness, Multi-Agent Cooperation, Interactive/Bayesian/Safe/Sparse/Hardware-Aware NEAT, Data Augmentation, Symbolic Regression).
+- Naechste Schwerpunkte: **P0 Meta-Adaptive Orchestration Layer (PRIORITAER)** + **P1 ResourceBudget-System** als Fundament; danach P2-Research-Spikes ausbauen; Checkpoint-Kompatibilitaets-Diff haerten; 28 neue P0/P1/P2-Features.
 
 ## Legende
 
@@ -58,8 +67,8 @@ Population, Genome, Speciation, Mutation, Evaluation, Checkpoints.
 Kleine, testbare, rueckwaertskompatible Basis. Aenderungen hier erfordern besondere Sorgfalt; keine experimentellen Abhaengigkeiten.
 
 **Layer 2 — Adaptive Systems**
-Recovery, Auto-Tuning, Scheduling, Surrogates, Diversity-Systeme, Policy-Orchestrierung.
-Baut auf Layer 1 auf; nutzt ausschliesslich oeffentliche APIs. Ziel ist das Adaptive Policy System als einheitlicher Orchestrierungs-Punkt.
+Recovery, Auto-Tuning, Scheduling, Surrogates, Diversity-Systeme, Policy-Orchestrierung, **Meta-Adaptive Orchestration (MetaOptimizer, ParamRegistry, Knowledge Base, Feature Gating)**, **ResourceBudget-System (ResourceDiscovery, BudgetEnforcer, Graceful Degradation)**.
+Baut auf Layer 1 auf; nutzt ausschliesslich oeffentliche APIs. Ziel: Adaptive Policy System + MetaOptimizer + ResourceBudget als kohaerentes System aus Optimierung (MetaOptimizer) und Begrenzung (ResourceBudget).
 
 **Layer 3 — Research Features**
 DARTS, STDP, Neuromodulation, Curiosity, ES-HyperNEAT, Input-/Output-Gruppierung, Convolutional NEAT, Attention-Heads, LTC-Nodes, ONNX/WASM/TFLite-Export, Distillation, Gradient-NEAT-Hybrid, Self-Play, H-NEAT, GRN-Encoding, Developmental NEAT, Continual Learning, Meta-Learning, Reservoir Computing, Open-Endedness, Multi-Agent Cooperation, Bayesian NEAT, Safe NEAT, Sparse NEAT, Symbolic Regression.
@@ -2372,6 +2381,416 @@ yane.set_hardware_constraints(
 - Tests: FLOPs-Zaehlung; Memory-Schaetzung; Penalty-Berechnung;
   Plattform-Profile; Pareto-Front.
 
+> **Integration:** Dieser Task wird vom P1 ResourceBudget-System (unten)
+> orchestriert. `HardwareConstraint` definiert die ZIEL-Hardware fürs
+> Deployment; `ResourceBudget` managed die LAUFZEIT-Ressourcen während
+> des Trainings. Beide teilen sich die `PlatformProfile`-Infrastruktur
+> und das `hardware_profile()`-Protokoll.
+
+---
+
+### □ P1 ResourceBudget-System — Einheitliches Ressourcen-Management
+
+**Das betriebswirtschaftliche Gegenstück zum MetaOptimizer.** Während der
+MetaOptimizer fragt „wie nutze ich Ressourcen optimal?", stellt das
+ResourceBudget sicher, DASS Ressourcen eingehalten werden — und kalibriert
+sich selbst.
+
+**Problem:** Die existierenden Ressourcen-Mechanismen sind fragmentiert:
+`efficiency_penalty` (nur Zeit), `resource_limits` (nur Memory),
+`max_nodes`/`max_connections` (nur Topologie), geplantes `HardwareConstraint`
+(nur Deployment-Ziel). Jeder Mechanismus hat eigene Units, eigene Schwellwerte,
+keine Koordination. Der Nutzer muss raten: „was ist ein guter Wert für
+`max_process_gb=2.0` auf MEINER Maschine?"
+
+**Lösung:** Ein einheitliches Budget-System, das ALLE Ressourcen verwaltet,
+automatisch kalibriert und mit harten wie weichen Grenzen arbeitet.
+
+**Ziel:** `yane.set_budget(total_time="30min", max_memory="auto")` — Budgets
+in menschenlesbaren Einheiten, automatische Erkennung der Maschinenkapazität,
+einheitliche Enforcement-Strategie.
+
+---
+
+#### Architektur
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                  ResourceBudget System                            │
+│                  (evolution/resource_budget.py)                    │
+│                                                                    │
+│  ┌───────────────────────┐   ┌──────────────────────────────┐   │
+│  │  Resource Discovery    │   │  Budget Definition             │   │
+│  │  (auto-calibration)    │   │  (user + auto)                │   │
+│  │                        │   │                               │   │
+│  │  - CPU cores/usage     │   │  total_time: "30min"          │   │
+│  │  - RAM total/available │   │  max_memory: "auto" → 80% RAM │   │
+│  │  - GPU memory (nvidia) │   │  max_cpu_pct: 75%             │   │
+│  │  - Disk space/temp     │   │  max_energy: "unlimited"      │   │
+│  │  - Battery status      │   │  per_genome_ms: "auto"        │   │
+│  │  - Platform profile    │   │  target_platform: None        │   │
+│  └───────────────────────┘   └──────────────────────────────┘   │
+│              │                            │                       │
+│              ▼                            ▼                       │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                    Budget Enforcer                           │ │
+│  │                                                              │ │
+│  │  Ressource      Typ       Grenze      Aktion                 │ │
+│  │  ─────────      ───       ──────      ──────                 │ │
+│  │  Wall Time      Hard      >30min      early_stop()           │ │
+│  │  Memory         Hard      >80% RAM    trim_memory()          │ │
+│  │  Memory         Soft      >60% RAM    reduce_pop()           │ │
+│  │  CPU            Soft      >75%        reduce_workers()       │ │
+│  │  Per-Genome     Soft      >10ms       skip_lamarck()         │ │
+│  │  Energy         Soft      Akku <20%   graceful_shutdown()    │ │
+│  │  Disk           Hard      <100MB      warn + stop()          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │              Graceful Degradation Pipeline                   │ │
+│  │                                                              │ │
+│  │  Stufe 1: reduce_pop()          → Pop-Größe halbieren       │ │
+│  │  Stufe 2: skip_lamarck()        → Lamarck deaktivieren      │ │
+│  │  Stufe 3: simplify_topology()   → max_nodes senken          │ │
+│  │  Stufe 4: disable_research()    → P2-Features deaktivieren  │ │
+│  │  Stufe 5: reduce_eval_budget()  → Anytime-Budget kürzen     │ │
+│  │  Stufe 6: emergency_stop()      → Checkpoint + beenden      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Phase 1: Resource Discovery (Auto-Kalibrierung)
+
+YANE erkennt automatisch die verfügbaren Ressourcen — kein Raten mehr.
+
+**Design: `ResourceDiscovery`**
+
+```python
+discovery = ResourceDiscovery()
+profile = discovery.probe()
+# → ResourceProfile(
+#     cpu_cores_physical=8,
+#     cpu_cores_logical=16,
+#     cpu_usage_pct=23.5,
+#     ram_total_gb=31.2,
+#     ram_available_gb=18.7,
+#     gpu_available=False,
+#     gpu_memory_gb=None,
+#     disk_free_gb=45.0,
+#     on_battery=False,
+#     battery_pct=None,
+#     platform="linux-x86_64",
+#     thermal_throttled=False,
+# )
+```
+
+- Nutzt `psutil` (bereits Abhängigkeit) für CPU/RAM/Disk/Battery.
+- Optional `GPUtil` oder `nvidia-smi`-Wrapper für GPU.
+- `thermal_throttled`: Linux `sensors`, macOS `pmset`, Windows `WMI`.
+- Plattform-Erkennung via `platform` + `cpuinfo`.
+- Ergebnis wird für Auto-Kalibrierung der Budgets verwendet.
+
+**Auto-Kalibrierungsregeln:**
+
+```python
+# Ohne Benutzereingabe:
+ResourceBudget.auto()  # →
+#   max_memory = ram_available * 0.8        # nie mehr als 80% RAM
+#   max_cpu_pct = 75                        # 25% für OS/andere
+#   per_genome_ms = None                    # kein Limit
+#   total_time = None                       # kein Zeitlimit
+#   disk_min_free_mb = 500                  # Sicherheitspuffer
+
+# Mit Benutzereingabe "auto":
+yane.set_budget(max_memory="auto")          # → 80% RAM
+yane.set_budget(max_memory="50%")           # → 50% RAM
+yane.set_budget(max_memory="2gb")           # → 2 GiB
+yane.set_budget(total_time="30min")         # → 1800s
+yane.set_budget(total_time=3600)            # → 3600s (Rückwärtskompatibel)
+```
+
+**Akzeptanzkriterien Phase 1:**
+
+- `ResourceDiscovery.probe()` gibt vollständiges `ResourceProfile` auf
+  Linux/macOS/Windows zurück (Test: mindestens cpucores, ram, disk).
+- `"auto"` kalibriert Memory auf 80% des verfügbaren RAMs.
+- Prozentangaben (`"50%"`) werden korrekt in absolute Werte umgerechnet.
+- Ohne psutil-Features (z. B. GPU): Felder sind `None`, kein Crash.
+- Tests: Probe auf Test-Maschine; Prozent-Parsing; Auto-Kalibrierung.
+
+---
+
+#### Phase 2: Multi-Ressourcen-Budget-Definition
+
+**Design: `ResourceBudget`**
+
+```python
+@dataclass
+class ResourceBudget:
+    # Zeit
+    total_time_seconds: float | None = None       # Hard: early stop
+    per_genome_ms: float | None = None            # Soft: skip eval
+
+    # Memory
+    max_memory_mb: float | None = None            # Hard: trim + warn
+    soft_memory_mb: float | None = None            # Soft: reduce pop
+
+    # CPU
+    max_cpu_pct: float | None = None              # Soft: reduce workers
+    max_workers: int | None = None                 # Hard: cap processes
+
+    # Energie / Mobil
+    min_battery_pct: float | None = None           # Hard: graceful shutdown
+    max_energy_wh: float | None = None             # Soft: warn
+
+    # Deployment-Ziel (übernimmt von HardwareConstraint)
+    target_platform: str | None = None             # "cortex-m4", "esp32", ...
+    max_deploy_flops: int | None = None
+    max_deploy_memory_bytes: int | None = None
+
+    # Time-Budget-Aufteilung (automatisch)
+    # Wenn total_time gesetzt: wie wird Zeit aufgeteilt?
+    reserve_checkpoint_pct: float = 2.0            # 2% für Checkpoints
+    reserve_profiling_pct: float = 2.0             # 2% für ProblemProfiler
+    reserve_metaopt_pct: float = 5.0               # 5% für MetaOptimizer
+    # → 91% für eigentliches Training
+```
+
+**Parsing menschenlesbarer Einheiten:**
+
+```python
+budget = ResourceBudget.parse({
+    "total_time": "30min",
+    "max_memory": "auto",
+    "per_genome_ms": 10,
+    "target_platform": "cortex-m4",
+})
+# → ResourceBudget(total_time_seconds=1800, max_memory_mb=14976, ...)
+```
+
+Unterstützte Einheiten: `"ms"`, `"s"`, `"min"`, `"h"`, `"kb"`, `"mb"`, `"gb"`,
+`"tb"`, `"b"` (bytes), `"auto"`, `"unlimited"`, Prozent (`"80%"`), absolute
+Zahlen (Rückwärtskompatibel).
+
+**Akzeptanzkriterien Phase 2:**
+
+- Alle Einheiten werden korrekt geparsed.
+- `"auto"` und `"unlimited"` werden unterschieden (auto=kalibriert,
+  unlimited=wirklich kein Limit).
+- Ungültige Einheiten geben klaren Parse-Error.
+- Tests: Einheiten-Parsing; Auto vs. Unlimited; Default-Werte.
+
+---
+
+#### Phase 3: Budget Enforcer (Runtime-Überwachung)
+
+Der Enforcer läuft als Teil des Trainings-Loops und prüft Budgets in Echtzeit.
+
+**Design: `BudgetEnforcer`**
+
+```python
+enforcer = BudgetEnforcer(budget)
+
+# Vor jeder Generation:
+enforcer.check()  # → BudgetStatus(ok=True, warnings=[], violations=[])
+
+# Nach jeder Evaluation:
+enforcer.record_eval(genome, eval_time_ms, memory_delta_mb)
+
+# Bei Verletzung:
+status = enforcer.check()
+if status.violations:
+    for v in status.violations:
+        if v.resource == "total_time":
+            yane._early_stop("budget_time_exceeded")
+        elif v.resource == "max_memory":
+            yane.trim_memory()
+            yane._warn("Memory budget exceeded, trimmed")
+```
+
+**Check-Frequenz (Overhead-optimiert):**
+
+- `total_time`: jede Generation (billig).
+- `max_memory`: alle 5 Generationen oder nach `trim_memory()`.
+- `max_cpu_pct`: alle 30 Sekunden (via gleitenden Durchschnitt).
+- `per_genome_ms`: jede Evaluation (in `record_eval()`, billig).
+- `min_battery_pct`: alle 60 Sekunden.
+- `disk_free`: beim Checkpoint-Schreiben.
+
+**BudgetStatus:**
+
+```python
+@dataclass
+class BudgetStatus:
+    ok: bool                       # True wenn kein Hard-Violation
+    resource_usage: dict            # {"memory": 1.2gb, "time_elapsed": "12min"}
+    warnings: list[BudgetWarning]   # Soft-Grenzen überschritten
+    violations: list[BudgetViolation]  # Hard-Grenzen überschritten
+    degraded: bool                  # True wenn Graceful-Degradation aktiv
+    degradation_level: int          # 0-6 (welche Stufe)
+```
+
+**Akzeptanzkriterien Phase 3:**
+
+- `enforcer.check()` gibt korrektes `BudgetStatus` zurück.
+- Hard-Violation → `ok=False`, Training wird gestoppt.
+- Soft-Violation → `warnings` gefüllt, Training läuft weiter.
+- `per_genome_ms`-Verletzung wird via `record_eval()` erkannt.
+- Tests: Time-Budget-Erschöpfung; Memory-Budget-Überschreitung;
+  Soft-Violation-Warning; Check-Frequenz.
+
+---
+
+#### Phase 4: Graceful Degradation Pipeline
+
+Statt hartem Abbruch: wenn Soft-Grenzen überschritten werden, fährt YANE
+schrittweise Ressourcen-Nutzung zurück.
+
+**Eskalationsstufen (konfigurierbar):**
+
+```
+Stufe 1: SOFT_MEMORY   >60%   → pop_size halbieren (min 20)
+Stufe 2: CPU_HIGH      >75%   → max_workers reduzieren, async deaktivieren
+Stufe 3: PER_GENOME_MS >10ms  → Lamarck deaktivieren (teuer pro Genom)
+Stufe 4: STILL_HIGH    —      → max_nodes/max_connections halbieren
+Stufe 5: CRITICAL      —      → Research-Features deaktivieren
+Stufe 6: EMERGENCY     —      → Checkpoint speichern + train() beenden
+```
+
+**Jede Stufe hat:**
+- `trigger`: welche Bedingung löst sie aus?
+- `action`: welche Gegenmaßnahme?
+- `cooldown`: wie viele Generationen warten bis nächste Eskalation?
+- `reversible`: kann die Maßnahme rückgängig gemacht werden wenn Ressourcen
+  wieder frei sind?
+
+```python
+# Beispiel: Memory-Druck lässt nach → Pop wieder vergrößern
+# (nur wenn reversible=True)
+```
+
+**Integration mit MetaOptimizer:**
+
+- MetaOptimizer erhält `BudgetStatus` als Input.
+- Wenn `degradation_level > 0`: MetaOptimizer weiss, dass weniger Ressourcen
+  verfügbar sind → wählt sparsamere Parameter.
+- Wenn `degradation_level` sinkt: MetaOptimizer kann wieder hochskalieren.
+
+**Akzeptanzkriterien Phase 4:**
+
+- Pop-Größe wird bei SOFT_MEMORY-Violation halbiert.
+- Lamarck wird bei per_genome_ms-Violation deaktiviert.
+- Stufen werden in Reihenfolge eskaliert (nicht übersprungen).
+- `cooldown` verhindert Oszillation.
+- `reversible=True`-Maßnahmen werden rückgängig gemacht wenn Budget wieder
+  ok ist.
+- Tests: Eskalations-Stufen; Cooldown; Reversibilität; MetaOptimizer-
+  Integration.
+
+---
+
+#### Phase 5: Budget-Aware MetaOptimizer-Integration
+
+Der MetaOptimizer (P0) muss das Budget KENNEN und respektieren.
+
+**Design: Budget-Aware Parameter-Selektion**
+
+```python
+# MetaOptimizer erhält Budget als Constraint:
+meta_optimizer.set_budget(budget)
+
+# Bei der Parameter-Optimierung:
+# - Wenn target_platform="cortex-m4": nur Parameter testen die zu
+#   kompakten Netzen führen (kleine pop, kein Lamarck, frühes Pruning)
+# - Wenn total_time < 5min: keine teuren Counterfactuals, schnelle
+#   UCB1-Konvergenz, keine BayesOpt
+# - Wenn max_memory knapp: keine großen Pop-Size-Experimente
+
+# MetaOptimizer's cost_estimate() berücksichtigt Budget:
+cost = meta_optimizer.estimate_cost(action)
+# → {"eval_time_estimate": 12.3, "memory_estimate_mb": 450}
+# enforcer.can_run(cost) → True/False
+```
+
+**Budget-Phasen-Planung (automatisch):**
+
+```python
+# Wenn total_time gesetzt ist, plant MetaOptimizer die Phasen:
+total_gen_estimate = total_time / estimated_gen_time
+# Phase EXPLORE:   20% der Generationen
+# Phase EXPLOIT:   40% der Generationen
+# Phase REFINE:    30% der Generationen
+# Phase CONVERGE:  10% der Generationen
+# → Dynamisch angepasst wenn tatsächliche gen_time abweicht
+```
+
+**Akzeptanzkriterien Phase 5:**
+
+- MetaOptimizer respektiert Budget bei Parameter-Vorschlägen.
+- Bei knappem Zeitbudget: keine teuren Optimierungsverfahren.
+- Bei target_platform: nur deployment-kompatible Parameter.
+- Budget-Phasen-Planung wird dynamisch nachjustiert.
+- Tests: Budget-aware Parameter-Selektion; Zeitbudget-Constraints;
+  Plattform-Constraints.
+
+---
+
+#### Abgrenzung: ResourceBudget vs. bestehende Systeme
+
+| System | Rolle nach ResourceBudget |
+|---|---|
+| `efficiency_penalty` | Wird zu `per_genome_ms`-Enforcement. Penalty-Mechanik bleibt, aber Schwellwert kommt vom Budget. |
+| `set_resource_limits()` | Wird zu `max_memory` und `max_cpu_pct` im Budget. Alte API als Kompatibilitäts-Wrapper. |
+| `max_nodes`/`max_connections` | Bleiben als absolute Hard-Limits. Budget kann sie temporär SENKEN (Graceful Degradation), aber nie ÜBER den konfigurierten Wert ERHÖHEN. |
+| `HardwareConstraint` (P1) | Deployment-Ziel-Constraints (`target_platform`, `max_deploy_flops`). Werden vom Budget als Constraint-Typ `deployment` geführt. |
+| `trim_memory()` | Wird vom Budget-Enforcer automatisch aufgerufen. |
+
+---
+
+#### Zusammenfassung: Was YANE nach diesem Task kann
+
+```python
+# VORHER:
+yane.set_efficiency_penalty(max_ms=10.0, penalty_per_ms=0.5)
+yane.set_resource_limits(min_free_gb=2.0, max_used_percent=85.0,
+                          max_process_gb=2.0)
+# → Nutzer muss Zahlen raten
+
+# NACHHER:
+yane.set_budget(
+    total_time="30min",        # Klar, lesbar
+    max_memory="auto",         # 80% des verfügbaren RAMs
+    target_platform="cortex-m4"  # Deployment-Ziel
+)
+# ODER:
+yane.set_budget("auto")       # Alles automatisch
+
+# Live-Status:
+print(yane.budget_status())
+# Budget: 21% verbraucht (6.3min / 30min)
+# Memory: 1.2GB / 14.9GB (8%)
+# CPU: 34% (ok)
+# Degradation: Stufe 0 (keine)
+# Deployment: passt in Cortex-M4 ✅ (12K FLOPs < 100K Limit)
+```
+
+---
+
+#### Akzeptanzkriterien (Gesamt)
+
+- `set_budget("auto")` kalibriert alle Werte automatisch ohne Crash.
+- `set_budget(total_time="30min")` stoppt Training nach 30 Minuten (±5%).
+- Memory-Budget-Überschreitung → `trim_memory()` + Warnung.
+- Graceful-Degradation eskaliert korrekt durch alle 6 Stufen.
+- Budget-Status ist via `budget_status()` jederzeit abrufbar.
+- Alte APIs (`set_efficiency_penalty`, `set_resource_limits`) funktionieren
+  als Kompatibilitäts-Wrapper.
+- ResourceDiscovery funktioniert auf Linux, macOS, Windows.
+- Tests: ~25 (Auto-Kalibrierung, Einheiten-Parsing, Budget-Enforcement,
+  Graceful-Degradation, MetaOptimizer-Integration, API-Kompatibilität).
+
 ---
 
 ### □ P2 Sparse NEAT / Lottery Ticket Hypothesis
@@ -2664,3 +3083,883 @@ print(formula)
 - CSE reduziert Formel-Laenge bei Netzwerken mit Shared Subgraphs.
 - Tests: Format-Korrektheit; Output-Aequivalenz; Konstanten-Faltung;
   LaTeX-Validierung; CSE-Reduktion.
+
+---
+
+### □ P0 Meta-Adaptive Orchestration Layer — Das selbstoptimierende YANE
+
+**Das zentrale Architektur-Feature der nächsten Evolutionsstufe.** YANE soll
+ein „System der unendlichen Adaption" werden: kein manuelles Tuning von
+Dutzenden Parametern mehr, keine geratenen Startwerte, keine Frage „welches
+Feature soll ich aktivieren?".
+
+**Problem:** Jedes Subsystem hat eigene adaptive Regler (Mutationsraten,
+Speziations-PI, Recovery-Eskalation, Online-Tuning-Bandit, Pop-Size-Adaptation,
+Fitness-Shaping-Autoerkennung, Anytime-Eval-Budget, Surrogate-Filter). Aber
+diese Regler arbeiten **isoliert** — keiner weiss vom anderen. Sie können sich
+gegenseitig behindern (z. B. Recovery injected Diversity während Online-Tuning
+die Mutationsrate senkt). Und jedes NEUE Feature (Attention, LTC, H-NEAT, ...)
+bringt 3–6 neue Parameter, die der Nutzer wieder manuell einstellen müsste.
+
+**Lösung:** Ein Meta-Layer, der ALLE Parameter — existierende adaptive wie neue
+P2 — als gemeinsamen Suchraum behandelt, kontinuierlich beobachtet und
+koordiniert optimiert.
+
+**Ziel:** `yane.auto_train(evaluator)` — KEIN einziger manueller Parameter mehr.
+
+---
+
+#### Architektur
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    MetaOptimizer (evolution/meta_optimizer.py)     │
+│                                                                    │
+│  ┌──────────────┐  ┌─────────────────┐  ┌────────────────────┐   │
+│  │ Problem      │  │ Parameter        │  │ Performance         │   │
+│  │ Profiler     │─▶│ Explorer         │─▶│ Monitor             │   │
+│  │              │  │                  │  │                     │   │
+│  │ - Task-Typ   │  │ - UCB1 (diskret) │  │ - Fitness-Trend     │   │
+│  │ - Schwierig- │  │ - BayesOpt (kont)│  │ - Konvergenzrate    │   │
+│  │   keit       │  │ - Succ.Halving   │  │ - Stagnation        │   │
+│  │ - Rauschen   │  │   (Feature-Gate) │  │ - Diversity         │   │
+│  │ - Temporal   │  │                  │  │ - Param-Impact      │   │
+│  └──────────────┘  └─────────────────┘  └────────────────────┘   │
+│          │                  │                      │               │
+│          ▼                  ▼                      ▼               │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │         Unified Parameter Registry (alle Subsysteme)          │ │
+│  │                                                               │ │
+│  │  ┌─ Existing Adaptive ─┐  ┌─ New P2 Features ────────────┐  │ │
+│  │  │ mutation.*_rate     │  │ attention.head_dim           │  │ │
+│  │  │ species.target_n    │  │ attention.num_heads          │  │ │
+│  │  │ recovery.cooldown   │  │ ltc.tau_initial              │  │ │
+│  │  │ recovery.strategies │  │ ltc.dt                       │  │ │
+│  │  │ lamarck.mode        │  │ hneat.n_sub_policies         │  │ │
+│  │  │ lamarck.n_steps     │  │ grn.development_steps        │  │ │
+│  │  │ novelty.weight      │  │ continual.lambda_ewc         │  │ │
+│  │  │ pop.adaptive_mode   │  │ meta.adaptation_steps        │  │ │
+│  │  │ anytime.promotion   │  │ reservoir.n_nodes            │  │ │
+│  │  │ surrogate.frac      │  │ reservoir.spectral_radius    │  │ │
+│  │  │ fitness.transform   │  │ safe.penalty                 │  │ │
+│  │  │ crossover.tourn_k   │  │ bayesian.uncertainty_penalty │  │ │
+│  │  │ ...                 │  │ sparse.target_sparsity       │  │ │
+│  │  └─────────────────────┘  │ hw.max_flops                 │  │ │
+│  │                           │ ...                          │  │ │
+│  │                           └──────────────────────────────┘  │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │            Cross-Run Knowledge Base                          │ │
+│  │  "CartPole-ähnlich → CMA-ES bringt +15% Fitness"            │ │
+│  │  "XOR-artig → small pop, high mutation, no Lamarck"         │ │
+│  │  k-NN über Problem-Profile im RunDatabase                    │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │            Feature Gating & Graceful Degradation              │ │
+│  │  Auto-Auswahl: welche Research-Features sind aktiv?          │ │
+│  │  Auto-Deaktivierung: Features die nichts bringen             │ │
+│  │  Gradueller Rückbau statt hartem Aus                         │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Phase 1: Unified Parameter Registry
+
+Jeder konfigurierbare Parameter in YANE wird in einer zentralen Registry
+angemeldet — egal ob existierend-adaptiv oder neues P2-Feature.
+
+**Design: `ParamSpec` und `ParamRegistry`**
+
+```python
+@dataclass
+class ParamSpec:
+    name: str                    # "lamarck.mode"
+    type: str                    # "categorical" | "continuous" | "integer"
+    domain: Any                  # ["hill_climb","cma_es","nes","sa","none"]
+                                 # oder (0.0, 1.0) für continuous
+    default: Any                 # Default-Wert
+    stage: str                   # "init" | "runtime" | "both"
+    impact_history: list[float]  # Fitness-Delta pro Änderung (gefüllt zur Laufzeit)
+    subsystem: str               # "lamarck", "attention", "speciation", ...
+```
+
+- Alle existierenden `set_*()`-Methoden registrieren ihre Parameter automatisch
+  in der `ParamRegistry`.
+- Neue P2-Features registrieren ihre Parameter bei `__init__`.
+- `NeuroEvolution.get_param_space()` → vollständiger Suchraum als Dict.
+- `NeuroEvolution.set_param(name, value)` → universeller Parameter-Setter
+  (umgeht spezifische `set_*()`-Methoden nicht, ruft sie intern auf).
+
+**Akzeptanzkriterien Phase 1:**
+
+- `get_param_space()` listet ≥30 Parameter (alle existierenden Adaptiven +
+  mindestens Stubs für P2).
+- `set_param("lamarck.mode", "cma_es")` funktioniert identisch zu
+  `set_lamarck(mode="cma_es")`.
+- Parameter-Änderungen werden in Diagnostics protokolliert.
+- Tests: Registry-Vollständigkeit; Set/Get-Roundtrip; Typ-Validierung.
+
+---
+
+#### Phase 2: Problem Profiler
+
+Vor Trainingsstart analysiert YANE die Aufgabe automatisch.
+
+**Design: `ProblemProfiler` in `evolution/problem_profiler.py`**
+
+```python
+profile = yane.profile_problem(evaluator, n_warmup=50)
+# → ProblemProfile(
+#     task_type="rl_continuous",    # classification, regression,
+#                                   # rl_discrete, rl_continuous, ...
+#     n_inputs=4,
+#     n_outputs=2,
+#     estimated_difficulty=0.72,    # 1 - (Random-Baseline / Target)
+#     noise_level=0.08,             # std der Fitness über n_warmup Random-Genome
+#     reward_sparsity=0.31,         # Anteil Episoden mit ≈0 Reward
+#     temporal_dependency=0.83,     # Autokorrelation State[t] vs State[t-1]
+#     state_dim_effective=3,        # PCA: 95%-Varianz-Dimensionen
+#     action_distribution=...,      # Verteilung der optimalen Aktionen (geschätzt)
+# )
+```
+
+**Analyse-Methoden:**
+
+- `task_type`: heuristische Klassifikation basierend auf Input/Output-Dimensionen,
+  Reward-Struktur (diskret/kontinuierlich), Episoden-Länge.
+- `estimated_difficulty`: N Random-Genome evaluieren → mittlere Fitness als
+  Baseline. Target-Fitness (falls gesetzt) als Obergrenze. Difficulty = 1 −
+  (Baseline/Target).
+- `noise_level`: Varianz der Fitness bei wiederholter Evaluation desselben
+  Random-Genoms.
+- `temporal_dependency`: Autokorrelation der Umgebungszustände (→ braucht das
+  Netz Memory?). Berechnet aus N zufälligen Episoden.
+- `state_dim_effective`: PCA über gesammelte States während Warmup → effektive
+  Dimensionalität (95%-Varianz-Schwelle).
+
+**Akzeptanzkriterien Phase 2:**
+
+- `profile_problem()` gibt gültiges `ProblemProfile` zurück nach ≤2s Analyse.
+- CartPole: `temporal_dependency > 0.5` (braucht Memory).
+- XOR: `task_type == "classification"`, `noise_level ≈ 0`.
+- LunarLander: `estimated_difficulty > 0.5`, `reward_sparsity > 0.5`.
+- Tests: Task-Typ-Erkennung; Difficulty-Schätzung; Temporal-Dependency;
+  PCA-Dimension; Noise-Level.
+
+---
+
+#### Phase 3: Parameter Explorer (Meta-Optimizer)
+
+Der Meta-Optimizer wählt und justiert Parameter — vor dem Start (Initialisierung
+via Knowledge Base + Problem-Profil) und während des Trainings (kontinuierliche
+Adaption).
+
+**Drei Optimierungsstrategien (je nach Parameter-Typ):**
+
+#### 3a. UCB1-Bandit für kategoriale Parameter
+
+```python
+# Parameter: lamarck.mode ∈ {hill_climb, cma_es, nes, sa, none}
+# Alle 20 Generationen: Meta-Optimizer wählt einen Mode via UCB1
+# Reward = Fitness-Delta seit letztem Wechsel
+```
+
+- Existierender `UCB1Bandit` in `online_tuning.py` wird generalisiert.
+- Jeder kategoriale Parameter bekommt einen eigenen Bandit.
+- Exploration/Exploitation-Balance: `c=2.0` (konfigurierbar).
+- Konvergenz: Bandit konvergiert auf besten Mode nach ~5-10 Trials.
+
+#### 3b. Bayesian Optimization für kontinuierliche Parameter
+
+```python
+# Parameter: ltc.tau ∈ [0.1, 10.0], attention.head_dim ∈ [2, 16]
+# Gaussian Process modelliert Fitness(tau, head_dim, ...)
+# Expected Improvement wählt nächsten Testpunkt
+```
+
+- Leichte Implementation (kein scipy/gpytorch-Abhängigkeit):
+  einfacher Gaussian Process mit RBF-Kernel (ca. 200 Zeilen).
+- Optional: externes `scipy.optimize` für Acquisition-Funktion.
+- Fallback: Random Search wenn GP nicht verfügbar.
+
+#### 3c. Successive Halving für Feature-Gating
+
+```python
+# Welche Research-Features sind aktiv?
+# Phase 1: alle Features testen (10 Generationen)
+# Phase 2: beste 50% behalten (20 Generationen)
+# Phase 3: beste 25% behalten (40 Generationen)
+# → nur Features mit echtem Impact überleben
+```
+
+**Trainingsphasen (automatisch, datengetrieben):**
+
+```
+Phase EXPLORE   (0-20% des Budgets): große Pop, hohe Mutation, viele Features
+Phase EXPLOIT   (20-60%): Lamarck aktiv, Surrogate aktiv, Feature-Selektion
+Phase REFINE    (60-90%): CMA-ES, kleine Pop, nur bewährte Features
+Phase CONVERGE  (90-100%): Fine-Tuning, Early-Stopping-Prüfung
+```
+
+- Phasenübergänge sind NICHT hartkodiert, sondern datengetrieben:
+  Fitness-Plateau > 30 Generationen → nächste Phase.
+- Jede Phase hat eigene Parameter-Priors (die aber auch adaptiv sind).
+
+**Integration existierender adaptiver Systeme:**
+
+| Existierendes System | Meta-Optimizer-Rolle |
+|---|---|
+| Mutationsraten (selbstadaptierend) | Initiale Priors setzen; `rate_mutation_rate` adaptiv justieren; bei Stagnation → temporärer Mutations-Burst |
+| Speziations-PI-Regler | PI-Gains (`Kp`, `Ki`) tunen; Ziel-Spezies-Anzahl adaptiv je nach Problem-Komplexität |
+| Recovery-Eskalation | Strategie-Reihenfolge optimieren; `cooldown` an Problem-Typ anpassen (lange Cooldowns für Stepping-Stone-Probleme) |
+| Online-Tuning (UCB1) | Exploration/Exploitation-Balance (`c`) adaptiv; Tune-Intervall dynamisch |
+| Pop-Size-Adaptation | Modus-Wahl (`linear_decay` vs. `performance_based`); `min_pop`/`max_pop` aus Problem-Profil |
+| Fitness-Shaping | Transformations-Typ und -Aggressivität automatisch |
+| Anytime-Eval | `promotion_frac` adaptiv; `max_evals` basierend auf Noise-Level |
+| Surrogate | `surrogate_frac` und Update-Frequenz automatisch |
+
+**Akzeptanzkriterien Phase 3:**
+
+- UCB1-Bandit konvergiert auf besten kategorialen Wert innerhalb 10 Trials
+  (Unit-Test mit simulierter Reward-Funktion).
+- Bayesian Optimization findet Optimum eines 2D-Testfunktion (Branin) innerhalb
+  30 Iterationen.
+- Successive Halving eliminiert schlechte Features und behält gute.
+- Phasenübergänge erfolgen datengetrieben (nicht hartkodiert).
+- ≥5 existierende adaptive Systeme sind in die Registry integriert.
+- Tests: UCB1-Konvergenz; BayesOpt auf Testfunktion; Successive-Halving;
+  Phasen-Logik; Registry-Integration.
+
+---
+
+#### Phase 4: Cross-Run Knowledge Base
+
+YANE lernt über mehrere Runs hinweg: welche Parameter für welche Problem-Typen
+funktionieren.
+
+**Design: `KnowledgeBase` in `evolution/knowledge_base.py`**
+
+```python
+# Nach jedem Run:
+kb = yane.knowledge_base
+kb.learn(problem_profile, final_params, final_fitness)
+
+# Vor dem nächsten Run:
+suggestion = kb.suggest(problem_profile, top_k=5)
+# → [
+#     {"params": {...}, "expected_fitness": 195.0, "confidence": 0.85},
+#     {"params": {...}, "expected_fitness": 188.0, "confidence": 0.72},
+#     ...
+#   ]
+```
+
+**Algorithmus:**
+
+1. k-NN über Problem-Profile im RunDatabase (Features: task_type_onehot,
+   n_inputs, n_outputs, difficulty, noise_level, temporal_dependency,
+   state_dim_effective).
+2. Distanzmetrik: gewichteter euklidischer Abstand (Gewichte aus
+   historischer Feature-Importance).
+3. Top-K ähnlichste Runs: gewichteter Median ihrer finalen Parameter.
+4. Confidence: invers zur Distanz-Streuung der Top-K (enge Nachbarschaft →
+   hohe Confidence).
+5. Fallback (kalter Start): Default-Parameter basierend auf Task-Typ (z. B.
+   „classification → Lamarck hill-climb, small pop").
+
+**Speicherung:**
+
+- RunDatabase wird um `problem_profile`-Spalte erweitert.
+- Knowledge-Base-Indizes (k-NN-Baum) werden beim Laden vorgecached.
+- Optional: Export/Import der KB für Team-Sharing (JSON).
+
+**Akzeptanzkriterien Phase 4:**
+
+- `suggest()` gibt sinnvolle Vorschläge nach ≥3 ähnlichen Runs.
+- Confidence steigt mit Anzahl ähnlicher Runs in der KB.
+- Kalter Start: Default-Vorschlag basierend auf Task-Typ.
+- k-NN-Distanz verwendet gewichtete Features.
+- Tests: k-NN-Korrektheit; Confidence-Berechnung; Kalter-Start-Fallback;
+  KB-Import/Export.
+
+---
+
+#### Phase 5: Feature Gating & Graceful Degradation
+
+Nicht jedes Research-Feature hilft bei jedem Problem. YANE soll automatisch
+auswählen, welche Features aktiv sind — und schlechte graduell zurückfahren.
+
+**Design: `FeatureGate` in `evolution/feature_gating.py`**
+
+```python
+yane.set_auto_features(max_concurrent=3, test_interval=50)
+```
+
+**Feature-Gating (Successive Halving, Phase 3c):**
+
+1. Alle Research-Features (Attention, LTC, H-NEAT, GRN, Developmental,
+   Curiosity, DARTS, STDP, Neuromodulation, ...) starten inaktiv.
+2. Alle `test_interval` Generationen: wähle ein inaktives Feature via UCB1,
+   aktiviere es für ein Testfenster.
+3. Wenn Feature Fitness-Delta > Schwellwert → behalte aktiv.
+4. Wenn Feature keinen Impact → deaktiviere und merke es als „nicht hilfreich".
+5. `max_concurrent`: nie mehr als N Features gleichzeitig aktiv (Overhead-Schutz).
+
+**Graceful Degradation (statt hartem Deaktivieren):**
+
+```
+Feature mit abnehmendem Impact:
+  Schritt 1: Parameter reduzieren (head_dim 8→4, num_heads 2→1)
+  Schritt 2: Feature-Gewicht in Ensemble/Fitness halbieren
+  Schritt 3: Feature vollständig deaktivieren
+```
+
+- Jedes Feature hat einen `degradation_level` (0.0 = voll aktiv, 1.0 = deaktiviert).
+- `degradation_level` steigt wenn Feature-Impact (gemessen via
+  `ParamSpec.impact_history`) über 30 Generationen unter Schwellwert.
+- Bei `degradation_level > 0.8`: Feature wird aus Registry entfernt
+  (keine Laufzeitkosten mehr).
+- Reaktivierung möglich wenn Umgebung sich ändert (Continual Learning).
+
+**Feature-Impact-Messung:**
+
+- A/B-Vergleich: jede 10. Generation wird ein Kontroll-Genom OHNE das Feature
+  evaluiert. Fitness-Delta = Feature-Impact.
+- Bei Features die nur initial wirken (z. B. gute Initialisierung durch GRN):
+  Impact über erste 20 Generationen messen.
+
+**Akzeptanzkriterien Phase 5:**
+
+- Nach 200 Generationen sind ≤ `max_concurrent` Features aktiv.
+- `degradation_level` steigt bei Features ohne Impact.
+- Deaktivierte Features verursachen keinen messbaren Laufzeit-Overhead
+  (<1% der Trainingszeit).
+- Feature kann reaktiviert werden (z. B. in Continual-Learning-Phase).
+- Tests: Feature-Selektion; Degradation-Mechanik; Impact-Messung;
+  Reaktivierung; Overhead-Freiheit.
+
+---
+
+#### Phase 6: Zero-Config Start — `auto_train()`
+
+Das Endziel. Der Nutzer spezifiziert NUR die Aufgabe — YANE macht den Rest.
+
+**Design:**
+
+```python
+yane = NeuroEvolution()
+
+# Der einzige API-Call:
+result = yane.auto_train(
+    evaluator,
+    target_fitness=None,          # optional, sonst auto-detektiert
+    max_time_seconds=None,        # optional, sonst 30min Default
+    problem_name=None             # optional, für Knowledge-Base-Lookup
+)
+
+# result = AutoTrainResult(
+#     best_genome=...,
+#     final_fitness=...,
+#     total_generations=...,
+#     wall_time=...,
+#     active_features=["attention", "ltc"],
+#     final_params={...},         # alle finalen Parameter
+#     problem_profile=...,
+#     auto_config_report=...      # "Warum diese Konfiguration?"
+# )
+```
+
+**Ablauf `auto_train()`:**
+
+1. **Profile** (Phase 2): `profile_problem(evaluator)` → ProblemProfile.
+2. **Suggest** (Phase 4): `knowledge_base.suggest(problem_profile)` →
+   initiale Parameter + Feature-Auswahl.
+3. **Configure**: `configure()` + alle `set_*()` automatisch basierend auf
+   Suggestion. `max_iterations` aus `max_time_seconds` und Problem-Schwierigkeit
+   geschätzt.
+4. **Train**: `train(evaluator)` mit Meta-Optimizer (Phase 3) der kontinuierlich
+   Parameter justiert und Feature-Gating (Phase 5) das Features an-/abschaltet.
+5. **Learn** (Phase 4): `knowledge_base.learn(problem_profile, final_params,
+   final_fitness)` für zukünftige Runs.
+6. **Return**: `AutoTrainResult` mit vollständiger Dokumentation aller
+   automatischen Entscheidungen.
+
+**`auto_config_report` (Transparenz):**
+
+```python
+print(result.auto_config_report)
+# ─── Auto-Configuration Report ───
+# Problem: CartPole-v1 (rl_continuous, 4→2)
+# Difficulty: 0.72 | Noise: 0.08 | Temporal: 0.83
+#
+# Knowledge Base: 12 similar runs found (confidence: 0.85)
+# Top suggestion: CMA-ES + pop=150, attention=on, ltc=off
+#
+# Phase Transitions:
+#   Gen   0- 80: EXPLORE  (pop=150, features=[attention, hneat])
+#   Gen  80-250: EXPLOIT  (pop=80,  lamarck=cma_es, features=[attention])
+#   Gen 250-350: REFINE   (pop=50,  lamarck=cma_es, surrogate=on)
+#   Gen 350-400: CONVERGE (pop=30,  early_stopping)
+#
+# Final active features: attention (impact: +12.3%)
+# Degraded features: hneat (no impact detected)
+# Total wall time: 4m32s | Generations: 400 | Best fitness: 500.0
+```
+
+**Fallback-Strategie (wenn KB kalt):**
+
+- Keine ähnlichen Runs in KB → konservative Defaults:
+  - Lamarck: hill-climb, 3 steps
+  - Pop: 100, linear_decay
+  - Keine Research-Features initial aktiv
+  - Meta-Optimizer exploriert aggressiver (höheres `c` im UCB1)
+- Nach diesem ersten Run → KB hat ersten Eintrag → nächster Run profitiert.
+
+**Akzeptanzkriterien Phase 6:**
+
+- `auto_train(evaluator)` läuft OHNE jegliche `set_*()`-Aufrufe.
+- `AutoTrainResult` enthält alle erforderlichen Metadaten.
+- `auto_config_report` dokumentiert jede automatische Entscheidung
+  nachvollziehbar.
+- Bei identischem Seed + KB-State: reproduzierbare Ergebnisse.
+- Ohne KB (kalter Start): konservative Defaults, Training funktioniert.
+- Mit KB (≥3 ähnliche Runs): Parameter-Vorschlag weicht <20% vom Optimum ab.
+- Tests: End-to-End `auto_train()` auf XOR und CartPole; KB-Integration;
+  Reproduzierbarkeit; Kalter-Start-Fallback; Report-Generierung.
+
+---
+
+#### Implementierungsreihenfolge
+
+1. **Phase 1 (Unified Param Registry)**: Fundament für alles weitere.
+   Betrifft `core/` und `neuro_evolution.py`. ~300 LOC + Tests.
+2. **Phase 2 (Problem Profiler)**: Unabhängig, nur `evolution/`.
+   ~400 LOC + Tests.
+3. **Phase 4 (Knowledge Base)**: Baut auf RunDatabase (existiert) und
+   Problem Profiler auf. ~500 LOC + Tests.
+4. **Phase 3 (Meta-Optimizer)**: Baut auf Registry + Profiler + KB auf.
+   Integration in `train()`. ~800 LOC + Tests.
+5. **Phase 5 (Feature Gating)**: Baut auf Meta-Optimizer auf.
+   ~400 LOC + Tests.
+6. **Phase 6 (auto_train)**: Integration aller Phasen.
+   ~300 LOC + Tests.
+
+Geschätzte Gesamtgröße: ~2700 LOC + ~80 Tests.
+
+---
+
+#### Bekannte Probleme & Gegenmassnahmen
+
+Diese Probleme wurden in der Design-Phase identifiziert und werden aktiv
+adressiert — nicht als „das machen wir später", sondern als integrale
+Bestandteile der Implementierung.
+
+---
+
+#### Problem 1: Credit Assignment — Wer war's?
+
+**Szenario:** MetaOptimizer ändert gleichzeitig `lamarck.mode=cma_es`,
+`pop_size=120` und aktiviert `attention`. Fitness springt um +15%. Welche
+Änderung war verantwortlich?
+
+Ohne korrekte Attribution lernt der MetaOptimizer falsche Kausalitäten.
+
+**Gegenmassnahme: Shapley-Approximierte Counterfactuals**
+
+```python
+# Alle attribution_interval (Default: 100 Gen): Counterfactual-Rollouts
+#   Group A: alle Änderungen zusammen
+#   Group B: nur lamarck=cma_es
+#   Group C: nur pop=120
+#   Group D: nur attention=on
+#   Group E: keine Änderung (Baseline)
+# → Attribution via Shapley-Value-Approximation pro Parameter
+
+# Kostenbegrenzung:
+# - Nur bei |Fitness-Delta| > 2σ der Baseline-Varianz
+# - Nur wenn Overhead-Budget es erlaubt (<5% Gesamtzeit)
+# - Surrogate-Modell für günstige Counterfactual-Vorhersage (keine echten Evals)
+```
+
+**Akzeptanzkriterien:** Shapley-Werte summieren zum Gesamt-Delta (±5%);
+Surrogate-Counterfactuals korrelieren mit echten (Pearson > 0.7).
+
+---
+
+#### Problem 2: Parameter-Interaktionen
+
+**Szenario:** `lamarck=cma_es` bringt +10% wenn Population klein, −5% wenn
+gross. UCB1 und univariate Bayesian Optimization modellieren keine
+Interaktionen — lernen falschen Durchschnitt.
+
+**Gegenmassnahme: Multivariate Bayesian Optimization mit ARD-Kernel**
+
+```python
+# Gaussian Process mit Matern-5/2-Kernel + Automatic Relevance Determination
+# Modelliert: f(param1, param2, ..., paramN) → expected_fitness
+# ARD erkennt automatisch irrelevante Parameter (hohe Lengthscale).
+
+# Skalierung: GP mit 30 Parametern ist O(n³). Lösung: Additive GP
+# f(x₁,...,x₃₀) ≈ f₁(x₁,x₂) + f₂(x₃,x₄,x₅) + ...  (linear skalierend)
+# Nur Top-10 einflussreichste Parameter aktiv modellieren (via ARD-Selektion)
+```
+
+**Akzeptanzkriterien:** Additive GP findet Interaktion in synthetischer
+Testfunktion (z. B. `f(x,y) = x*y`); ARD identifiziert irrelevante Parameter
+(Lengthscale > 10× Median).
+
+---
+
+#### Problem 3: Delayed Rewards & Non-Stationarität
+
+**Szenario:** MetaOptimizer erhöht `pop_size=50→200` in Gen 10. Wirkung zeigt
+sich erst in Gen 50. Aber in Gen 25 wurde `pop_size` schon wieder geändert.
+Der optimale Parameterwert ändert sich zudem ÜBER die Trainingszeit.
+
+**Gegenmassnahme: Eligibility Traces + Schedule-Optimierung**
+
+```python
+# Eligibility Trace über Parameter-Änderungen:
+#   trace[t] = trace[t-1] * lambda + delta_fitness[t]
+#   lambda=0.9 → Reward über ~10 Gen "zurückpropagiert"
+
+# Zusätzlich: MetaOptimizer optimiert SCHEDULES, nicht Punktwerte
+# param = schedule(t, problem_phase)
+# Schedule-Typen: constant, linear_decay, exponential_decay, step, cosine
+# Nur 2-3 Schedule-Parameter statt einem Wert pro Generation
+```
+
+**Akzeptanzkriterien:** Eligibility-Trace korreliert Parameter-Änderung mit
+verzögertem Fitness-Delta (Test: künstliche Verzögerung von 10 Gen);
+Schedule-basierte Optimierung findet besseres Optimum als punktbasiert im
+nicht-stationären Testfall.
+
+---
+
+#### Problem 4: Wer tuned den Tuner?
+
+**Szenario:** MetaOptimizer hat eigene Hyperparameter (UCB1-`c`, GP-Kernel,
+Acquisition-Funktion, Halving-Eta, Attributions-Intervall). Unendlicher Regress.
+
+**Gegenmassnahme: Robuste Defaults + Selbst-Überwachung (Self-Throttling)**
+
+```python
+META_DEFAULTS = {
+    "ucb1_c": 2.0,               # Standard, gut erforscht
+    "gp_kernel": "matern52",     # Robust für Bayesian Opt
+    "acquisition": "ei",         # Expected Improvement
+    "halving_eta": 3,            # Standard Successive Halving
+    "attribution_interval": 100, # Nur alle 100 Gen
+    "max_overhead_pct": 5.0,     # Max 5% Overhead (Self-Throttling)
+}
+
+# Self-Throttling:
+# - Overhead kontinuierlich messen
+# - Bei >5%: Intervall erhöhen, Attribution aussetzen, GP vereinfachen
+# - Bei <2%: aggressiver optimieren (falls Fitness stagniert)
+# → "conservative by default, self-regulating"
+```
+
+**Akzeptanzkriterien:** Overhead bleibt unter `max_overhead_pct`; bei
+Overhead-Überschreitung greift Throttling innerhalb von 2 Generationen.
+
+---
+
+#### Problem 5: Cold Start & KB-Drift
+
+**Szenario:** Erster Run auf neuem Problem-Typ → Knowledge Base leer.
+Oder: KB-Einträge aus YANE 0.1.x sind für 0.2.x (neue Features) irreführend.
+
+**Gegenmassnahme: Tiered Fallback + KB-Versioning**
+
+```python
+# Drei Fallback-Ebenen:
+# 1. KB: ähnliche Runs (confidence > 0.7) → KB-Suggestion
+# 2. Heuristiken: Task-Typ-basierte Defaults
+#    "classification → Lamarck hill-climb, pop=50, no memory"
+# 3. Universelle Defaults: konservativ, funktionieren für alles
+#    "Lamarck=off, pop=100, linear_decay, keine Research-Features"
+
+# KB-Versioning:
+kb_entry = {
+    "yane_version": "0.2.0",
+    "compatibility_hash": "a3f2...",  # Hash relevanter Code-Module
+    "params": {...}, "fitness": 195.0
+}
+# Neuere Einträge höher gewichtet (exponentieller Decay)
+# Major-Version-Sprung → alte Einträge nur als "weak prior"
+```
+
+**Akzeptanzkriterien:** Kalter Start wählt Ebene-3-Defaults; nach 3 ähnlichen
+Runs wechselt Suggestion zu Ebene 1; KB-Versioning blockt inkompatible
+Einträge.
+
+---
+
+#### Problem 6: Overhead-Kosten
+
+**Szenario:** Bayesian Optimization mit 30 Parametern, Counterfactuals,
+Profiling, KB-Abfragen → 10 Minuten Overhead bei 30-Minuten-Training.
+
+**Gegenmassnahme: Overhead-Budget mit Lazy Evaluation**
+
+```python
+class OverheadBudget:
+    def __init__(self, max_pct=5.0):
+        self.max_pct = max_pct
+        self.total_eval_time = 0.0
+        self.meta_time = 0.0
+
+    def can_run(self, cost_estimate):
+        projected = (self.meta_time + cost_estimate) / max(self.total_eval_time, 1.0)
+        return projected < self.max_pct
+
+# Konsequenzen:
+# - Counterfactuals nur bei Budget
+# - GP mit reduziertem Parameter-Set (Top-10 statt Top-30)
+# - KB-Update asynchron (nach Training)
+# - Profiling auf max. 2% der geschätzten Trainingszeit begrenzt
+# - MetaOptimizer-Operationen sind priorisiert:
+#   1. (immer): Phasen-Erkennung, Fitness-Monitoring
+#   2. (oft):   UCB1 für diskrete Parameter (billig)
+#   3. (selten): GP-Optimierung, Counterfactuals, Attribution (teuer)
+```
+
+**Akzeptanzkriterien:** Overhead-Budget wird eingehalten; teure Operationen
+werden ausgesetzt wenn Budget knapp; billige Operationen laufen immer.
+
+---
+
+#### Problem 7: Subsidiarität — Wer optimiert was?
+
+**Szenario:** `mutation.shift_rate` ist evolvierbar. MetaOptimizer will sie
+anpassen. Beide Regler können gegeneinander arbeiten.
+
+**Gegenmassnahme: Hierarchische Regelung mit klaren Verantwortlichkeiten**
+
+```python
+# Prinzip: MetaOptimizer setzt ZIELBEREICHE, nicht Punktwerte.
+# Die untere Ebene optimiert innerhalb ihres Bereichs.
+
+# Konkret für Mutationsraten:
+meta_optimizer.set_param("mutation.global_pressure", 1.5)
+# → Alle Raten werden mit 1.5× skaliert (phasen-abhängig)
+
+meta_optimizer.set_param("mutation.shift_rate_range", (0.01, 0.5))
+# → Evolution darf shift_rate ∈ [0.01, 0.5] selbst optimieren
+
+# rate_mutation_rate (wie schnell Raten mutieren):
+# NICHT evolvierbar, sondern von MetaOptimizer kontrolliert
+meta_optimizer.set_param("mutation.rate_mutation_rate", 0.05)
+```
+
+**Verantwortlichkeitsmatrix (Subsidiaritätsprinzip):**
+
+| Parameter-Gruppe | Evolution (pro Genom) | MetaOptimizer (global) |
+|---|---|---|
+| Gewichte, Topologie, Bias | **Optimiert** | — |
+| Aktivierungsfunktionen | **Optimiert** | — |
+| `mutation.*_rate` (innerhalb Range) | **Optimiert** | Setzt Range |
+| `mutation.global_pressure` | — | **Optimiert** (phasen-abhängig) |
+| `mutation.rate_mutation_rate` | — | **Optimiert** (nicht evolvierbar) |
+| `pop_size` | — | **Optimiert** |
+| `lamarck.mode`, `lamarck.n_steps` | — | **Optimiert** |
+| `novelty.weight` | — | **Optimiert** |
+| `species.target_n` | — | **Optimiert** |
+| `recovery.cooldown`, Strategie-Reihenfolge | — | **Optimiert** |
+| `feature.enabled` | — | **Optimiert** |
+| `attention.head_dim` | — | **Optimiert** |
+| Alle P2-Parameter | — | **Optimiert** |
+
+**Begründung:**
+- Evolution ist gut für: genom-lokale, diversitätsfördernde, langsam
+  konvergierende Parameter (Gewichte, Topologie).
+- MetaOptimizer ist gut für: globale, phasen-abhängige, schnell adaptierende
+  Parameter (Pop-Size, Lamarck-Mode, Feature-Auswahl).
+- Mutationsraten sind der Grenzfall: Raten-NIVEAU ist global (MetaOptimizer),
+  Raten-VERTEILUNG ist genom-lokal (Evolution). `rate_mutation_rate` wird
+  komplett an MetaOptimizer übergeben — das war vorher evolvierbar, aber die
+  Evolution braucht zu lange um das effektiv zu optimieren.
+
+**Akzeptanzkriterien:** `mutation.global_pressure` skaliert alle Raten;
+`mutation.*_rate` bleibt innerhalb des gesetzten Ranges; `rate_mutation_rate`
+ist nicht mehr evolvierbar; MetaOptimizer-Änderungen und Evolution
+konfligieren nicht (Test: Monitor über 200 Gen).
+
+---
+
+#### Problem 8: Problem-Profil-Fehler
+
+**Szenario:** ProblemProfiler klassifiziert Task falsch → KB schlägt
+unpassende Parameter vor → Training scheitert.
+
+**Gegenmassnahme: Multi-Method-Profiling + Confidence-gewichtete KB-Suggestion**
+
+```python
+@dataclass
+class ProblemProfile:
+    task_type: str
+    task_type_confidence: float     # 0.85 = 85% sicher
+    alternative_types: list[str]    # ["rl_continuous"] bei Unsicherheit
+
+# Drei Profiling-Methoden (Ensemble):
+# 1. Heuristic: Input/Output/Action-Dimensionen, Reward-Range
+# 2. Statistical: Fitness-Verteilung über Random-Genome
+# 3. Behavioral: State-Transition-Analyse, Autokorrelation
+# → Majority Vote oder gewichteter Average
+
+# KB-Suggestion nutzt Confidence:
+# confidence > 0.9 → KB-Suggestion mit geringer Exploration (c=1.0)
+# confidence < 0.6 → KB-Suggestion mit hoher Exploration (c=3.0)
+#                    + alternative_types als Secondary-Suggestions testen
+```
+
+**Akzeptanzkriterien:** Profiling-Confidence wird mitgeschrieben; niedrige
+Confidence führt zu breiterer Exploration; Task-Typ-Erkennung ≥90% korrekt
+über alle Gym-Standard-Umgebungen.
+
+---
+
+#### Problem 9: Reproduzierbarkeit
+
+**Szenario:** `auto_train()` trifft Dutzende stochastische Entscheidungen.
+Wie reproduziert man einen erfolgreichen Run?
+
+**Gegenmassnahme: Vollständige Seed-Determination + Meta-State-Snapshot**
+
+```python
+result = yane.auto_train(evaluator, seed=42)
+
+# seed=42 determiniert ALLES:
+# - ProblemProfiler (Warmup-Genome, State-Sampling)
+# - KB-Suggestion (k-NN-Tiebreaking)
+# - MetaOptimizer (UCB1, BayesOpt-Init, Halving)
+# - Feature-Gating (Test-Reihenfolge)
+# - ALLE internen random-Entscheidungen
+
+# Result enthält vollständigen Meta-State:
+result.meta_state  # → Dict mit allen MetaOptimizer-Interna
+
+# Bitgenaue Reproduktion:
+yane.auto_train(evaluator, replay_from=result.meta_state)
+```
+
+**Akzeptanzkriterien:** Zwei `auto_train()`-Aufrufe mit gleichem Seed
+produzieren identische Ergebnisse; `replay_from` reproduziert ohne
+`evaluator`-Aufrufe (nur Config); Meta-State ist serialisierbar (JSON).
+
+---
+
+#### Problem 10: User Trust & Explainability
+
+**Szenario:** `auto_train()` deaktiviert Attention. User: „Bug?". Der
+`auto_config_report` ist Post-hoc — zu spät wenn das Training noch läuft.
+
+**Gegenmassnahme: Live-Explainability + Override-API**
+
+```python
+# Live-Monitoring (GUI + API):
+yane.auto_train(evaluator, interactive=True)
+
+# GUI/API zeigt live:
+#   "Gen 100: Attention impact = -3.2% → degrading (level 0.3)"
+#   "Gen 150: Attention degraded (level 0.7) — no impact for 50 gen"
+#   "Gen 200: Attention deactivated"
+#
+# User-Override (jederzeit):
+yane.meta_override("attention.enabled", True)
+#   → "User override: attention re-enabled. MetaOptimizer will respect."
+#
+# Lock/Unlock:
+yane.meta_lock("lamarck.mode")    # „Lamarck bleibt wie es ist"
+yane.meta_unlock("pop_size")      # „Pop-Size darf wieder optimiert werden"
+
+# Erklärungs-API:
+explanation = yane.explain_decision("attention.disabled")
+# → {
+#     "decision": "disabled",
+#     "generation": 200,
+#     "reason": "impact_below_threshold",
+#     "impact_history": [0.03, -0.01, 0.005, ...],
+#     "threshold": 0.01,
+#     "confidence": 0.92,
+#     "alternative_explanation": "noise (fitness_variance=2.1%)"
+#   }
+```
+
+**Akzeptanzkriterien:** `explain_decision()` gibt nachvollziehbare Begründung;
+Override wird respektiert (MetaOptimizer fasst Parameter nicht mehr an);
+Lock/Unlock funktioniert pro Parameter; Live-GUI zeigt Degradations-Fortschritt.
+
+---
+
+#### Subsidiaritätsprinzip: Zusammenfassung
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Wer optimiert was?                          │
+│                                                               │
+│  Evolution (pro Genom)       │  MetaOptimizer (global)        │
+│  ───────────────────────     │  ──────────────────────        │
+│  Gewichte                    │  pop_size                      │
+│  Topologie (add/remove)      │  lamarck.mode, lamarck.n_steps │
+│  Bias                        │  novelty.weight                │
+│  Aktivierungsfunktionen      │  species.target_n              │
+│  persist_value               │  recovery.*                    │
+│  input_scale                 │  anytime.promotion_frac        │
+│  mutation.*_rate (lokal)     │  surrogate.frac                │
+│                               │  mutation.global_pressure      │
+│  → Langsam, diversität-      │  mutation.rate_mutation_rate    │
+│    fördernd, genom-spezifisch│  feature.* (alle P2)           │
+│                               │                                │
+│                               │  → Schnell, phasen-abhängig,  │
+│                               │    global, datengetrieben      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Auswirkungen auf bestehende Tasks
+
+**Dieser Meta-Task ändert die Implementierung ALLER anderen offenen Tasks:**
+
+- Jedes neue P2-Feature registriert seine Parameter in der `ParamRegistry`
+  statt eigene `set_*()`-Methoden mit manuellen Defaults zu verwenden.
+- Akzeptanzkriterien für P2-Features werden ergänzt um:
+  „Parameter sind in der ParamRegistry registriert und via Meta-Optimizer
+  auto-tuning-fähig."
+- `set_*()`-Methoden bleiben als explizite Override-API erhalten, aber
+  `auto_train()` nutzt sie nicht.
+
+**Prioritätsverschiebung:** Dieser P0-Task sollte VOR den meisten P2-Tasks
+implementiert werden, weil er das Fundament für deren Auto-Tuning-Integration
+liefert.
+
+---
+
+#### Zusammenfassung: Was YANE nach diesem Task kann
+
+```python
+# VORHER (manuelles Tuning, raten, frustrieren):
+yane = NeuroEvolution()
+yane.configure(n_inputs=4, n_outputs=2, max_nodes=50, max_connections=200)
+yane.set_min_fitness(195.0)
+yane.set_max_iterations(50000)
+yane.set_target_species(5)
+yane.set_lamarck(mode="cma_es", n_steps=5)
+yane.set_anytime_eval(enabled=True, promotion_frac=0.3)
+yane.set_surrogate(enabled=True, surrogate_frac=0.5)
+yane.set_attention(enabled=True, head_dim=4)  # <- geraten!
+yane.set_ltc(enabled=False)                   # <- geraten!
+yane.set_adaptive_recovery(enabled=True, ...)
+# ... 15 weitere set_*()-Aufrufe ...
+yane.train(evaluator)
+
+# NACHHER (zero-config):
+yane = NeuroEvolution()
+result = yane.auto_train(evaluator)
+print(result.auto_config_report)
+```
