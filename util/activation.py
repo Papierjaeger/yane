@@ -144,8 +144,15 @@ def _get_batch_activation_fns():
     def _b_gaussian(x):   xc = _np.clip(x, -_GC, _GC); return _np.exp(-(xc * xc))
     def _b_cube(x):       xc = _np.clip(x, -_CU, _CU); return xc * xc * xc
     def _b_cosine(x):     return _np.cos(x)
-
-    return {
+    def _b_gelu(x):
+        """GELU via tanh approximation (vectorised)."""
+        sqrt_2pi = _np.sqrt(2.0 / _np.pi)
+        return 0.5 * x * (1.0 + _np.tanh(sqrt_2pi * (x + 0.044715 * x ** 3)))
+    def _b_mish(x):
+        """Mish: x * tanh(softplus(x))."""
+        sp = _np.where(x > 20.0, x, _np.log1p(_np.exp(_np.clip(x, -500.0, 20.0))))
+        return x * _np.tanh(sp)
+    base = {
         ActivationType.LINEAR:     _b_linear,
         ActivationType.SIGMOID:    _b_sigmoid,
         ActivationType.TANH:       _b_tanh,
@@ -162,6 +169,10 @@ def _get_batch_activation_fns():
         ActivationType.CUBE:       _b_cube,
         ActivationType.COSINE:     _b_cosine,
     }
+    base["gelu"] = _b_gelu
+    base["mish"] = _b_mish
+    base["silu"] = _b_swish  # SiLU is an alias for Swish (x * sigmoid(x))
+    return base
 
 
 _BATCH_FNS: dict | None = None
@@ -173,3 +184,89 @@ def get_batch_activation_fns() -> dict:
     if _BATCH_FNS is None:
         _BATCH_FNS = _get_batch_activation_fns()
     return _BATCH_FNS
+
+
+# ---------------------------------------------------------------------------
+# Custom activation registry (runtime-extensible)
+# ---------------------------------------------------------------------------
+
+CUSTOM_ACTIVATION_FNS: dict[str, Callable[[float], float]] = {}
+
+
+def register_activation(name: str, fn: Callable[[float], float]) -> None:
+    """Register a custom activation function available at runtime.
+
+    *name* must not collide with a built-in ``ActivationType`` (case-insensitive).
+    *fn* should be a named module-level function so that it can be pickled.
+
+    Registered activations are stored in ``CUSTOM_ACTIVATION_FNS`` and are
+    automatically discovered by ``resolve_activation_fn()`` and
+    ``list_activations()``.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("activation name must be a non-empty string")
+    name = name.strip()
+    _builtin_values = {at.value for at in ActivationType}
+    if name.lower() in _builtin_values:
+        raise ValueError(
+            f"activation {name!r} shadows built-in ActivationType.{name.lower()}"
+        )
+    if name in CUSTOM_ACTIVATION_FNS:
+        raise ValueError(f"activation {name!r} is already registered")
+    CUSTOM_ACTIVATION_FNS[name] = fn
+    global _BATCH_FNS
+    _BATCH_FNS = None  # invalidate cache so next forward_batch() picks up the new activation
+
+
+def resolve_activation_fn(key: ActivationType | str) -> Callable[[float], float]:
+    """Resolve an ``ActivationType`` or custom name to its scalar function."""
+    if isinstance(key, ActivationType):
+        return ACTIVATION_FNS[key]
+    if key in CUSTOM_ACTIVATION_FNS:
+        return CUSTOM_ACTIVATION_FNS[key]
+    raise KeyError(f"unknown activation: {key!r}")
+
+
+def list_activations() -> list[str]:
+    """Return all available activation names (built-in + custom)."""
+    return [at.value for at in ActivationType] + list(CUSTOM_ACTIVATION_FNS.keys())
+
+
+# ---------------------------------------------------------------------------
+# GELU – Gaussian Error Linear Unit
+# ---------------------------------------------------------------------------
+
+def _gelu(v: float) -> float:
+    """Gaussian Error Linear Unit: x * Φ(x) via tanh approximation."""
+    if v < -5.0:
+        return 0.0
+    if v > 5.0:
+        return v
+    return 0.5 * v * (1.0 + math.tanh(
+        math.sqrt(2.0 / math.pi) * (v + 0.044715 * v * v * v)
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Mish – Self Regularized Non-Monotonic Activation
+# ---------------------------------------------------------------------------
+
+def _mish(v: float) -> float:
+    """Mish: x * tanh(softplus(x))."""
+    sp = v if v > 20.0 else (math.log1p(math.exp(v)) if v > -500.0 else 0.0)
+    return v * math.tanh(sp)
+
+
+# ---------------------------------------------------------------------------
+# SiLU (also known as Swish) – provided as a discoverable alias
+# ---------------------------------------------------------------------------
+
+_silu = _swish  # SiLU and Swish are the same function: x * sigmoid(x)
+
+
+# Register GELU, Mish, SiLU as always-available built-in extras.
+# They are stored in CUSTOM_ACTIVATION_FNS (not in the ACTIVATION_FNS dict)
+# so they don't appear in the ActivationType enum but are still resolvable.
+register_activation("gelu", _gelu)
+register_activation("mish", _mish)
+register_activation("silu", _silu)

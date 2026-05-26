@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+from yane.util.activation import ActivationType
 
 if TYPE_CHECKING:
     from yane.core.genome import Genome
@@ -79,7 +80,10 @@ def export_matrix_genome(genome: "Genome") -> MatrixGenome:
             if conn.enabled:
                 weights[src_i, node_to_idx[conn.target]] = conn.weight
     bias = np.array([node.bias for node in nodes], dtype=np.float64)
-    activation = tuple(node.activation.value for node in nodes)
+    activation = tuple(
+        node.activation.value if isinstance(node.activation, ActivationType) else node.activation
+        for node in nodes
+    )
     return MatrixGenome(
         weights=weights,
         bias=bias,

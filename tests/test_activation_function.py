@@ -96,5 +96,205 @@ class TestActivationFunction(unittest.TestCase):
                     f"{act_type.value}({v}) produced Inf")
 
 
+# ---------------------------------------------------------------------------
+# Custom / registrierbare Aktivierungsfunktionen
+# ---------------------------------------------------------------------------
+
+class TestCustomActivationRegistry(unittest.TestCase):
+
+    def test_register_and_resolve_custom(self):
+        from yane.util.activation import (
+            register_activation, resolve_activation_fn, list_activations,
+            CUSTOM_ACTIVATION_FNS,
+        )
+        # Use a named function so pickle works.
+        def _square_plus_one(v: float) -> float:
+            return v * v + 1.0
+        register_activation("sq1", _square_plus_one)
+        try:
+            fn = resolve_activation_fn("sq1")
+            self.assertAlmostEqual(fn(3.0), 10.0)
+            self.assertIn("sq1", list_activations())
+        finally:
+            CUSTOM_ACTIVATION_FNS.pop("sq1", None)
+
+    def test_register_duplicate_raises(self):
+        from yane.util.activation import register_activation, CUSTOM_ACTIVATION_FNS
+        def _dummy(v): return v
+        register_activation("dup_test", _dummy)
+        try:
+            with self.assertRaises(ValueError):
+                register_activation("dup_test", _dummy)
+        finally:
+            CUSTOM_ACTIVATION_FNS.pop("dup_test", None)
+
+    def test_register_shadows_builtin_raises(self):
+        from yane.util.activation import register_activation
+        def _dummy(v): return v
+        with self.assertRaises(ValueError):
+            register_activation("sigmoid", _dummy)
+
+    def test_register_empty_name_raises(self):
+        from yane.util.activation import register_activation
+        def _dummy(v): return v
+        with self.assertRaises(ValueError):
+            register_activation("", _dummy)
+
+    def test_node_activation_setter_accepts_string(self):
+        from yane.core.node import Node, NodeType
+        n = Node(NodeType.HIDDEN, 0)
+        n.activation = "gelu"
+        self.assertEqual(n.activation, "gelu")
+        # Forward pass should produce correct GELU output
+        result = n._activate_fn(0.0)
+        self.assertAlmostEqual(result, 0.0)
+        result = n._activate_fn(1.0)
+        self.assertGreater(result, 0.8)  # GELU(1) ≈ 0.841
+
+    def test_node_activation_setter_still_accepts_enum(self):
+        from yane.core.node import Node, NodeType
+        n = Node(NodeType.HIDDEN, 0)
+        n.activation = ActivationType.RELU
+        self.assertIs(n.activation, ActivationType.RELU)
+        self.assertAlmostEqual(n._activate_fn(-1.0), 0.0)
+        self.assertAlmostEqual(n._activate_fn(2.0), 2.0)
+
+    def test_custom_activation_via_neuroevolution_api(self):
+        from yane import NeuroEvolution
+        def _my_act(v: float) -> float:
+            return v * 2.0
+        NeuroEvolution.register_activation("my_double", _my_act)
+        from yane.util.activation import resolve_activation_fn, CUSTOM_ACTIVATION_FNS
+        try:
+            fn = resolve_activation_fn("my_double")
+            self.assertAlmostEqual(fn(3.0), 6.0)
+        finally:
+            CUSTOM_ACTIVATION_FNS.pop("my_double", None)
+
+    def test_custom_activation_forward_via_genome(self):
+        """Genome forward pass works with custom activation on a node."""
+        from yane.util.activation import register_activation, CUSTOM_ACTIVATION_FNS
+        from yane import NeuroEvolution
+        def _double_it(v: float) -> float:
+            return v * 2.0
+        register_activation("double_it", _double_it)
+        try:
+            yane = NeuroEvolution()
+            yane.configure(1, 1)
+            g = yane.next_genome()
+            # Set output node to custom activation
+            g.output_nodes[0].activation = "double_it"
+            # Add a connection from input to output
+            from yane.core.connection import Connection
+            innov = yane._tracker.get_connection(
+                g.input_nodes[0].innovation, g.output_nodes[0].innovation
+            )
+            conn = Connection(g.output_nodes[0], innovation=innov)
+            conn.weight = 3.0
+            g.input_nodes[0].connections.append(conn)
+            g._invalidate_topology()
+            result = g.forward([2.0])
+            # input=2.0 * weight=3.0 = 6.0, then double_it → 12.0
+            self.assertAlmostEqual(result[0], 12.0, places=10)
+        finally:
+            CUSTOM_ACTIVATION_FNS.pop("double_it", None)
+
+    def test_custom_activation_forward_batch_via_genome(self):
+        """Genome batch forward falls back to scalar custom activations."""
+        from yane.util.activation import register_activation, CUSTOM_ACTIVATION_FNS
+        from yane import NeuroEvolution
+        from yane.core.connection import Connection
+
+        def _triple_it(v: float) -> float:
+            return v * 3.0
+
+        register_activation("triple_it", _triple_it)
+        try:
+            yane = NeuroEvolution()
+            yane.configure(1, 1)
+            g = yane.next_genome()
+            g.output_nodes[0].activation = "triple_it"
+            innov = yane._tracker.get_connection(
+                g.input_nodes[0].innovation, g.output_nodes[0].innovation
+            )
+            conn = Connection(g.output_nodes[0], innovation=innov)
+            conn.weight = 2.0
+            g.input_nodes[0].connections.append(conn)
+            g._invalidate_topology()
+            self.assertEqual(g.forward_batch([[1.0], [2.0]]), [[6.0], [12.0]])
+        finally:
+            CUSTOM_ACTIVATION_FNS.pop("triple_it", None)
+
+    def test_custom_activation_mutation_does_not_change(self):
+        """Custom activation should not be mutated to a random builtin."""
+        from yane.util.activation import register_activation, CUSTOM_ACTIVATION_FNS
+        from yane.core.node import Node, NodeType
+        def _custom(v): return v
+        register_activation("frozen_act", _custom)
+        try:
+            n = Node(NodeType.HIDDEN, 0)
+            n.activation = "frozen_act"
+            for _ in range(100):
+                n.mutate()
+                self.assertEqual(n.activation, "frozen_act",
+                    "Custom activation changed after mutation")
+        finally:
+            CUSTOM_ACTIVATION_FNS.pop("frozen_act", None)
+
+    def test_gelu_values(self):
+        from yane.util.activation import _gelu
+        self.assertAlmostEqual(_gelu(0.0), 0.0)
+        self.assertAlmostEqual(_gelu(1.0), 0.841192, places=4)
+        self.assertAlmostEqual(_gelu(-1.0), -0.158808, places=4)
+        # Extreme values
+        self.assertAlmostEqual(_gelu(10.0), 10.0, places=3)
+        self.assertAlmostEqual(_gelu(-10.0), 0.0)
+
+    def test_mish_values(self):
+        from yane.util.activation import _mish
+        self.assertAlmostEqual(_mish(0.0), 0.0)
+        self.assertAlmostEqual(_mish(1.0), 0.865098, places=4)
+        self.assertAlmostEqual(_mish(-1.0), -0.303401, places=4)
+        # Large positive: mish(x) → x
+        self.assertAlmostEqual(_mish(20.0), 20.0, places=3)
+
+    def test_silu_values(self):
+        from yane.util.activation import _silu
+        self.assertAlmostEqual(_silu(0.0), 0.0)
+        self.assertAlmostEqual(_silu(1.0), 0.731058, places=4)
+        self.assertAlmostEqual(_silu(-1.0), -0.268941, places=4)
+
+    def test_gelu_mish_silu_in_list_activations(self):
+        from yane.util.activation import list_activations
+        acts = list_activations()
+        self.assertIn("gelu", acts)
+        self.assertIn("mish", acts)
+        self.assertIn("silu", acts)
+
+    def test_custom_activation_pickle_roundtrip(self):
+        """Genome with custom activation survives pickle round-trip."""
+        import pickle
+        from yane.util.activation import (
+            register_activation, CUSTOM_ACTIVATION_FNS,
+        )
+        from yane import NeuroEvolution
+
+        # Use GELU (already registered at module level, so pickle-safe)
+        try:
+            yane = NeuroEvolution()
+            yane.configure(1, 1)
+            g = yane.next_genome()
+            g.output_nodes[0].activation = "gelu"
+            # Pickle round-trip
+            data = pickle.dumps(g)
+            g2 = pickle.loads(data)
+            self.assertEqual(g2.output_nodes[0].activation, "gelu")
+            # Forward should work after unpickling
+            out = g2.output_nodes[0]._activate_fn(1.0)
+            self.assertAlmostEqual(out, 0.841192, places=4)
+        finally:
+            pass  # gelu is always-registered, no cleanup needed
+
+
 if __name__ == "__main__":
     unittest.main()

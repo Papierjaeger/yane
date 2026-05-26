@@ -4,7 +4,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from yane.evolution.mutation import Mutation
-from yane.util.activation import ActivationType, ACTIVATION_FNS
+from yane.util.activation import ActivationType, resolve_activation_fn
 
 if TYPE_CHECKING:
     from yane.core.connection import Connection
@@ -55,8 +55,8 @@ class Node:
         self.value: float = 0.0
         self.bias: float = 0.0
         self.innovation: int = innovation   # global unique ID; -1 = untracked legacy
-        self._activation = ActivationType.SIGMOID
-        self._activate_fn = ACTIVATION_FNS[ActivationType.SIGMOID]
+        self._activation: ActivationType | str = ActivationType.SIGMOID
+        self._activate_fn = resolve_activation_fn(ActivationType.SIGMOID)
         # Use slot directly here to avoid property overhead during init.
         object.__setattr__(self, '_persist_value', False)
         # Pre-computed: True iff this node must keep its activated value after firing.
@@ -102,6 +102,8 @@ class Node:
     def __getstate__(self):
         state = {}
         for slot in self.__slots__:
+            if slot == '_activate_fn':
+                continue  # reconstructed in __setstate__
             state[slot] = getattr(self, slot)
         # Expose as 'persist_value' (not '_persist_value') so old unpickling code
         # and external tooling always sees the public name.
@@ -116,7 +118,7 @@ class Node:
             pv = state.pop('_persist_value', False)
 
         for slot in self.__slots__:
-            if slot in ('_persist_value', '_retain_value'):
+            if slot in ('_persist_value', '_retain_value', '_activate_fn'):
                 continue
             default = self._SLOT_DEFAULTS.get(slot)
             val = state.get(slot, default)
@@ -127,16 +129,21 @@ class Node:
         object.__setattr__(self, '_persist_value', pv)
         object.__setattr__(self, '_retain_value', (self.type is NodeType.OUTPUT) or pv)
 
+        # Rebuild _activate_fn from _activation so custom functions work after
+        # unpickling (pickle cannot serialise dynamically registered callables).
+        act = self._activation
+        object.__setattr__(self, '_activate_fn', resolve_activation_fn(act))
+
     # -- Activation property --------------------------------------------------
 
     @property
-    def activation(self) -> ActivationType:
+    def activation(self) -> ActivationType | str:
         return self._activation
 
     @activation.setter
-    def activation(self, value: ActivationType) -> None:
+    def activation(self, value: ActivationType | str) -> None:
         self._activation = value
-        self._activate_fn = ACTIVATION_FNS[value]
+        self._activate_fn = resolve_activation_fn(value)
 
     # -- Forward pass ---------------------------------------------------------
 
@@ -206,7 +213,10 @@ class Node:
 
     def mutate(self, sigma: float = 1.0) -> None:
         self.bias = self.mutation_bias.mutate_value(self.bias, sigma)
-        self.activation = self.mutation_activation.mutate_enum(self.activation, ActivationType)
+        # Only mutate activation if it's a built-in enum (custom activations
+        # are set intentionally and should not be randomly changed).
+        if isinstance(self._activation, ActivationType):
+            self.activation = self.mutation_activation.mutate_enum(self.activation, ActivationType)
         # Bypass property setter so _leak_alpha_mutable is not touched during
         # random evolution; _retain_value is kept in sync manually.
         new_pv = self.mutation_persist.mutate_bool(self._persist_value)
