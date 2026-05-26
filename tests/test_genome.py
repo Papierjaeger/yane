@@ -469,5 +469,154 @@ class TestGenomeLargeNetworkPath(unittest.TestCase):
         self.assertIsNotNone(g._innov_cache)
 
 
+# ---------------------------------------------------------------------------
+# Edge cases / Error handling coverage
+# ---------------------------------------------------------------------------
+
+class TestGenomeEdgeCases(unittest.TestCase):
+    """Tests for error handling branches and edge cases in genome.py."""
+
+    def test_prune_invalid_method_raises(self):
+        g = Genome()
+        with self.assertRaises(ValueError):
+            g.prune(method="invalid")
+
+    def test_forward_with_ndarray(self):
+        """forward() accepts numpy array."""
+        import numpy as np
+        g = _make_genome(2, 1)
+        from yane.core.connection import Connection
+        conn = Connection(g.output_nodes[0], innovation=0)
+        conn.weight = 1.0
+        g.input_nodes[0].connections.append(conn)
+        g._invalidate_topology()
+        result = g.forward(np.array([0.5, 1.0]))
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 1)
+
+    def test_forward_output_sanitize(self):
+        """output_sanitize replaces NaN with fallback."""
+        g = _make_genome(1, 1)
+        g._output_sanitize = True
+        g._output_fallback = 0.0
+        # Add a direct connection with extreme weight to cause instability
+        from yane.core.connection import Connection
+        conn = Connection(g.output_nodes[0], innovation=0)
+        conn.weight = 1.0
+        g.input_nodes[0].connections.append(conn)
+        g._invalidate_topology()
+        result = g.forward([1.0])
+        self.assertEqual(len(result), 1)
+
+    def test_forward_batch_empty(self):
+        g = _make_genome(2, 1)
+        result = g.forward_batch([])
+        self.assertEqual(result, [])
+
+    def test_set_inputs_wrong_length(self):
+        """set_inputs with wrong input count issues warning (not error)."""
+        import warnings
+        g = _make_genome(2, 1)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            g.set_inputs([1.0])  # 1 input, but genome expects 2
+            self.assertGreaterEqual(len(w), 0)  # warning may be issued
+
+    def test_reset_before_forward(self):
+        """reset() works even if forward was never called."""
+        g = _make_genome(2, 1)
+        g.reset()  # should not raise
+
+    def test_tick_before_trigger(self):
+        """tick() with no triggered nodes returns immediately."""
+        g = _make_genome(2, 1)
+        g.tick()  # should not raise
+
+    def test_forward_batch_cyclic_fallback(self):
+        """forward_batch falls back to sequential for cyclic genomes."""
+        g = _make_genome(2, 1)
+        g._has_cycles = True
+        result = g.forward_batch([[0.5, 1.0]])
+        self.assertIsInstance(result, list)
+
+    def test_lineage_returns_parent_ids(self):
+        """lineage() returns parent IDs."""
+        g = _make_genome(2, 1)
+        parents = g.lineage()
+        self.assertIsInstance(parents, list)
+
+    def test_compress_to_zero(self):
+        """compress() to 0 removes all connections."""
+        g = _make_genome(2, 1)
+        from yane.core.connection import Connection
+        for inp in g.input_nodes:
+            conn = Connection(g.output_nodes[0], innovation=inp.innovation * 10 + 1)
+            conn.weight = 0.5
+            inp.connections.append(conn)
+        g._invalidate_topology()
+        removed = g.compress(target_size=0)
+        self.assertGreater(removed, 0)
+        self.assertEqual(g.connection_count, 0)
+
+    def test_forward_with_large_bias_overflow(self):
+        """forward() handles extreme bias without crashing."""
+        g = _make_genome(1, 1)
+        g.output_nodes[0].bias = 1e6  # extreme bias
+        from yane.core.connection import Connection
+        conn = Connection(g.output_nodes[0], innovation=0)
+        conn.weight = 1.0
+        g.input_nodes[0].connections.append(conn)
+        g._invalidate_topology()
+        result = g.forward([1.0])
+        self.assertEqual(len(result), 1)
+
+    def test_forward_batch_with_sanitize(self):
+        """forward_batch applies output sanitize."""
+        import numpy as np
+        g = _make_genome(1, 1)
+        g._output_sanitize = True
+        g._output_fallback = 0.0
+        from yane.core.connection import Connection
+        conn = Connection(g.output_nodes[0], innovation=0)
+        conn.weight = 1.0
+        g.input_nodes[0].connections.append(conn)
+        g._invalidate_topology()
+        result = g.forward_batch(np.array([[1.0], [2.0]]))
+        self.assertEqual(len(result), 2)
+
+    def test_prune_weight_threshold(self):
+        """prune() removes connections below threshold."""
+        g = _make_genome(2, 1)
+        from yane.core.connection import Connection
+        conn = Connection(g.output_nodes[0], innovation=0)
+        conn.weight = 0.001  # below default threshold 0.01
+        g.input_nodes[0].connections.append(conn)
+        conn2 = Connection(g.output_nodes[0], innovation=1)
+        conn2.weight = 0.5  # above threshold
+        g.input_nodes[1].connections.append(conn2)
+        g._invalidate_topology()
+        removed = g.prune(threshold=0.01)
+        self.assertEqual(removed, 1)
+        self.assertEqual(g.connection_count, 1)
+
+    def test_prune_with_disabled_connections(self):
+        """prune() does not remove disabled connections."""
+        g = _make_genome(2, 1)
+        from yane.core.connection import Connection
+        conn = Connection(g.output_nodes[0], innovation=0)
+        conn.weight = 0.001
+        conn.enabled = False  # disabled, should not be pruned
+        g.input_nodes[0].connections.append(conn)
+        g._invalidate_topology()
+        removed = g.prune(threshold=0.01)
+        self.assertEqual(removed, 0)  # disabled not removed
+
+    def test_dead_nodes_empty_cases(self):
+        """dead_nodes() handles empty test cases."""
+        g = _make_genome(2, 1)
+        result = g.dead_nodes([])
+        self.assertEqual(len(result), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

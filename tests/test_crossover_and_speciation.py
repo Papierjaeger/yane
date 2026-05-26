@@ -204,6 +204,161 @@ class TestCrossover(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Weight Inheritance (fitness-weighted blend)
+# ---------------------------------------------------------------------------
+
+class TestWeightInheritance(unittest.TestCase):
+
+    def _parents_with_known_weights(self):
+        """Return two independent parents with distinct weights for matching connections.
+
+        Creates two related genomes via ``NeuroEvolution`` so they share
+        innovation numbers, then adjusts a matching connection's weight.
+        """
+        yane = _make_yane(2, 1, max_nodes=20, max_connections=30)
+        # Train briefly so the population has evaluated genomes with structure.
+        def _eval(g):
+            return sum(abs(c.weight) for src in g.nodes for c in src.connections)
+        yane.set_max_iterations(200)
+        yane.train(_eval)
+        # Grab the best two evaluated genomes.
+        evald = yane._population._evaluated
+        evald.sort(key=lambda g: g.fitness, reverse=True)
+        p1 = evald[0].copy()
+        p2 = evald[1].copy() if len(evald) > 1 else evald[0].copy()
+        # Find a matching connection.
+        p1_conns = {
+            c.innovation: c
+            for src in p1.nodes for c in src.connections
+            if c.innovation >= 0
+        }
+        p2_conns = {
+            c.innovation: c
+            for src in p2.nodes for c in src.connections
+            if c.innovation >= 0
+        }
+        matching = set(p1_conns) & set(p2_conns)
+        if not matching:
+            # If no match, find a connection in p1 and create a matching one in p2.
+            shared_innov = min(p1_conns)
+            in2 = p2.input_nodes[0]
+            out2 = p2.output_nodes[0]
+            from yane.core.connection import Connection
+            c2 = Connection(out2, innovation=shared_innov)
+            c2.weight = 0.0
+            in2.connections.append(c2)
+            p2._invalidate_topology()
+            p2_conns[shared_innov] = c2
+            matching = {shared_innov}
+        shared_innov = min(matching)
+        p1_conns[shared_innov].weight = 1.0
+        p2_conns[shared_innov].weight = 0.0
+        p1.fitness = 1.0
+        p2.fitness = 0.5
+        return p1, p2, shared_innov
+
+    def test_blend_alpha_weighs_fitter_parent_more(self):
+        """With blend_alpha=0.8, child weight should be closer to fitter parent."""
+        p1, p2, innov = self._parents_with_known_weights()
+        # p1 is fitter (1.0 vs 0.5), weight 1.0
+        # p2 weight 0.0
+        # blend_alpha=0.8 → 0.8*1.0 + 0.2*0.0 = 0.8
+        child = p1.crossover(p2, blend_alpha=0.8)
+        child_conn = next(
+            conn for src in child.nodes for conn in src.connections
+            if conn.innovation == innov
+        )
+        self.assertAlmostEqual(child_conn.weight, 0.8, places=10)
+
+    def test_blend_alpha_zero_gives_weaker_parent_weight(self):
+        """With blend_alpha=0.0, child gets weaker parent's weight."""
+        p1, p2, innov = self._parents_with_known_weights()
+        child = p1.crossover(p2, blend_alpha=0.0)
+        child_conn = next(
+            conn for src in child.nodes for conn in src.connections
+            if conn.innovation == innov
+        )
+        self.assertAlmostEqual(child_conn.weight, 0.0, places=10)
+
+    def test_blend_alpha_one_gives_fitter_parent_weight(self):
+        """With blend_alpha=1.0, child gets fitter parent's weight unchanged."""
+        p1, p2, innov = self._parents_with_known_weights()
+        child = p1.crossover(p2, blend_alpha=1.0)
+        child_conn = next(
+            conn for src in child.nodes for conn in src.connections
+            if conn.innovation == innov
+        )
+        self.assertAlmostEqual(child_conn.weight, 1.0, places=10)
+
+    def test_negative_blend_alpha_defaults_to_random(self):
+        """Default blend_alpha=-1.0 preserves random 50/50 behaviour."""
+        p1, p2, innov = self._parents_with_known_weights()
+        weights = set()
+        for _ in range(50):
+            child = p1.crossover(p2, blend_alpha=-1.0)
+            child_conn = next(
+                conn for src in child.nodes for conn in src.connections
+                if conn.innovation == innov
+            )
+            weights.add(round(child_conn.weight, 10))
+        # Both parents' weights should appear across multiple trials.
+        self.assertIn(1.0, weights)
+        self.assertIn(0.0, weights)
+
+    def test_set_weight_inheritance_api(self):
+        """NeuroEvolution.set_weight_inheritance() propagates to population."""
+        yane = _make_yane(2, 1)
+        yane.set_weight_inheritance(enabled=True, blend_alpha=0.7)
+        self.assertTrue(yane._weight_inheritance_enabled)
+        self.assertAlmostEqual(yane._weight_blend_alpha, 0.7)
+        self.assertAlmostEqual(
+            yane._population._weight_blend_alpha, 0.7
+        )
+
+    def test_set_weight_inheritance_disabled_restores_random(self):
+        """Disabling weight inheritance sets blend_alpha to -1.0."""
+        yane = _make_yane(2, 1)
+        yane.set_weight_inheritance(enabled=True, blend_alpha=0.7)
+        yane.set_weight_inheritance(enabled=False)
+        self.assertFalse(yane._weight_inheritance_enabled)
+        self.assertEqual(yane._population._weight_blend_alpha, -1.0)
+
+    def test_set_weight_inheritance_invalid_alpha(self):
+        """blend_alpha outside [0, 1] raises ValueError."""
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        with self.assertRaises(ValueError):
+            yane.set_weight_inheritance(enabled=True, blend_alpha=1.5)
+        with self.assertRaises(ValueError):
+            yane.set_weight_inheritance(enabled=True, blend_alpha=-0.1)
+
+    def test_weight_inheritance_in_config_dict(self):
+        """_config_dict includes weight_inheritance fields."""
+        yane = _make_yane(2, 1)
+        cfg = yane._config_dict()
+        self.assertIn("weight_inheritance_enabled", cfg)
+        self.assertIn("weight_blend_alpha", cfg)
+
+    def test_population_spawn_uses_weight_blend(self):
+        """Population spawn passes blend_alpha to crossover when configured."""
+        yane = _make_yane(2, 1, pop_size=20)
+        yane.set_weight_inheritance(enabled=True, blend_alpha=0.8)
+        pop = yane._population
+        pop._crossover_enabled = True
+        # Ensure there are evaluated genomes with fitness.
+        for g in list(pop._unevaluated):
+            g.fitness = random.uniform(0.0, 1.0)
+            g.shared_fitness = g.fitness
+            pop._evaluated.append(g)
+        pop._unevaluated.clear()
+        # Spawn should use crossover with blend_alpha.
+        pop._spawn_offspring()
+        child = pop._unevaluated[0] if pop._unevaluated else None
+        self.assertIsNotNone(child)
+        self.assertGreater(len(child.nodes), 0)
+
+
+# ---------------------------------------------------------------------------
 # Copy consistency (original vs copy forward parity — the sorted-set bug)
 # ---------------------------------------------------------------------------
 

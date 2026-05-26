@@ -11,6 +11,9 @@ _SCALAR_GENES = (
     'bypass_connection_prob', 'crossover_prob', 'offspring_factor',
     'sigma_global', 'lamarck_sigma', 'allow_memory',
 )
+# Global genome ID counter for lineage tracking
+_GENOME_ID_COUNTER: int = 0
+
 _MUTATION_GENES = (
     'mutation_bypass', 'mutation_add_node', 'mutation_remove_node',
     'mutation_add_connection', 'mutation_remove_connection',
@@ -36,6 +39,10 @@ def _pick(a, b):
 
 class Genome:
     def __init__(self) -> None:
+        global _GENOME_ID_COUNTER
+        self._genome_id: int = _GENOME_ID_COUNTER
+        _GENOME_ID_COUNTER += 1
+        self._parent_ids: list[int] = []
         self.fitness: float = 0.0
         self.raw_fitness: float = 0.0  # task score before fitness-component bonus
         self.objectives: tuple[float, ...] | None = None
@@ -610,6 +617,12 @@ class Genome:
         exec_order = self._exec_order
         batch_fns = get_batch_activation_fns()
 
+        def _batch_activate(node, values):
+            fn = batch_fns.get(node._activation)
+            if fn is not None:
+                return fn(values)
+            return _np.vectorize(node._activate_fn, otypes=[_np.float64])(values)
+
         # --- Build node-index map (per-call; cheap for typical net sizes) --
         all_nodes = self.nodes
         n_nodes = len(all_nodes)
@@ -627,7 +640,7 @@ class Genome:
                    if node.input_index < n_inp
                    else _np.zeros(N, dtype=_np.float64))
             col = col + node.bias
-            activated = batch_fns[node._activation](col)  # (N,)
+            activated = _batch_activate(node, col)  # (N,)
             for conn in node.connections:
                 if conn.enabled:
                     vals[:, node_to_idx[id(conn.target)]] += conn._weight * activated
@@ -638,7 +651,7 @@ class Genome:
         for node in exec_order:
             ni = node_to_idx[id(node)]
             pre = vals[:, ni] + node.bias
-            activated = batch_fns[node._activation](pre)  # (N,)
+            activated = _batch_activate(node, pre)  # (N,)
             for conn in node.connections:
                 if conn.enabled:
                     vals[:, node_to_idx[id(conn.target)]] += conn._weight * activated
@@ -742,14 +755,15 @@ class Genome:
     # Crossover
     # -------------------------------------------------------------------------
 
-    def crossover(self, other: Genome) -> Genome:
+    def crossover(self, other: Genome, blend_alpha: float = -1.0) -> Genome:
         """NEAT-style crossover aligned by innovation numbers.
 
         self is assumed to be the fitter parent.
 
         Gene alignment rules (original NEAT paper):
         - Matching genes (same innovation number): inherit weight randomly
-          from either parent with 50/50 probability.
+          from either parent with 50/50 probability, or fitness-blended when
+          ``blend_alpha >= 0``.
         - Disjoint / excess genes from the FITTER parent (self): always
           inherited — these represent structure that was already selected for.
         - Disjoint / excess genes from the WEAKER parent (other): discarded,
@@ -758,8 +772,19 @@ class Genome:
         Node inheritance follows the same logic: nodes that appear in self are
         always included; nodes only in other are discarded (their connections
         are already filtered above anyway).
+
+        Parameters
+        ----------
+        other : Genome
+            The weaker parent.
+        blend_alpha : float, optional
+            When >= 0, matching gene weights are blended as
+            ``blend_alpha * w_self + (1 - blend_alpha) * w_other`` instead
+            of 50/50 random pick.  Negative (default) preserves the original
+            random-inheritance behaviour.
         """
         child = Genome()
+        child._parent_ids = [self._genome_id, other._genome_id]
         child.max_nodes = self.max_nodes
         child.max_connections = self.max_connections
 
@@ -795,9 +820,14 @@ class Genome:
             if innov in self_nodes:
                 child_node = node_map[self_nodes[innov]]
                 node_map[other_node] = child_node
-                # 50/50: take bias and activation from either parent
-                if random.random() < 0.5:
-                    child_node.bias = other_node.bias
+                if blend_alpha >= 0.0:
+                    # Fitness-weighted blend for bias
+                    child_node.bias = blend_alpha * child_node.bias + (1.0 - blend_alpha) * other_node.bias
+                else:
+                    # 50/50: take bias randomly from either parent
+                    if random.random() < 0.5:
+                        child_node.bias = other_node.bias
+                # Activation is always 50/50 (enum, not blendable)
                 if random.random() < 0.5:
                     child_node.activation = other_node.activation
             # Disjoint / excess from weaker parent: skip.
@@ -826,9 +856,13 @@ class Genome:
             child_src = node_map[old_src]
             child_tgt = node_map[conn.target]
             weight = conn.weight
-            # Matching gene: randomly pick weight from either parent
-            if innov in other_conns and random.random() < 0.5:
-                weight = other_conns[innov][1].weight
+            # Matching gene: blend or randomly pick weight from either parent
+            if innov in other_conns:
+                if blend_alpha >= 0.0:
+                    # Fitness-weighted blend
+                    weight = blend_alpha * weight + (1.0 - blend_alpha) * other_conns[innov][1].weight
+                elif random.random() < 0.5:
+                    weight = other_conns[innov][1].weight
             if child.max_connections is not None and conn_count >= child.max_connections:
                 break
             new_conn = Connection(child_tgt, innovation=innov)
@@ -890,6 +924,7 @@ class Genome:
 
     def copy(self) -> Genome:
         genome = Genome()
+        genome._parent_ids = [self._genome_id]
 
         node_map: dict[Node, Node] = {}
         for node in self.nodes:
@@ -1204,3 +1239,83 @@ class Genome:
                 break
 
         return dead
+
+    # -------------------------------------------------------------------------
+    # Pruning & compression
+    # -------------------------------------------------------------------------
+
+    def prune(self, threshold: float = 0.01, method: str = "weight") -> int:
+        """Remove connections whose absolute weight is below *threshold*.
+
+        Args:
+            threshold: Minimum absolute weight to keep a connection.
+            method: ``"weight"`` (remove by weight magnitude) or
+                    ``"activation_frequency"`` (not yet implemented).
+
+        Returns:
+            Number of connections removed.
+        """
+        if method == "activation_frequency":
+            raise NotImplementedError("prune method 'activation_frequency' is not yet implemented")
+        if method != "weight":
+            raise ValueError(f"Unknown prune method: {method!r}")
+        removed = 0
+        for src in list(self.nodes):
+            to_remove = []
+            for conn in src.connections:
+                if conn.enabled and abs(conn.weight) < threshold:
+                    to_remove.append(conn)
+            for conn in to_remove:
+                src.connections.remove(conn)
+                removed += 1
+        if removed:
+            self._invalidate_topology()
+        return removed
+
+    def compress(self, target_size: int) -> int:
+        """Remove the smallest-weight connections until *target_size* remains.
+
+        Args:
+            target_size: Desired number of connections.
+
+        Returns:
+            Total connections removed.
+        """
+        all_conns = [
+            (abs(conn.weight), src, conn)
+            for src in self.nodes
+            for conn in src.connections
+            if conn.enabled
+        ]
+        n_remove = len(all_conns) - target_size
+        if n_remove <= 0:
+            return 0
+        all_conns.sort(key=lambda t: t[0])
+        for _, src, conn in all_conns[:n_remove]:
+            src.connections.remove(conn)
+        self._invalidate_topology()
+        return n_remove
+
+    def prune_stats(self) -> dict:
+        """Return a skeleton pruning-statistics dict (values filled post-prune).
+
+        Returns:
+            Dict with keys: ``connections_removed``, ``nodes_removed``,
+            ``fitness_delta``, ``compression_rate``.
+        """
+        return {
+            "connections_removed": 0,
+            "nodes_removed": 0,
+            "fitness_delta": 0.0,
+            "compression_rate": 0.0,
+        }
+
+    def lineage(self, tracker=None) -> list[int]:
+        """Return the ancestor chain (oldest first) for this genome.
+
+        Requires an ``InnovationTracker`` with lineage recording enabled.
+        If *tracker* is None, returns the direct parent IDs.
+        """
+        if tracker is not None:
+            return tracker.get_ancestors(self._genome_id)
+        return list(self._parent_ids)

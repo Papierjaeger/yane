@@ -17,12 +17,44 @@ class InnovationTracker:
     Node splits: keyed by the innovation number of the split connection so the
     same split always produces the same node innovation and the same two
     replacement-connection innovations.
+
+    Also tracks lineage (parent → child) for phylogeny reconstruction.
     """
 
     def __init__(self) -> None:
         self._counter: int = 0
         self._conn_map: dict[tuple[int, int], int] = {}
         self._split_map: dict[int, tuple[int, int, int]] = {}
+        # Lineage tracking: child_genome_id → first recorded parent_genome_id
+        self._child_to_parent: dict[int, int] = {}
+        # Innovation → (generation, parent_genome_id) for attributing innovations
+        self._innovation_log: dict[int, tuple[int, int]] = {}
+
+    def record_crossover(self, primary_parent_id: int, child_id: int, generation: int = 0) -> None:
+        """Record a crossover event in the lineage. Only the primary (fitter) parent is stored."""
+        if primary_parent_id >= 0 and child_id not in self._child_to_parent:
+            self._child_to_parent[child_id] = primary_parent_id
+
+    def log_innovation(self, innov: int, generation: int, genome_id: int) -> None:
+        """Record which genome created an innovation and when."""
+        if innov >= 0 and innov not in self._innovation_log:
+            self._innovation_log[innov] = (generation, genome_id)
+
+    def get_ancestors(self, genome_id: int, max_depth: int = 100) -> list[int]:
+        """Return ancestor chain (oldest first) for a genome."""
+        ancestors = []
+        current = genome_id
+        for _ in range(max_depth):
+            pid = self._child_to_parent.get(current)
+            if pid is None:
+                break
+            ancestors.append(pid)
+            current = pid
+        return list(reversed(ancestors))
+
+    def get_lineage_size(self) -> int:
+        """Total number of recorded lineage events."""
+        return len(self._child_to_parent)
 
     # ------------------------------------------------------------------
     # Public API
