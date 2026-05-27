@@ -4,10 +4,10 @@ Diese Dokumentation beschreibt den aktuellen Stand des Projekts und erklärt, wi
 
 ## 1. Architektur
 
-YANE besteht aus fünf Hauptbereichen:
+YANE besteht aus fünf Hauptbereichen (insgesamt 46 Evolutionsmodule):
 
 - `core/`: Datenmodell des neuronalen Netzes (`Genome`, `Node`, `Connection`)
-- `evolution/`: Mutation, Population, Speziation, Crossover, Innovation Tracking und Novelty Search
+- `evolution/`: 46 Module – Mutation, Population, Speziation, Crossover, Innovation Tracking, Novelty Search, Lamarck-Refinement, Adaptive Control, Quality Diversity, Multi-Objective, Islands, Surrogate, Meta-Adaptive u.v.m.
 - `neuro_evolution.py`: öffentliche API und Trainingsloop
 - `gui/`: PySide6-Oberfläche mit Beispielregistry und Visualisierung
 - `api/`: FastAPI-Schnittstelle für externe Steuerung
@@ -1297,6 +1297,111 @@ Die Tests decken unter anderem ab:
 - Novelty und Ensemble
 - Multi-Objective/Pareto-Helfer
 - Checkpoints, Normalisierung, Curriculum und Batch-Forward
+- Surrogate-Modell (Spearman-Rho, Warmup, Train/Predict)
+- Adaptive Controller und Operator Scheduler
+- Quality Diversity / MAP-Elites
+- Islands und Migration
+- Fitness-Sanitizing, -Transform und -Finalization
+- Events und Selection-Strategien
+- Lamarck-Refinement (Hill-Climb, NES, SA, CMA-ES)
+
+Aktueller Stand: 1153 gesammelte Tests.
+
+## 27. Weitere Module
+
+### 27.1 Meta-Adaptive Policies
+
+`evolution/meta_adaptive.py` — `PolicyGenes` sind evolvierbare Strategie-Gene, die
+Operator-Exploration, Lamarck-Budget und Interspecies-Crossover-Raten steuern.
+Diese Gene werden selbst Teil des Genoms und unterliegen damit der Evolution –
+die Suche nach guten adaptiven Policies wird automatisiert.
+
+### 27.2 Islands
+
+`evolution/islands.py` — Das `IslandModel` verwaltet N unabhängige Populationen.
+In konfigurierbaren Intervallen werden die besten Genome zwischen zufällig
+gepaarten Inseln migriert. Das erhöht genetische Diversität und kann lokale
+Optima überwinden, ohne die Populationsgröße zu erhöhen.
+
+### 27.3 Fitness-Surrogat
+
+`evolution/surrogate.py` — `FitnessSurrogate` lernt aus Genom-Deskriptoren
+eine schnelle Fitness-Prädiktion. Damit können vor der teuren echten Evaluation
+schlechte Kandidaten herausgefiltert werden (Surrogate-Assisted Evolution).
+Das Modell tracked Spearman-Rho als Qualitätsmetrik und unterstützt Warmup-Phasen.
+
+### 27.4 Hyperparameter-Suche
+
+`evolution/hyperparameter_search.py` — `hyperparameter_search()` führt Grid-
+oder Random-Search über Parameter-Räume mit mehreren Seeds durch und liefert
+sortierte Ranglisten. `evolution/online_tuning.py` bietet `UCB1Bandit` für
+Online-Tuning diskreter Parameter während des Trainings per Upper-Confidence-Bound.
+
+### 27.5 Fitness-Landschaft
+
+`evolution/landscape.py` — `genome_descriptor_vector()` extrahiert
+Feature-Vektoren fester Länge aus Genomen für PCA-Analyse und
+Landschafts-Snapshots. Dient der Visualisierung und Analyse von
+Fitnesslandschaften während der Evolution.
+
+### 27.6 Selektionsstrategien
+
+`evolution/selection_strategy.py` — Plugin-Interface `SelectionStrategy` mit
+`TournamentSelection` als Built-in. Strategien kapseln den Auswahlalgorithmus;
+das Scoring bleibt in der Population. Unterstützt Turnier-, fitnessproportionale
+und rangbasierte Selektion.
+
+### 27.7 Torch-Bridge
+
+`evolution/torch_bridge.py` — `genome_to_torch_module()` exportiert YANE-Genome
+als `torch.nn.Module`. Die Topologie wird mit Gewichtsmatrix und topologischer
+Ausführungsreihenfolge in ein PyTorch-Modul übersetzt. PyTorch ist optional und
+keine harte Abhängigkeit.
+
+### 27.8 Events
+
+`evolution/events.py` — Leichtgewichtiger synchroner `EventBus` für
+Trainingsevents wie `generation_end`, `new_best`, `stagnation`. Erlaubt
+Abonnieren per `on()` und Auslösen per `emit()` — nützlich für Callbacks
+und Monitoring.
+
+### 27.9 Genome-Export
+
+`evolution/genome_export.py` — Exportiert Genome als eigenständige Python-
+Funktionen (`genome_to_python()`) oder als NumPy-Gewichtsmatrizen
+(`genome_to_numpy_weights()`). Damit können trainierte Netze deployment-fertig
+exportiert werden.
+
+### 27.10 Remote Evaluation
+
+`evolution/remote_evaluation.py` — Verteilte Evaluation über HTTP:
+`RemoteEvaluationClient` sendet Genome anWorker; `RemoteWorkerServer` läuft
+auf Evaluationsknoten mit vorgeladener Fitnessfunktion und Token-basierter
+Sicherheit.
+
+### 27.11 Fitness-Pipeline
+
+- `evolution/fitness_sanitizer.py` — `FitnessSanitizer` ersetzt NaN/Inf durch
+  Fallback-Werte und klemmt Ausgaben auf gültige Bereiche.
+- `evolution/fitness_transform.py` — Plugin-Transformationen wie
+  `RankTransform` (Rangnormalisierung) und `SigmaScaling` (z-Score-Skalierung).
+- `evolution/fitness_finalization.py` — `finalize_fitness_value()` kombiniert
+  Sanitizing, Multi-Objective-Skalarisierung, Komponentengewichte und Strafen
+  zu einer finalen Fitness.
+
+### 27.12 Adaptive Policies
+
+`evolution/policy.py` — Vereinheitlichtes adaptives Policy-System mit
+`PolicyRegistry` und `Action`-Dataclass. Policies beobachten Signale,
+treffen Entscheidungen und wenden Aktionen an; Konfliktauflösung per
+Priorität und Konfliktgruppen.
+
+### 27.13 Experimentelle Features
+
+`evolution/experimental.py` — Layer-3-Forschungsfeatures: InputGrouping,
+OutputGrouping, SharedWeights, ConvNEAT, ESHyperNEAT, DARTS-Lite,
+CuriosityModule, STDP und Neuromodulation. Diese sind explizit experimentell
+und nicht Teil des stabilen API-Vertrags.
 
 Ausführen:
 

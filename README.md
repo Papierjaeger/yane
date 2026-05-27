@@ -514,7 +514,7 @@ yane/
     genome.py                 Netzwerk, Forward/Tick, Mutation, Crossover
     node.py                   Neuron, Aktivierung, Bias, Memory, Input-Scale
     connection.py             gewichtete Verbindung
-  evolution/
+  evolution/                  (46 Module)
     mutation.py               selbstadaptierende Mutationsparameter
     smart_mutation.py         Strukturmutationen
     innovation.py             Innovation Numbers für NEAT-Crossover
@@ -522,6 +522,7 @@ yane/
     lamarck_refiner.py        Lamarckian Refinement (Hill-Climb, NES, SA, CMA-ES)
     adaptive_controller.py    Adaptive Control Layer (AdaptiveController, FeaturePolicy)
     operator_scheduler.py     Adaptive Mutation Operator Scheduler
+    meta_adaptive.py          Meta-adaptive Policy Evolution
     diagnostics.py            Diagnostics-Aggregation für population_memory_info()
     efficiency_penalty.py     Laufzeitbasierte Fitnessstrafe
     coevolution.py            Hall-of-Fame und kompetitive Fitness-Helfer
@@ -529,8 +530,23 @@ yane/
     indirect_encoding.py      CPPN/HyperNEAT-artige Connection-Generierung
     matrix_export.py          Matrixexport für NumPy/CuPy-kompatible DAGs
     backprop.py               optionaler PyTorch-Finetuning-Hook
+    torch_bridge.py           PyTorch-Integration (optional)
     async_evaluation.py       Future-basierte Evaluation-Queues
     descriptors.py            Descriptor-Registry und Fitness-Komponenten
+    islands.py                Island-Modell mit Migration
+    surrogate.py              Surrogate-Modell für Fitness-Prädiktion
+    hyperparameter_search.py  Hyperparameter-Optimierung
+    online_tuning.py          Online-Hyperparameter-Tuning (UCB1-Bandit)
+    curriculum.py             Curriculum Learning mit progressiven Stufen
+    quality_diversity.py      MAP-Elites-Archiv für Quality Diversity
+    multi_objective.py        Pareto-basierte Multi-Objective-Optimierung
+    landscape.py              Fitness-Landschaftsanalyse (PCA)
+    checkpoint.py             Checkpoint-Save/Load mit Config-Versionierung
+    codec.py                  Genom-Serialisierung
+    selection_strategy.py     Turnier-, fitnessproportionale, rangbasierte Selektion
+    genome_export.py          Genom-Export-Formate
+    eval_middleware.py        Middleware-Pipeline für Evaluation
+    ...und weitere
   util/
     activation.py             Aktivierungsfunktionen
     presets.py                Preset-Serialisierung und -Laden (Schema v2)
@@ -584,9 +600,11 @@ pytest
 
 ## Status
 
-Aktive Entwicklung. Teststand: `682 passed`.
+Aktive Entwicklung. Teststand: `1153 tests collected`.
 
 Stabiler Kern: Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API,
 Logging, Checkpoints, Multi-Objective, Quality Diversity, CMA-ES, Presets,
 Benchmark-Gates, Adaptive Control Layer, Operator Scheduler, Lamarck-Budget,
-Interspecies-Trigger, Adaptive Benchmark-Suite, GUI-Stability-Guard.
+Interspecies-Trigger, Adaptive Benchmark-Suite, GUI-Stability-Guard,
+Meta-Adaptive Policies, Torch-Bridge, Islands, Surrogate Model,
+Hyperparameter Search.
