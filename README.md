@@ -1,11 +1,592 @@
-# Yet Another Neuro Evolution
+# Yet Another Neuro Evolution (YANE)
 
-Currently still in the planning phase. If someone is interested in the implementation, then the source code is the documentation
+YANE ist ein Python-Framework für **Neuroevolution**: Neuronale Netze werden nicht per Backpropagation trainiert, sondern durch Evolution verändert, bewertet, selektiert und über viele Generationen weiterentwickelt.
 
-If you want to see yane in action, go to src -> examples -> gym -> Cartpole. The other examples currently work rather semi well.
+Das Projekt enthält:
 
-!Warning: This is a slow long term project. Means, this project could be out of order for several months before further development (mainly because I'm currently busy).
+- eine Python-API für eigene Trainingsschleifen
+- eine PySide6-GUI mit Live-Fitnesskurve und Netzwerkvisualisierung
+- einen FastAPI-Server für externe Steuerung per HTTP
+- mehrere Dataset-, Sequenz- und Gymnasium-Beispiele
+- Tests für Genome, Mutationen, Population, Innovation Tracking, Memory Nodes und Stabilität
 
-## Current Plan
-- Redoing and making it more simple. The aim is also to define as many parameters as possible genetically so that the user can concentrate as much as possible on implementing the fitness function.
-- Switch to a server-client method, which should make it possible for "incomplete clients" in other programming languages to be able to perform certain tasks, even if they cannot perform every task. For example, if a C++ client only has the function to create a new genome, the server should be able to adapt to this and not send this client any other tasks that it cannot solve.
+**Voraussetzung:** Python 3.10+
+
+## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+Abhängigkeiten: `numpy`, `PySide6`, `gymnasium[mujoco]`, `fastapi`, `uvicorn`, `pydantic`, `psutil`
+
+Optional für Atari/ALE-Beispiele:
+
+```bash
+pip install "gymnasium[atari]"
+```
+
+## Schnellstart
+
+### GUI starten
+
+Aus dem Projektordner:
+
+```bash
+python run.py
+```
+
+Oder als Paket aus dem Elternordner von `yane/`:
+
+```bash
+python -m yane.gui
+```
+
+Die GUI bietet:
+
+- Training-Tab mit Beispielauswahl, Fitnesskurve und Netzwerkansicht
+- Inspect-Tab zum Prüfen des besten Genoms auf bekannten Testfällen
+- `Run Best` für renderbare Gymnasium-Beispiele
+- API-Server-Tab zum Starten der HTTP-Schnittstelle
+- Advanced-Controls für Lamarck-Modi inkl. CMA-ES, Multi-Objective und Quality Diversity
+- Experiment-Presets für wiederholbare GUI/API-Konfigurationen
+
+### Beispiel per Skript trainieren
+
+Aus dem Elternordner von `yane/`:
+
+```bash
+python -m yane.examples.XOR
+python -m yane.examples.basic_multiplication
+python -m yane.examples.simple_2_2_continuous
+python -m yane.examples.simple_3_3_continuous
+python -m yane.examples.sequence_recall_PI
+```
+
+## Grundprinzip
+
+YANE verwaltet eine Population von **Genomen**. Ein Genom ist ein neuronales Netz aus Nodes und gewichteten Connections.
+
+Der Trainingsablauf ist:
+
+1. Ein Genom wird zur Bewertung ausgewählt.
+2. Eine Fitness-Funktion bewertet, wie gut dieses Netz die Aufgabe löst.
+3. Das Genom wird mit seiner Fitness in die Population zurückgegeben.
+4. Sobald neue Kandidaten gebraucht werden, erzeugt die Population Nachkommen durch Mutation oder Crossover.
+5. Schlechtere Genome werden verworfen, gute und strukturell interessante Genome bleiben erhalten.
+
+Das Startgenom enthält Input- und Output-Nodes, aber standardmäßig **keine Connections**. Die erste vielfältige Population wird durch zufällige Strukturmutationen aufgebaut. Optional können mit `n_initial_hidden` von Anfang an Hidden Nodes eingefügt werden.
+
+YANE ist NEAT-inspiriert und erweitert den Ansatz um selbstadaptierende Mutationsraten, sieben Strukturmutationsoperatoren (darunter Rewire und Disable/Enable), Novelty Search, Memory Nodes, optionales Lamarckian Weight Refinement und Ressourcenlimits.
+
+## Minimales Python-Beispiel
+
+```python
+from yane import NeuroEvolution
+
+DATA = [
+    ([0.0, 0.0], [0.0]),
+    ([0.0, 1.0], [1.0]),
+    ([1.0, 0.0], [1.0]),
+    ([1.0, 1.0], [0.0]),
+]
+
+yane = NeuroEvolution()
+yane.configure(
+    n_inputs=2,
+    n_outputs=1,
+    max_nodes=20,
+    max_connections=50,
+    n_initial_hidden=2,
+    stateful=False,
+)
+yane.set_min_fitness(-0.1)
+yane.set_resource_limits(max_process_gb=2.0)
+
+def evaluate(genome):
+    fitness = 0.0
+    for inputs, target in DATA:
+        genome.reset()
+        output = genome.forward(inputs)
+        fitness -= abs(output[0] - target[0])
+    return fitness
+
+iterations = yane.train(evaluate)
+best = yane.get_best()
+print(iterations, best.fitness)
+```
+
+Fitness ist in vielen Beispielen ein negativer Fehler. Je näher der Wert an `0` liegt, desto besser.
+
+## Wichtige API
+
+### Konfiguration
+
+```python
+yane.configure(
+    n_inputs=2,
+    n_outputs=1,
+    max_nodes=30,
+    max_connections=100,
+    n_initial_hidden=3,
+    stateful=True,
+)
+```
+
+Parameter:
+
+- `n_inputs`: Anzahl der Eingabewerte
+- `n_outputs`: Anzahl der Ausgabewerte
+- `max_nodes`: optionale Obergrenze für Nodes pro Genom
+- `max_connections`: optionale Obergrenze für Connections pro Genom
+- `n_initial_hidden`: Hidden Nodes im Startgenom
+- `stateful`: erlaubt persistente Node-Werte und damit Gedächtnis über mehrere `forward()`-Aufrufe (Standard: `True`)
+
+### Automatisches Training
+
+```python
+yane.set_min_fitness(-0.1)
+yane.set_max_iterations(10_000)
+n = yane.train(evaluate)
+best = yane.get_best()
+```
+
+Das Training stoppt, wenn `min_fitness` erreicht oder `max_iterations` ausgeschöpft ist. Ohne beide Grenzen läuft es unbegrenzt.
+
+### Manuelle Trainingsschleife
+
+```python
+genome = yane.next_genome()
+fitness = run_simulation(genome)
+yane.submit_fitness(fitness)
+```
+
+Diese Form ist nützlich für Simulationen, Episoden oder externe Systeme.
+
+### Forward Mode
+
+```python
+outputs = genome.forward([0.5, 1.0])
+```
+
+`forward()` berechnet einen vollständigen Durchlauf. Für azyklische Netze wird eine schnelle topologische Ausführungsreihenfolge kompiliert. Bei Zyklen fällt YANE auf einen BFS-basierten Modus mit Trigger-Limit zurück.
+
+### Tick Mode
+
+```python
+genome.set_inputs([0.5, 1.0])
+genome.tick()
+genome.tick()
+outputs = genome.get_outputs()
+```
+
+`tick()` propagiert Signale schrittweise. Das ist praktisch, wenn man die Dynamik eines rekurrenten Netzes oder eine Simulation explizit takten möchte.
+
+### Ensemble
+
+```python
+top = yane.get_ensemble(k=3)
+outputs = yane.forward_ensemble([0.2, 0.8], k=3)
+```
+
+`forward_ensemble()` mittelt die Outputs der besten `k` Genome.
+
+### Ressourcen und Effizienz
+
+```python
+yane.set_efficiency_penalty(max_ms=10.0, penalty_per_ms=0.5)
+yane.set_resource_limits(min_free_gb=2.0, max_used_percent=85.0, max_process_gb=2.0)
+print(yane.population_memory_info())
+yane.trim_memory()
+```
+
+YANE misst automatisch, wie lange die Bewertung eines Genoms dauert. Daraus entsteht ein relativer `efficiency_score`: schnelle Genome liegen näher bei `1.0`, langsame näher bei `0.0`. Die Rohfitness bleibt unverändert; Effizienz beeinflusst nur die Elternauswahl. Wenn die Population stagniert, sinkt die Effizienz-Relevanz automatisch bis auf `0`, damit auch größere oder langsamere Struktur-Experimente eine Chance bekommen.
+
+`set_efficiency_penalty(...)` ist zusätzlich weiterhin als feste, direkte Fitnessstrafe verfügbar. Die Ressourcenlimits pausieren Training bei knappem Systemspeicher oder verkleinern die Population, wenn der Prozess zu viel RAM nutzt. `trim_memory()` gibt explizit freigegebene Heap-Seiten ans Betriebssystem zurück und ist nützlich nach langen Trainingsläufen.
+
+### Weitere Konfiguration
+
+```python
+yane.set_population_size(100)   # Standard: 100
+yane.set_target_species(5)      # Standard: 5
+yane.set_target_species(n_min=4, n_max=8, tune_interval=10)
+```
+
+- `set_population_size(n)`: Größe der Population.
+- `set_target_species(n)`: Zielanzahl Species; der Kompatibilitätsschwellwert wird automatisch angepasst. Höhere Werte schützen mehr strukturelle Nischen (besonders nützlich für XOR-artige Aufgaben).
+- `set_target_species(n_min=..., n_max=...)`: hält die Species-Anzahl in einem Zielbereich; `set_target_species(None)` deaktiviert das automatische Tuning.
+
+### Mehrfachbewertung
+
+```python
+yane.set_multi_eval(n=5, aggregation="mean", sigma_penalty=0.0)
+yane.set_anytime_eval(min_evals=1, max_evals=5, promotion_frac=0.3)
+```
+
+Für stochastische Umgebungen, in denen eine einzelne Episode zu verrauscht ist. YANE bewertet jedes Genom `n`-mal und aggregiert die Ergebnisse.
+
+`set_anytime_eval(...)` spart Evaluationsbudget: jedes Genom erhält zuerst ein kleines Budget, nur konkurrenzfähige Genome werden für zusätzliche Wiederholungen promotet. Diagnostics wie `anytime_avg_evals_per_genome`, `anytime_saved_evals` und `anytime_promotion_rate` stehen in `population_memory_info()`.
+
+### Adaptive Recovery
+
+```python
+yane.set_adaptive_recovery(
+    enabled=True,
+    strategies=["diversity_boost", "partial_restart", "lamarck_burst"],
+    cooldown=20,
+    early_stopping_patience=500,
+)
+```
+
+Bei Diversity-Kollaps oder festgefahrener Speziation kann YANE automatisch Gegenmaßnahmen auslösen: zusätzliche diverse Genome, Teil-Restarts der schwächsten Populationsteile oder ein temporärer Lamarck-Budget-Burst. Early Stopping greift nur konservativ, wenn lange keine Verbesserung auftritt und zusätzlich ein Diversity-/Recovery-Signal vorliegt. Diagnostics stehen unter `recovery_events`, `recovery_success_rate`, `no_improvement_generations` und `early_stop_triggered`.
+
+### Evaluation-Middleware
+
+```python
+from yane.evolution.eval_middleware import (
+    CachingMiddleware, RetryMiddleware, TimingMiddleware,
+    ComponentMiddleware, CaseBatchMiddleware,
+)
+
+yane.add_eval_middleware(CachingMiddleware(maxsize=512))
+yane.add_eval_middleware(RetryMiddleware(n=3))
+yane.add_eval_middleware(TimingMiddleware())
+```
+
+Middleware wird in LIFO-Reihenfolge ausgeführt: die zuletzt hinzugefügte Schicht läuft außen. Eingebaute Middleware deckt Genome-Fitness-Caching, Retry für instabile Evaluatoren, Timing-Diagnostics, benannte Fitness-Komponenten und feste Train-/Validation-Case-Batches ab. `clear_eval_middleware()` entfernt den Stack wieder.
+
+### Automatische Checkpoints
+
+```python
+yane.set_checkpoint_policy(
+    interval=100,
+    keep_best=True,
+    max_keep=5,
+    path_template="{run_name}_{kind}_{iteration}.pkl",
+)
+```
+
+YANE kann während `train()` automatisch Rolling-Checkpoints schreiben und zusätzlich den besten Zustand festhalten. Alte Rolling-Checkpoints werden nach `max_keep` entfernt; der Best-Checkpoint bleibt separat abrufbar über `get_best_checkpoint_path()`.
+
+- `aggregation`: `"mean"` (Standard), `"median"` (robust gegen Ausreißer) oder `"min"` (konservativster Worst-Case)
+- `sigma_penalty`: zieht `sigma_penalty × Standardabweichung` vom Ergebnis ab; bestraft hochvariante Genome unabhängig von der Aggregationsmethode
+- Kosten: `n` Fitnessfunktionsaufrufe pro Genom statt 1
+- Wirkt automatisch in `train()` und allen GUI-Worker-Pfaden; der manuelle Loop (`next_genome` / `submit_fitness`) ist nicht betroffen
+
+### Multi-Objective Fitness
+
+```python
+yane.set_multi_objective(
+    enabled=True,
+    weights=(1.0, -0.01),       # scalar fallback for logs/stopping
+    maximize=(True, False),     # objective 1 hoch, objective 2 niedrig
+)
+
+def evaluate(genome):
+    score = run_task(genome)
+    size = genome.connection_count
+    return (score, size)
+```
+
+Fitnessfunktionen dürfen dann einen Vektor zurückgeben. YANE speichert ihn als
+`genome.objectives`, nutzt eine gewichtete Skalarfitness für bestehende APIs und
+formt die Elternauswahl per Pareto-Rang plus Crowding-Distance. So müssen
+Trade-offs wie Leistung, Geschwindigkeit, Netzwerkgröße oder Stabilität nicht
+mehr in eine einzige fragile Formel gepresst werden.
+
+### Quality Diversity / MAP-Elites
+
+```python
+yane.set_quality_diversity(
+    descriptor_fn=lambda genome: (genome.connection_count,),
+    bins=(20,),
+    ranges=((0.0, 200.0),),
+)
+```
+
+Das MAP-Elites-Archiv speichert pro Verhaltenszelle das beste bekannte Genom.
+Bei Stagnation kann YANE archivierte Eliten als Ausgangspunkt für neue
+Diversitätsinjektionen verwenden. `population_memory_info()` enthält Coverage,
+Zellanzahl, Archiv-Updates und QD-Injektionen.
+
+### Experimentelle Bausteine
+
+Für größere Forschungsaufgaben gibt es zusätzliche Module:
+
+- `yane.evolution.coevolution`: Hall-of-Fame und kompetitive Fitness-Helfer
+- `yane.evolution.modularity`: Hidden-Module erkennen und duplizieren
+- `yane.evolution.indirect_encoding`: CPPN/HyperNEAT-artige Connection-Generierung
+- `yane.evolution.matrix_export`: Matrixexport für NumPy/CuPy-kompatible DAGs
+- `yane.evolution.backprop`: optionaler PyTorch-Finetuning-Hook
+- `yane.evolution.async_evaluation`: Future-basierte Evaluation-Queues
+- `yane.evolution.descriptors`: Descriptor-Registry und Fitness-Komponenten
+
+### Presets und Benchmark-Gates
+
+```bash
+python -m yane.benchmarks.run_suite --fast --gate
+python -m yane.benchmarks.profile_serialization --sizes 0 10 50 200
+```
+
+`presets/*.json` enthält wiederverwendbare Experimentprofile. Die API stellt
+sie über `GET /presets` und `GET /presets/{name}` bereit; die GUI hat ein
+Preset-Dropdown und kann aktuelle Einstellungen als neues Preset speichern.
+
+Presets unterstützen seit Schema-Version 2 einen optionalen Abschnitt
+`adaptive_policies`, der adaptive Einstellungen wie `AdaptiveController`,
+`OperatorScheduler`, Lamarck-Budget und Interspecies-Modus vollständig
+beschreibt. Vier fertige adaptive Profile sind enthalten:
+
+| Preset-Datei | Beschreibung |
+|---|---|
+| `adaptive_konservativ.json` | Alle adaptiven Mechanismen aus — stabil, reproduzierbar |
+| `adaptive_balanciert.json` | AdaptiveController + Scheduler aktiv, guter Ausgangspunkt |
+| `adaptive_aggressiv.json` | Hohe Interspecies-Rate, NES-Optimizer — für schwierige Probleme |
+| `adaptive_analysefreundlich.json` | Alles aktiv, Lamarck-Budget begrenzt — gut für Diagnostics |
+
+```python
+from yane.util.presets import load_preset, save_preset
+
+preset = load_preset("adaptive_balanciert")
+print(preset.adaptive_policies)
+
+save_preset("Mein Experiment", config={...}, adaptive_policies={
+    "adaptive_controller": True,
+    "operator_scheduler": True,
+    "interspecies_mode": "Adaptiv",
+    "interspecies_min_rate": 0.01,
+    "interspecies_max_rate": 0.15,
+    "lamarck_schedule": "Adaptiv",
+    "lamarck_optimizer": "Hill-Climbing",
+    "lamarck_budget": 0,
+})
+```
+
+### Lamarckian Refinement
+
+```python
+yane.set_lamarck(n_steps=5, sigma=1.0)
+```
+
+Vor jeder Fitnessbewertung werden Gewichte und Biases mit `n_steps` lokalen Hill-Climb-Schritten verfeinert. Verbesserte Gewichte werden direkt ins Genom übernommen und weitervererbt. Kosten: `n_steps + 1` zusätzliche Fitnessfunktionsaufrufe pro Genom.
+
+Verfügbare Modi:
+
+- `mode="hill_climbing"`: zufällige lokale Gewichtsschritte, behält Verbesserungen
+- `mode="sa"`: Simulated Annealing mit geometrischer Abkühlung
+- `mode="nes"`: Natural Evolution Strategies mit antithetischen Perturbationen
+- `mode="cma_es"`: kleine volle-Kovarianz-CMA-ES über Gewichte und Biases
+
+Alle Modi können explizit oder adaptiv laufen:
+
+```python
+yane.set_lamarck_adaptive(mode="nes", max_steps=3)
+yane.set_lamarck_adaptive(mode="sa", max_steps=3)
+yane.set_lamarck_adaptive(mode="cma_es", max_steps=2)
+```
+
+Die GUI trennt dafür den Zeitplan (`Adaptiv`, `Explizit`, `Aus`) vom
+Optimierer (`Hill-Climbing`, `NES`, `SA`, `CMA-ES`).
+
+### Adaptive Interspecies-Crossover
+
+```python
+yane.set_adaptive_interspecies_crossover(min_rate=0.0, max_rate=0.2)
+```
+
+Im adaptiven Modus steigt die Live-Rate für species-übergreifenden Crossover
+bei globaler oder species-lokaler Stagnation. Diagnostics enthalten Modus,
+Basisrate, Live-Rate, Min/Max und den letzten Trigger.
+
+Für Vergleichsläufe gibt es:
+
+```bash
+python -m yane.benchmarks.compare_lamarck_modes --env Acrobot-v1 --modes hc nes sa
+```
+
+### Adaptive Control Layer
+
+```python
+yane.set_adaptive_control(enabled=True)
+ctrl = yane.get_adaptive_controller()   # AdaptiveController
+```
+
+Der `AdaptiveController` liest jede Generation einheitliche Populations-Signale
+(`plateau_ratio`, `diversity_score`, `fitness_trend`, `species_stagnation`,
+`eval_cost`, `best_complexity`) und passt damit automatisch interspecies-Crossover-Rate,
+QD-Druck, Pruning-Druck und Lamarck-Budget an. Jedes Feature hat eine
+`FeaturePolicy` mit den Modi `"off"` / `"fixed"` / `"adaptive"` / `"auto"`.
+
+```python
+# Adaptive Operator Scheduler
+yane.set_operator_scheduler(enabled=True)
+sched = yane.get_operator_scheduler()   # OperatorScheduler
+```
+
+Der `OperatorScheduler` verfolgt die Erfolgsrate aller Mutations-Operatoren
+pro Generation und pro Species und skaliert ihre Auswahlwahrscheinlichkeit
+entsprechend.
+
+```python
+# Lamarck-Budget pro Generation begrenzen
+yane.set_lamarck_budget(budget_per_gen=100)   # None = unbegrenzt
+
+# Lamarck nur für bestimmte Species
+yane.set_lamarck_per_species(species_ids=[0, 2], eligible=True)
+```
+
+Alle adaptiven Diagnostics stehen in `population_memory_info()` unter den
+Schlüsseln `adaptive_controller` und `operator_scheduler`.
+
+#### Benchmark-Vergleich
+
+```bash
+python -m yane.benchmarks.adaptive_suite --problem xor --max-iter 5000 --seeds 3
+```
+
+Vergleicht 7 Konfigurationen (baseline bis full_adaptive) auf XOR oder CartPole
+und gibt eine Tabelle mit Lösungsrate, Median-Iterationen und mittlerer Zeit aus.
+
+### Batch-API
+
+```python
+genomes = yane.next_genome_batch(n=4)
+results = [(g, run_simulation(g)) for g in genomes]
+yane.submit_fitness_batch(results)
+```
+
+Für manuelle Parallelisierung. Optional kann ein Ergebnis auch `(genome, fitness, elapsed_ms)` enthalten, damit die automatische Effizienzbewertung auch in eigenen Batch-Loops greift. Mindestens ein Genom muss vorher über `next_genome()` / `submit_fitness()` bewertet worden sein.
+
+## Beispiele
+
+| Beispiel | Inputs | Outputs | Normalisierung | Hidden Nodes in GUI | Stateful | Ziel-Fitness |
+|---|---:|---:|---|---:|---|---:|
+| XOR | 2 | 1 | nein, Werte 0/1 | 2 | nein | -0.1 |
+| Multiplication | 2 | 1 | Inputs /9, Output /81 | 3 | nein | -5.0 |
+| Regression 2->2 | 2 | 2 | nein, Werte 0/1 | 4 | nein | -0.4 |
+| Regression 3->3 | 3 | 3 | nein, Werte 0/1 | 9 | nein | -5.0 |
+| Sequence: Pi-Ziffern | 1 | 1 | Digit /9 | 0 | ja | -10.0 |
+| MNIST | 784 | 10 | Pixel /255 | – | ja | Anzahl Samples |
+
+MNIST ist nur als Skript verfügbar (`python -m yane.examples.MNIST`), nicht in der GUI; die Spalte „Hidden Nodes in GUI" entfällt daher.
+
+Weitere GUI-Beispiele sind CartPole, Acrobot, MountainCar (Continuous), MountainCar (Discrete), Pendulum, LunarLander, BipedalWalker, CarRacing, alle MuJoCo-v5-Umgebungen, alle ALE-Atari-v5-Umgebungen, Blackjack, Cliff Walking, Frozen Lake und Taxi. Details stehen in [TECHNISCHE_DOKUMENTATION.md](TECHNISCHE_DOKUMENTATION.md).
+
+## Technische Dokumentation
+
+Die ausführliche Beschreibung des Netzaufbaus, der Forward-Ausführung, Mutation, Crossover, Speziation, Novelty Search, Memory Nodes und aller Beispielkonfigurationen steht in:
+
+[TECHNISCHE_DOKUMENTATION.md](TECHNISCHE_DOKUMENTATION.md)
+
+## API-Server
+
+Start:
+
+```bash
+uvicorn yane.api.server:app --reload
+```
+
+Wichtige Endpunkte:
+
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| `POST` | `/configure?n_inputs=2&n_outputs=1` | Population initialisieren |
+| `POST` | `/population/next` | nächstes Genom auswählen |
+| `POST` | `/population/fitness` | Fitness für aktuelles Genom übergeben |
+| `GET` | `/population/status` | Populationsstatus |
+| `GET` | `/population/best` | bestes Genom |
+| `POST` | `/network/inputs` | Inputs setzen |
+| `POST` | `/network/tick` | einen Tick ausführen |
+| `GET` | `/network/outputs` | Outputs lesen |
+| `POST` | `/network/forward` | vollständigen Forward Pass ausführen |
+| `POST` | `/network/reset` | Genomzustand zurücksetzen |
+
+Swagger UI ist während des Serverbetriebs unter `http://127.0.0.1:8000/docs` erreichbar.
+
+## Projektstruktur
+
+```text
+yane/
+  __init__.py
+  neuro_evolution.py          Haupt-API und Trainingsloop
+  run.py                      GUI-Startdatei
+  core/
+    genome.py                 Netzwerk, Forward/Tick, Mutation, Crossover
+    node.py                   Neuron, Aktivierung, Bias, Memory, Input-Scale
+    connection.py             gewichtete Verbindung
+  evolution/
+    mutation.py               selbstadaptierende Mutationsparameter
+    smart_mutation.py         Strukturmutationen
+    innovation.py             Innovation Numbers für NEAT-Crossover
+    population.py             Population, Speziation, Selection, Novelty
+    lamarck_refiner.py        Lamarckian Refinement (Hill-Climb, NES, SA, CMA-ES)
+    adaptive_controller.py    Adaptive Control Layer (AdaptiveController, FeaturePolicy)
+    operator_scheduler.py     Adaptive Mutation Operator Scheduler
+    diagnostics.py            Diagnostics-Aggregation für population_memory_info()
+    efficiency_penalty.py     Laufzeitbasierte Fitnessstrafe
+    coevolution.py            Hall-of-Fame und kompetitive Fitness-Helfer
+    modularity.py             Hidden-Module erkennen und duplizieren
+    indirect_encoding.py      CPPN/HyperNEAT-artige Connection-Generierung
+    matrix_export.py          Matrixexport für NumPy/CuPy-kompatible DAGs
+    backprop.py               optionaler PyTorch-Finetuning-Hook
+    async_evaluation.py       Future-basierte Evaluation-Queues
+    descriptors.py            Descriptor-Registry und Fitness-Komponenten
+  util/
+    activation.py             Aktivierungsfunktionen
+    presets.py                Preset-Serialisierung und -Laden (Schema v2)
+    resource_guard.py         Speicherüberwachung
+    logger.py                 Logging-Helfer
+  benchmarks/
+    adaptive_suite.py         Vergleich: baseline vs full_adaptive auf XOR/CartPole
+    run_suite.py              Benchmark-Gate für CI
+    profile_serialization.py  Checkpoint-Serialisierungs-Profiler
+  presets/
+    fast_dataset.json
+    multi_objective_compact.json
+    quality_diversity.json
+    robust_gym.json
+    adaptive_konservativ.json
+    adaptive_balanciert.json
+    adaptive_aggressiv.json
+    adaptive_analysefreundlich.json
+  gui/
+    main.py
+    window.py                 PySide6-Hauptfenster
+    worker.py                 Trainings- und Demo-Threads
+    canvas.py                 Netzwerk- und Fitnessvisualisierung
+    examples.py               GUI-Beispielregistry
+    panels/
+      left_panel.py           Diagnostics-Sidebar
+    tabs/
+      training_tab.py         Training-Tab mit Adaptive Control Section
+      inspect_tab.py          Inspect-Tab
+  api/
+    server.py                 FastAPI-App
+    models.py                 Pydantic-Modelle
+    routes/
+      network.py              Netzwerkendpunkte
+      population.py           Populationsendpunkte
+  examples/
+    XOR/
+    basic_multiplication/
+    simple_2_2_continuous/
+    simple_3_3_continuous/
+    sequence_recall_PI/
+    MNIST/
+  tests/
+```
+
+## Tests
+
+```bash
+pytest
+```
+
+## Status
+
+Aktive Entwicklung. Teststand: `682 passed`.
+
+Stabiler Kern: Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API,
+Logging, Checkpoints, Multi-Objective, Quality Diversity, CMA-ES, Presets,
+Benchmark-Gates, Adaptive Control Layer, Operator Scheduler, Lamarck-Budget,
+Interspecies-Trigger, Adaptive Benchmark-Suite, GUI-Stability-Guard.

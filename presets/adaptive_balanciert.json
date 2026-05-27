@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "name": "Adaptiv: Balanciert",
+  "description": "Adaptive Kontrolle und Operator-Scheduler aktiv. Gute Ausgangskonfiguration fuer die meisten Aufgaben.",
+  "config": {
+    "population_size": 150,
+    "target_species": 10
+  },
+  "adaptive_policies": {
+    "adaptive_controller": true,
+    "operator_scheduler": true,
+    "interspecies_mode": "Adaptiv",
+    "interspecies_min_rate": 0.01,
+    "interspecies_max_rate": 0.15,
+    "lamarck_schedule": "Adaptiv",
+    "lamarck_optimizer": "Hill-Climbing",
+    "lamarck_budget": 0
+  }
+}

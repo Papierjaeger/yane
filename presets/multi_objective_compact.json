@@ -1,0 +1,11 @@
+{
+  "name": "multi-objective compact",
+  "description": "Optimize task score while minimizing network complexity.",
+  "config": {
+    "population_size": 150,
+    "target_species": 10,
+    "multi_objective": true,
+    "multi_objective_complexity_weight": 0.01,
+    "fitness_shaping": false
+  }
+}

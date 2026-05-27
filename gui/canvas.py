@@ -1,0 +1,1318 @@
+"""Network topology canvas and fitness history chart."""
+from __future__ import annotations
+import math
+import random
+
+from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import Qt, QPointF, QRectF, QSize
+from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPainterPath
+
+
+_C_BG       = QColor("#1e1e2e")
+_C_INPUT    = QColor("#4a90d9")
+_C_HIDDEN   = QColor("#7c7c9c")
+_C_MEMORY   = QColor("#c97bdb")   # persistent hidden (memory) node — warm violet
+_C_OUTPUT   = QColor("#5ba85a")
+_C_BORDER   = QColor("#2d2d4e")
+_C_POS_CONN = QColor("#4a90d9")
+_C_NEG_CONN = QColor("#d94a4a")
+_C_TEXT     = QColor("#cccccc")
+_C_GRID     = QColor("#2a2a3e")
+_C_CHART    = QColor("#4CAF50")
+_C_MEM_RING    = QColor("#f0c0ff")   # outer ring on memory nodes
+_C_DISABLED    = QColor("#555566")   # disabled / inactive connections
+_NODE_R        = 13
+
+
+def _linear_percentile(sorted_vals: list[float], p: float) -> float:
+    """Linear-interpolated percentile from a sorted list. p in [0, 1]."""
+    if not sorted_vals:
+        return 0.0
+    k = (len(sorted_vals) - 1) * p
+    lo = int(k)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = k - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+# ---------------------------------------------------------------------------
+# Force-directed layout
+# ---------------------------------------------------------------------------
+
+def _force_layout(
+    nodes_all: list,
+    inputs: list,
+    outputs: list,
+    hidden: list,
+    w: int,
+    h: int,
+    iterations: int = 120,
+) -> dict[int, list[float]]:
+    """Fruchterman-Reingold spring layout.
+
+    Input and output nodes are fixed (left/right columns).
+    Hidden nodes are placed by minimising a spring energy:
+    - Attraction along edges proportional to |weight|
+    - Repulsion between every pair of nodes
+    - Soft boundary keep nodes inside the canvas
+    """
+    pad = _NODE_R + 18
+
+    def spread_y(idx: int, total: int) -> float:
+        if total == 1:
+            return h / 2.0
+        return pad + (h - 2 * pad) * idx / (total - 1)
+
+    # Keys are node.innovation so positions survive genome.copy() across updates.
+    pos: dict[int, list[float]] = {}
+
+    # Fixed anchors
+    x_in  = pad + _NODE_R
+    x_out = w - pad - _NODE_R
+    for i, n in enumerate(inputs):
+        pos[n.innovation] = [x_in, spread_y(i, len(inputs))]
+    for i, n in enumerate(outputs):
+        pos[n.innovation] = [x_out, spread_y(i, len(outputs))]
+
+    if not hidden:
+        return pos
+
+    # Initialise hidden nodes in the centre with small random offsets
+    rng = random.Random(42)
+    cx, cy = (x_in + x_out) / 2.0, h / 2.0
+    spread = min(w, h) * 0.15
+    for n in hidden:
+        pos[n.innovation] = [
+            cx + rng.uniform(-spread, spread),
+            cy + rng.uniform(-spread, spread),
+        ]
+
+    # Build weighted edge list (skip self-loops for layout)
+    edges: list[tuple[int, int, float]] = []
+    for src in nodes_all:
+        for conn in src.connections:
+            if conn.target is not src and conn.target.innovation in pos:
+                edges.append((src.innovation, conn.target.innovation, abs(conn.weight)))
+
+    hidden_ids = {n.innovation for n in hidden}
+    all_ids    = list(pos.keys())
+
+    # Area-based optimal distance (Fruchterman-Reingold)
+    area = (w - 2 * pad) * (h - 2 * pad)
+    k    = math.sqrt(area / max(len(all_ids), 1)) * 0.7
+
+    for step in range(iterations):
+        temp = k * (1.0 - step / iterations) * 0.5 + k * 0.05
+
+        disp: dict[int, list[float]] = {nid: [0.0, 0.0] for nid in hidden_ids}
+
+        # Repulsion between every pair
+        for i in range(len(all_ids)):
+            aid = all_ids[i]
+            ax, ay = pos[aid]
+            for j in range(i + 1, len(all_ids)):
+                bid = all_ids[j]
+                bx, by = pos[bid]
+                dx, dy = ax - bx, ay - by
+                dist2  = dx * dx + dy * dy
+                dist   = math.sqrt(dist2) if dist2 > 0.01 else 0.1
+                f_rep  = (k * k) / dist          # F-R repulsion
+                ux, uy = dx / dist, dy / dist
+                if aid in disp:
+                    disp[aid][0] += f_rep * ux
+                    disp[aid][1] += f_rep * uy
+                if bid in disp:
+                    disp[bid][0] -= f_rep * ux
+                    disp[bid][1] -= f_rep * uy
+
+        # Attraction along weighted edges
+        for (sid, tid, w_edge) in edges:
+            if sid not in pos or tid not in pos:
+                continue
+            dx = pos[tid][0] - pos[sid][0]
+            dy = pos[tid][1] - pos[sid][1]
+            dist2 = dx * dx + dy * dy
+            dist  = math.sqrt(dist2) if dist2 > 0.01 else 0.1
+            # Stronger connection = stronger pull; scale so that weight≈1 gives
+            # a pull similar to the F-R attractive force
+            f_attr = (dist * dist / k) * (0.4 + 0.8 * w_edge)
+            ux, uy = dx / dist, dy / dist
+            if sid in disp:
+                disp[sid][0] += f_attr * ux
+                disp[sid][1] += f_attr * uy
+            if tid in disp:
+                disp[tid][0] -= f_attr * ux
+                disp[tid][1] -= f_attr * uy
+
+        # Apply displacement, capped by temperature
+        for nid in hidden_ids:
+            fx, fy = disp[nid]
+            mag = math.sqrt(fx * fx + fy * fy)
+            if mag > 0.01:
+                scale = min(mag, temp) / mag
+                fx *= scale
+                fy *= scale
+            x = pos[nid][0] + fx
+            y = pos[nid][1] + fy
+            # Soft clamp: stay inside canvas with padding
+            x = max(pad + _NODE_R, min(w - pad - _NODE_R, x))
+            y = max(pad + _NODE_R, min(h - pad - _NODE_R, y))
+            pos[nid] = [x, y]
+
+    return pos
+
+
+# ---------------------------------------------------------------------------
+# NetworkCanvas
+# ---------------------------------------------------------------------------
+
+class NetworkCanvas(QWidget):
+    """Draws the topology of a Genome using a force-directed layout.
+
+    Inputs are pinned to the left, outputs to the right.  Hidden nodes
+    cluster near strongly-connected neighbours and spread away from nodes
+    they share no connections with.
+    """
+
+    _REPAINT_INTERVAL_S = 0.5
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._genome = None
+        self._pos_cache: dict = {}
+        self._cached_size: tuple[int, int] = (0, 0)
+        self._topo_sig: tuple = ()
+        self._last_repaint: float = 0.0
+        self.setMinimumSize(260, 220)
+
+    @staticmethod
+    def _topology_sig(genome) -> tuple:
+        """Signature that changes only when topology changes, not when weights change."""
+        nodes = tuple(n.innovation for n in genome.nodes)
+        conns = tuple(
+            (src.innovation, conn.target.innovation)
+            for src in genome.nodes
+            for conn in src.connections
+        )
+        return nodes + conns
+
+    def set_genome(self, genome) -> None:
+        import time as _t
+        # Do NOT call _clear() on the old genome — it is still owned by the
+        # caller (Population); clearing it here would destroy its node data.
+        self._genome = genome
+        sig = self._topology_sig(genome)
+        if sig != self._topo_sig:
+            self._topo_sig = sig
+            self._pos_cache = {}
+        now = _t.perf_counter()
+        if now - self._last_repaint >= self._REPAINT_INTERVAL_S:
+            self._last_repaint = now
+            self.update()
+
+    # ------------------------------------------------------------------
+
+    def _positions(self, w: int, h: int) -> dict:
+        from yane.core.node import NodeType
+        g = self._genome
+        if not g:
+            return {}
+        inputs  = g.input_nodes
+        outputs = g.output_nodes
+        hidden  = [n for n in g.nodes if n.type == NodeType.HIDDEN]
+        raw = _force_layout(g.nodes, inputs, outputs, hidden, w, h)
+        return {k: QPointF(v[0], v[1]) for k, v in raw.items()}
+
+    # ------------------------------------------------------------------
+
+    def _arrow_head(self, painter: QPainter, src: QPointF, dst: QPointF,
+                    color: QColor, size: int = 7) -> None:
+        dx, dy = dst.x() - src.x(), dst.y() - src.y()
+        length = math.hypot(dx, dy)
+        if length < 1:
+            return
+        ux, uy = dx / length, dy / length
+        tx = dst.x() - ux * (_NODE_R + 2)
+        ty = dst.y() - uy * (_NODE_R + 2)
+        path = QPainterPath()
+        path.moveTo(tx, ty)
+        path.lineTo(tx - ux * size - uy * size * 0.45,
+                    ty - uy * size + ux * size * 0.45)
+        path.lineTo(tx - ux * size + uy * size * 0.45,
+                    ty - uy * size - ux * size * 0.45)
+        path.closeSubpath()
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(path)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+
+            if not self._genome or not self._genome.nodes:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                                 "No genome loaded")
+                return
+
+            w, h = self.width(), self.height()
+            if not self._pos_cache or self._cached_size != (w, h):
+                self._pos_cache  = self._positions(w, h)
+                self._cached_size = (w, h)
+            pos = self._pos_cache
+
+            from yane.core.node import NodeType
+
+            # --- Connections ---
+            _conn_color = QColor()
+            _pr, _pg, _pb = _C_POS_CONN.red(), _C_POS_CONN.green(), _C_POS_CONN.blue()
+            _nr, _ng, _nb = _C_NEG_CONN.red(), _C_NEG_CONN.green(), _C_NEG_CONN.blue()
+            _pen = QPen(_conn_color, 1.0)
+
+            for node in self._genome.nodes:
+                src = pos.get(node.innovation)
+                if src is None:
+                    continue
+                for conn in node.connections:
+                    dst = pos.get(conn.target.innovation)
+                    if dst is None:
+                        continue
+
+                    if not conn.enabled:
+                        # Disabled connections: grey dashed, no arrow
+                        _pen.setColor(QColor(_C_DISABLED.red(), _C_DISABLED.green(),
+                                             _C_DISABLED.blue(), 90))
+                        _pen.setWidthF(0.8)
+                        _pen.setStyle(Qt.PenStyle.DashLine)
+                        painter.setPen(_pen)
+                        if conn.target is not node:
+                            painter.drawLine(src, dst)
+                        _pen.setStyle(Qt.PenStyle.SolidLine)
+                        continue
+
+                    # Alpha and width both scale with |weight|
+                    w_abs  = abs(conn.weight)
+                    alpha  = min(220, max(35, int(w_abs * 150 + 35)))
+                    lwidth = min(3.5, max(0.8, w_abs * 1.8))
+
+                    if conn.weight >= 0:
+                        _conn_color.setRgb(_pr, _pg, _pb, alpha)
+                    else:
+                        _conn_color.setRgb(_nr, _ng, _nb, alpha)
+
+                    _pen.setColor(_conn_color)
+                    _pen.setWidthF(lwidth)
+                    painter.setPen(_pen)
+
+                    if conn.target is node:
+                        # Self-loop: small arc above the node
+                        r = _NODE_R * 1.6
+                        loop_rect = QRectF(
+                            src.x() - r * 0.5,
+                            src.y() - _NODE_R - r * 1.8,
+                            r, r,
+                        )
+                        painter.drawArc(loop_rect, 0, 360 * 16)
+                    else:
+                        painter.drawLine(src, dst)
+                        self._arrow_head(painter, src, dst, _conn_color,
+                                         size=max(5, int(5 + lwidth)))
+
+            # --- Nodes ---
+            font = QFont()
+            font.setPointSize(7)
+            font.setBold(True)
+            painter.setFont(font)
+
+            for node in self._genome.nodes:
+                p = pos.get(node.innovation)
+                if p is None:
+                    continue
+
+                is_memory = (node.type == NodeType.HIDDEN and node.persist_value)
+                color = (_C_INPUT  if node.type == NodeType.INPUT  else
+                         _C_OUTPUT if node.type == NodeType.OUTPUT else
+                         _C_MEMORY if is_memory else
+                         _C_HIDDEN)
+
+                # Memory nodes: dashed outer ring to signal persistence
+                if is_memory:
+                    ring_pen = QPen(_C_MEM_RING, 1.5, Qt.PenStyle.DashLine)
+                    painter.setPen(ring_pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    r_ring = _NODE_R + 5
+                    painter.drawEllipse(
+                        QRectF(p.x() - r_ring, p.y() - r_ring,
+                               r_ring * 2, r_ring * 2)
+                    )
+
+                # Glow: faint larger circle underneath
+                glow = QColor(color)
+                glow.setAlpha(45)
+                painter.setBrush(QBrush(glow))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(
+                    QRectF(p.x() - _NODE_R - 3, p.y() - _NODE_R - 3,
+                           (_NODE_R + 3) * 2, (_NODE_R + 3) * 2)
+                )
+
+                # Main circle
+                border_color = _C_MEM_RING if is_memory else _C_BORDER
+                painter.setBrush(QBrush(color))
+                painter.setPen(QPen(border_color, 2.0 if is_memory else 1.5))
+                painter.drawEllipse(
+                    QRectF(p.x() - _NODE_R, p.y() - _NODE_R,
+                           _NODE_R * 2, _NODE_R * 2)
+                )
+
+                # Activation label; memory nodes show "M" superscript dot
+                label = node.activation.value[0].upper()
+                painter.setPen(_C_BG)
+                painter.drawText(
+                    QRectF(p.x() - _NODE_R, p.y() - _NODE_R,
+                           _NODE_R * 2, _NODE_R * 2),
+                    Qt.AlignmentFlag.AlignCenter,
+                    label,
+                )
+
+                # Memory indicator: small filled dot in top-right of node
+                if is_memory:
+                    dot_r = 3.5
+                    painter.setBrush(QBrush(_C_MEM_RING))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(
+                        QRectF(p.x() + _NODE_R - dot_r * 1.8,
+                               p.y() - _NODE_R - dot_r * 0.5,
+                               dot_r * 2, dot_r * 2)
+                    )
+
+                # Innovation number below node
+                if node.innovation >= 0:
+                    inno_font = QFont()
+                    inno_font.setPointSize(5)
+                    painter.setFont(inno_font)
+                    painter.setPen(QColor("#6a6a8a"))
+                    painter.drawText(
+                        QRectF(p.x() - _NODE_R, p.y() + _NODE_R + 1,
+                               _NODE_R * 2, 10),
+                        Qt.AlignmentFlag.AlignCenter,
+                        str(node.innovation),
+                    )
+                    painter.setFont(font)  # restore node label font
+
+            # ── Legend ────────────────────────────────────────────────────
+            legend_font = QFont()
+            legend_font.setPointSize(6)
+            painter.setFont(legend_font)
+            dot_r = 4
+            ly = h - 6
+            lx = 6
+            for color, label in (
+                (_C_INPUT,  "Input"),
+                (_C_HIDDEN, "Hidden"),
+                (_C_OUTPUT, "Output"),
+                (_C_MEMORY, "Memory"),
+            ):
+                painter.setBrush(QBrush(color))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(QRectF(lx, ly - dot_r, dot_r * 2, dot_r * 2))
+                painter.setPen(QColor("#a6adc8"))
+                painter.drawText(lx + dot_r * 2 + 2, ly + dot_r - 1, label)
+                lx += dot_r * 2 + len(label) * 5 + 6
+
+        finally:
+            painter.end()
+
+    def sizeHint(self) -> QSize:
+        return QSize(280, 260)
+
+
+# ---------------------------------------------------------------------------
+
+class FitnessChart(QWidget):
+    """Scrolling line chart for fitness history with best-so-far line."""
+
+    _MAX_POINTS = 400
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._history: list[float] = []
+        self._best_history: list[float] = []
+        self._lo: float = 0.0
+        self._hi: float = 0.0
+        self.setMinimumHeight(110)
+
+    def add_point(self, fitness: float) -> None:
+        self._history.append(fitness)
+        best_so_far = (max(self._best_history[-1] if self._best_history else fitness,
+                           fitness))
+        self._best_history.append(best_so_far)
+
+        if len(self._history) > self._MAX_POINTS:
+            self._history     = self._history[-self._MAX_POINTS:]
+            self._best_history = self._best_history[-self._MAX_POINTS:]
+            self._lo, self._hi = min(self._history), max(self._best_history)
+        elif len(self._history) == 1:
+            self._lo = self._hi = fitness
+        else:
+            self._lo = min(self._lo, fitness)
+            self._hi = max(self._hi, best_so_far)
+        self.update()
+
+    def clear(self) -> None:
+        self._history.clear()
+        self._best_history.clear()
+        self._lo = self._hi = 0.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), _C_BG)
+
+        w, h = self.width(), self.height()
+        pad_l, pad_r, pad_t, pad_b = 48, 10, 10, 22
+
+        # Grid lines
+        painter.setPen(QPen(_C_GRID, 1))
+        for i in range(4):
+            y = pad_t + (h - pad_t - pad_b) * i / 3
+            painter.drawLine(pad_l, int(y), w - pad_r, int(y))
+
+        if len(self._history) < 2:
+            painter.setPen(_C_TEXT)
+            font = QFont(); font.setPointSize(8)
+            painter.setFont(font)
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                             "Waiting for data…")
+            return
+
+        n = len(self._history)
+
+        # ── Outlier-resistant y-axis range (IQR method) ───────────────────
+        # Lower fence = Q1 - 1.5×IQR: the standard Tukey outlier boundary.
+        # Values below the fence are clipped to the chart edge and annotated.
+        # The best-so-far maximum is always fully visible (sets the top).
+        sorted_h = sorted(self._history)
+        actual_lo = sorted_h[0]
+        hi = max(self._best_history) if self._best_history else sorted_h[-1]
+
+        q1 = _linear_percentile(sorted_h, 0.25)
+        q3 = _linear_percentile(sorted_h, 0.75)
+        iqr = q3 - q1
+        lo_fence = (q1 - 1.5 * iqr) if iqr > 0 else actual_lo
+        lo = max(actual_lo, lo_fence)
+
+        # Add 10 % padding so lines don't touch the edges
+        span = hi - lo if hi != lo else 1e-6
+        lo -= span * 0.10
+        hi += span * 0.05
+        if lo == hi:
+            hi = lo + 1e-6
+
+        # Clipping helper: keep y inside [pad_t, h - pad_b]
+        y_top = float(pad_t)
+        y_bot = float(h - pad_b)
+
+        def px(i: int) -> float:
+            return pad_l + (w - pad_l - pad_r) * i / (n - 1)
+
+        def py(v: float) -> float:
+            raw = h - pad_b - (h - pad_t - pad_b) * (v - lo) / (hi - lo)
+            return max(y_top, min(y_bot, raw))
+
+        def is_clipped(v: float) -> bool:
+            return v < lo or v > hi
+
+        # ── Current-fitness line (thin, dimmed, clipped) ──────────────────
+        pen_cur = QPen(QColor("#4CAF5088"), 1)
+        pen_clip = QPen(QColor("#ff6b6b60"), 1, Qt.PenStyle.DotLine)
+        for i in range(1, n):
+            v0, v1 = self._history[i - 1], self._history[i]
+            p = pen_clip if (is_clipped(v0) or is_clipped(v1)) else pen_cur
+            painter.setPen(p)
+            painter.drawLine(int(px(i - 1)), int(py(v0)),
+                             int(px(i)),     int(py(v1)))
+
+        # ── Best-so-far line (bright, always fully visible) ───────────────
+        pen_best = QPen(_C_CHART, 2)
+        painter.setPen(pen_best)
+        for i in range(1, len(self._best_history)):
+            painter.drawLine(int(px(i - 1)), int(py(self._best_history[i - 1])),
+                             int(px(i)),     int(py(self._best_history[i])))
+
+        # ── Outlier indicator ─────────────────────────────────────────────
+        # If the true minimum is below the visible lo, draw a subtle marker
+        if actual_lo < lo:
+            painter.setPen(QPen(QColor("#ff6b6b99"), 1))
+            painter.drawLine(pad_l, int(y_bot), w - pad_r, int(y_bot))
+            font_sm = QFont(); font_sm.setPointSize(6)
+            painter.setFont(font_sm)
+            painter.setPen(QColor("#ff6b6b"))
+            painter.drawText(pad_l + 2, int(y_bot) - 2, f"min {actual_lo:.3g}")
+
+        # ── Axis labels ───────────────────────────────────────────────────
+        font = QFont(); font.setPointSize(7)
+        painter.setFont(font)
+        painter.setPen(_C_TEXT)
+        painter.drawText(2, pad_t + 10, f"{hi:.3g}")
+        painter.drawText(2, pad_t + int((h - pad_t - pad_b) * 0.5) + 5, f"{(lo + hi) / 2:.3g}")
+        painter.drawText(2, h - pad_b,  f"{lo:.3g}")
+        # ── X-axis ticks (iteration labels at 25 %, 50 %, 75 %) ──────────
+        painter.setPen(QPen(_C_GRID, 1))
+        for frac in (0.25, 0.5, 0.75):
+            tx = int(pad_l + (w - pad_l - pad_r) * frac)
+            painter.drawLine(tx, h - pad_b, tx, h - pad_b + 3)
+        painter.setPen(_C_TEXT)
+        painter.drawText(pad_l,          h - 5, "0")
+        for frac in (0.25, 0.5, 0.75):
+            tx = int(pad_l + (w - pad_l - pad_r) * frac)
+            label = str(int(n * frac))
+            painter.drawText(tx - len(label) * 3, h - 5, label)
+        painter.drawText(w - pad_r - 26, h - 5, str(n))
+
+        # ── Legend ────────────────────────────────────────────────────────
+        painter.setPen(QPen(_C_CHART, 2))
+        painter.drawLine(w - 90, pad_t + 8, w - 70, pad_t + 8)
+        painter.setPen(_C_TEXT)
+        painter.drawText(w - 66, pad_t + 12, "best")
+
+
+# ---------------------------------------------------------------------------
+
+class SpeciesChart(QWidget):
+    """Compact line chart that tracks species count over training iterations."""
+
+    _MAX_POINTS = 400
+    _C_LINE = QColor("#fab387")  # peach
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._history: list[int] = []
+        self.setMinimumHeight(65)
+        self.setMaximumHeight(75)
+
+    def add_point(self, count: int) -> None:
+        self._history.append(count)
+        if len(self._history) > self._MAX_POINTS:
+            self._history = self._history[-self._MAX_POINTS:]
+        self.update()
+
+    def clear(self) -> None:
+        self._history.clear()
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            w, h = self.width(), self.height()
+            pad_l, pad_r, pad_t, pad_b = 28, 8, 5, 14
+
+            font = QFont(); font.setPointSize(7)
+            painter.setFont(font)
+
+            if len(self._history) < 2:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Waiting for data…")
+                return
+
+            n = len(self._history)
+            hi = max(max(self._history), 1)
+            chart_h = h - pad_t - pad_b
+
+            painter.setPen(QPen(_C_GRID, 1))
+            painter.drawLine(pad_l, pad_t, pad_l, h - pad_b)
+
+            def px(i): return pad_l + (w - pad_l - pad_r) * i / (n - 1)
+            def py(v): return h - pad_b - chart_h * v / hi
+
+            painter.setPen(QPen(self._C_LINE, 1.5))
+            for i in range(1, n):
+                painter.drawLine(int(px(i - 1)), int(py(self._history[i - 1])),
+                                 int(px(i)),     int(py(self._history[i])))
+
+            painter.setPen(_C_TEXT)
+            painter.drawText(2, pad_t + 8, str(hi))
+            painter.drawText(2, h - pad_b + 1, "0")
+            painter.setPen(self._C_LINE)
+            painter.drawText(pad_l + 4, pad_t + 9, f"Species: {self._history[-1]}")
+        finally:
+            painter.end()
+
+
+# ---------------------------------------------------------------------------
+
+class MutationRateChart(QWidget):
+    """Compact sparkline chart tracking population-wide sigma_global over time."""
+
+    _MAX_POINTS = 400
+    _C_LINE  = QColor("#a6e3a1")   # green
+    _C_LINE2 = QColor("#89b4fa")   # blue (weight rate)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._sigma: list[float] = []
+        self._wt_rate: list[float] = []
+        self.setMinimumHeight(65)
+        self.setMaximumHeight(75)
+
+    def add_point(self, sigma: float, wt_rate: float) -> None:
+        self._sigma.append(sigma)
+        self._wt_rate.append(wt_rate)
+        if len(self._sigma) > self._MAX_POINTS:
+            self._sigma = self._sigma[-self._MAX_POINTS:]
+            self._wt_rate = self._wt_rate[-self._MAX_POINTS:]
+        self.update()
+
+    def clear(self) -> None:
+        self._sigma.clear()
+        self._wt_rate.clear()
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            w, h = self.width(), self.height()
+            pad_l, pad_r, pad_t, pad_b = 36, 8, 5, 14
+
+            font = QFont(); font.setPointSize(7)
+            painter.setFont(font)
+
+            n = len(self._sigma)
+            if n < 2:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                                 "Waiting for data…")
+                return
+
+            all_vals = self._sigma + self._wt_rate
+            lo = max(0.0, min(all_vals))
+            hi = max(all_vals)
+            if hi <= lo:
+                hi = lo + 1.0
+
+            chart_h = h - pad_t - pad_b
+            def px(i): return pad_l + (w - pad_l - pad_r) * i / (n - 1)
+            def py(v): return h - pad_b - chart_h * (v - lo) / (hi - lo)
+
+            painter.setPen(QPen(_C_GRID, 1))
+            painter.drawLine(pad_l, pad_t, pad_l, h - pad_b)
+
+            painter.setPen(QPen(self._C_LINE, 1.5))
+            for i in range(1, n):
+                painter.drawLine(int(px(i - 1)), int(py(self._sigma[i - 1])),
+                                 int(px(i)),     int(py(self._sigma[i])))
+
+            if self._wt_rate:
+                painter.setPen(QPen(self._C_LINE2, 1.0))
+                for i in range(1, n):
+                    painter.drawLine(int(px(i - 1)), int(py(self._wt_rate[i - 1])),
+                                     int(px(i)),     int(py(self._wt_rate[i])))
+
+            painter.setPen(_C_TEXT)
+            painter.drawText(2, pad_t + 8,  f"{hi:.3f}")
+            painter.drawText(2, h - pad_b + 1, f"{lo:.3f}")
+            painter.setPen(self._C_LINE)
+            painter.drawText(pad_l + 4, pad_t + 9,
+                             f"σ: {self._sigma[-1]:.3f}  wt: {self._wt_rate[-1]:.3f}"
+                             if self._wt_rate else f"σ: {self._sigma[-1]:.3f}")
+        finally:
+            painter.end()
+
+
+# ---------------------------------------------------------------------------
+
+class WeightHistogram(QWidget):
+    """Bar chart of connection-weight distribution for the best genome."""
+
+    _BINS = 24
+    _C_BAR  = QColor("#89b4fa70")
+    _C_ZERO = QColor("#cba6f760")
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._weights: list[float] = []
+        self.setMinimumHeight(65)
+        self.setMaximumHeight(75)
+
+    def set_weights(self, weights: list[float]) -> None:
+        self._weights = weights
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            w, h = self.width(), self.height()
+            pad_l, pad_r, pad_t, pad_b = 6, 6, 5, 14
+
+            font = QFont(); font.setPointSize(6)
+            painter.setFont(font)
+
+            if not self._weights:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No weights")
+                return
+
+            lo, hi_val = min(self._weights), max(self._weights)
+            if lo == hi_val:
+                lo -= 0.5; hi_val += 0.5
+            span = hi_val - lo
+
+            bins = [0] * self._BINS
+            for wv in self._weights:
+                idx = min(int((wv - lo) / span * self._BINS), self._BINS - 1)
+                bins[idx] += 1
+
+            max_count = max(bins) if bins else 1
+            chart_w = w - pad_l - pad_r
+            chart_h = h - pad_t - pad_b
+            bar_w = chart_w / self._BINS
+
+            # Zero line
+            if lo < 0 < hi_val:
+                zero_x = pad_l + (-lo) / span * chart_w
+                painter.setPen(QPen(self._C_ZERO, 1))
+                painter.drawLine(int(zero_x), pad_t, int(zero_x), h - pad_b)
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self._C_BAR))
+            for i, count in enumerate(bins):
+                bh = chart_h * count / max_count
+                painter.drawRect(QRectF(pad_l + i * bar_w + 0.5,
+                                        h - pad_b - bh, bar_w - 1.0, bh))
+
+            painter.setPen(_C_TEXT)
+            painter.drawText(pad_l, h - 2, f"{lo:.2f}")
+            tw = len(f"{hi_val:.2f}") * 5
+            painter.drawText(w - pad_r - tw, h - 2, f"{hi_val:.2f}")
+            painter.drawText(pad_l + 2, pad_t + 8, f"Weights ({len(self._weights)})")
+        finally:
+            painter.end()
+
+
+class FitnessHistogram(QWidget):
+    """Bar chart of fitness distribution across the evaluated population."""
+
+    _BINS = 10
+    _C_BAR = QColor("#a6e3a170")      # green-ish bar (fitness = good)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._data: dict | None = None
+        self.setMinimumHeight(55)
+        self.setMaximumHeight(65)
+
+    def set_data(self, data: dict | None) -> None:
+        """*data* is the ``fitness_histogram`` dict from population_memory_info()."""
+        self._data = data
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), _C_BG)
+            w, h = self.width(), self.height()
+            pad_l, pad_r, pad_t, pad_b = 6, 6, 5, 14
+
+            font = QFont(); font.setPointSize(6)
+            painter.setFont(font)
+
+            if not self._data:
+                painter.setPen(_C_TEXT)
+                painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                                 "No fitness data")
+                return
+
+            counts = self._data["counts"]
+            f_min = self._data["min"]
+            f_max = self._data["max"]
+            max_count = max(counts) if counts else 1
+            n_bins = len(counts)
+            chart_w = w - pad_l - pad_r
+            chart_h = h - pad_t - pad_b
+            bar_w = chart_w / n_bins
+
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self._C_BAR))
+            for i, count in enumerate(counts):
+                bh = chart_h * count / max_count if max_count > 0 else 0
+                painter.drawRect(QRectF(pad_l + i * bar_w + 0.5,
+                                        h - pad_b - bh, bar_w - 1.0, bh))
+
+            painter.setPen(_C_TEXT)
+            painter.drawText(pad_l, h - 2, f"{f_min:.2f}")
+            tw = len(f"{f_max:.2f}") * 5
+            painter.drawText(w - pad_r - tw, h - 2, f"{f_max:.2f}")
+            total = sum(counts)
+            painter.drawText(pad_l + 2, pad_t + 8, f"Fitness ({total})")
+        finally:
+            painter.end()
+
+
+from yane.gui.quality_widgets import MapElitesHeatmap, ParetoScatter  # noqa: E402,F401
+
+
+# ---------------------------------------------------------------------------
+# SensitivityChart — horizontal bar chart of per-input influence scores
+# ---------------------------------------------------------------------------
+
+class SensitivityChart(QWidget):
+    """Horizontal bar chart showing per-input influence scores from sensitivity analysis."""
+
+    _C_BAR_POS = QColor("#89b4fa")   # blue — influence score
+    _C_ZERO    = QColor("#45475a")   # dim — zero/negligible bar
+    _C_TEXT    = QColor("#cdd6f4")
+    _C_TITLE   = QColor("#a6adc8")
+    _C_DEAD    = QColor("#f38ba8")   # red — dead-node marker
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._scores: list[float] = []
+        self._labels: list[str] = []
+        self._dead_nodes: set = set()
+        self._dead_label: str = ""
+        self.setMinimumHeight(80)
+
+    def set_data(
+        self,
+        scores: list[float],
+        labels: list[str] | None = None,
+        dead_nodes: set | None = None,
+        dead_label: str = "",
+    ) -> None:
+        self._scores = list(scores)
+        self._labels = labels or [f"I{i}" for i in range(len(scores))]
+        self._dead_nodes = dead_nodes or set()
+        self._dead_label = dead_label
+        self.update()
+
+    def clear(self) -> None:
+        self._scores = []
+        self._labels = []
+        self._dead_nodes = set()
+        self._dead_label = ""
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
+        w, h = self.width(), self.height()
+        painter.fillRect(0, 0, w, h, _C_BG)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        scores = self._scores
+        if not scores:
+            painter.setPen(self._C_TITLE)
+            painter.drawText(QRectF(0, 0, w, h),
+                             Qt.AlignmentFlag.AlignCenter,
+                             "Sensitivitätsanalyse — kein Genom geladen")
+            return
+
+        pad_l, pad_r, pad_t, pad_b = 38, 8, 18, (28 if self._dead_label else 6)
+        chart_w = max(1, w - pad_l - pad_r)
+        n = len(scores)
+        bar_h_avail = max(1, h - pad_t - pad_b)
+        bar_h = max(6, min(22, bar_h_avail // max(1, n) - 3))
+        spacing = max(2, (bar_h_avail - n * bar_h) // max(1, n + 1))
+        max_score = max(scores) if scores else 0.0
+
+        font = QFont()
+        font.setPixelSize(10)
+        painter.setFont(font)
+
+        for i, (score, label) in enumerate(zip(scores, self._labels)):
+            y = pad_t + i * (bar_h + spacing)
+            ratio = (score / max_score) if max_score > 1e-12 else 0.0
+            bw = int(chart_w * ratio)
+
+            color = self._C_BAR_POS if ratio > 0.01 else self._C_ZERO
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            if bw > 0:
+                painter.drawRoundedRect(QRectF(pad_l, y, bw, bar_h), 2, 2)
+
+            painter.setPen(self._C_TEXT)
+            painter.drawText(QRectF(0, y, pad_l - 2, bar_h),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             label)
+            if max_score > 1e-12:
+                painter.drawText(QRectF(pad_l + bw + 3, y, 50, bar_h),
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                 f"{score:.3f}")
+
+        # Dead-node summary line
+        if self._dead_label:
+            painter.setPen(self._C_DEAD)
+            painter.drawText(QRectF(0, h - pad_b + 2, w, pad_b - 2),
+                             Qt.AlignmentFlag.AlignCenter,
+                             self._dead_label)
+
+    def sizeHint(self) -> QSize:
+        n = max(1, len(self._scores))
+        return QSize(260, max(80, n * 28 + 30))
+
+
+# ---------------------------------------------------------------------------
+# LandscapeScatter — PCA scatterplot for evaluated genomes
+# ---------------------------------------------------------------------------
+
+class LandscapeScatter(QWidget):
+    """Shows a 2D PCA projection of the evaluated population."""
+
+    _COLORS = [
+        QColor("#89b4fa"),
+        QColor("#a6e3a1"),
+        QColor("#f9e2af"),
+        QColor("#f5c2e7"),
+        QColor("#94e2d5"),
+        QColor("#fab387"),
+        QColor("#cba6f7"),
+        QColor("#f38ba8"),
+    ]
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._snapshot: dict = {}
+        self.setMinimumHeight(180)
+
+    def set_snapshot(self, snapshot: dict) -> None:
+        self._snapshot = snapshot or {}
+        self.update()
+
+    def clear(self) -> None:
+        self._snapshot = {}
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter: QPainter) -> None:
+        w, h = self.width(), self.height()
+        painter.fillRect(0, 0, w, h, _C_BG)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        xs = list(self._snapshot.get("x", []))
+        ys = list(self._snapshot.get("y", []))
+        fitness = list(self._snapshot.get("fitness", []))
+        species = list(self._snapshot.get("species_id", []))
+        if not xs:
+            painter.setPen(_C_TEXT)
+            painter.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter,
+                             "Landscape PCA")
+            return
+
+        pad_l, pad_r, pad_t, pad_b = 44, 14, 24, 34
+        chart_w = max(1, w - pad_l - pad_r)
+        chart_h = max(1, h - pad_t - pad_b)
+
+        painter.setPen(QPen(_C_GRID, 1))
+        for i in range(5):
+            gx = pad_l + i * chart_w / 4
+            gy = pad_t + i * chart_h / 4
+            painter.drawLine(QPointF(gx, pad_t), QPointF(gx, pad_t + chart_h))
+            painter.drawLine(QPointF(pad_l, gy), QPointF(pad_l + chart_w, gy))
+
+        painter.setPen(QPen(_C_TEXT, 1))
+        painter.drawLine(QPointF(pad_l, pad_t + chart_h), QPointF(pad_l + chart_w, pad_t + chart_h))
+        painter.drawLine(QPointF(pad_l, pad_t), QPointF(pad_l, pad_t + chart_h))
+
+        fit_min = min(fitness) if fitness else 0.0
+        fit_max = max(fitness) if fitness else 0.0
+        fit_span = max(fit_max - fit_min, 1e-12)
+
+        for x, y, fit, sid in zip(xs, ys, fitness, species):
+            px = pad_l + ((float(x) + 3.0) / 6.0) * chart_w
+            py = pad_t + chart_h - ((float(y) + 3.0) / 6.0) * chart_h
+            color = QColor(self._COLORS[int(sid) % len(self._COLORS)])
+            color.setAlpha(120 + int(135 * ((float(fit) - fit_min) / fit_span)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(color))
+            painter.drawEllipse(QRectF(px - 4, py - 4, 8, 8))
+
+        ev = self._snapshot.get("explained_var", [0.0, 0.0])
+        title = (
+            f"PCA: {len(xs)} Genome | "
+            f"PC1 {float(ev[0]) if ev else 0.0:.1%}, "
+            f"PC2 {float(ev[1]) if len(ev) > 1 else 0.0:.1%}"
+        )
+        font = QFont()
+        font.setPixelSize(11)
+        painter.setFont(font)
+        painter.setPen(_C_TEXT)
+        painter.drawText(QRectF(pad_l, 2, chart_w, pad_t - 2),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         title)
+        painter.drawText(QRectF(0, h - pad_b + 8, w, pad_b - 8),
+                         Qt.AlignmentFlag.AlignCenter,
+                         "PC1 / PC2")
+
+    def export_png(self, path: str) -> None:
+        from PySide6.QtGui import QPixmap, QPainter as QP
+        from PySide6.QtCore import Qt as Qt_
+        px = QPixmap(self.size())
+        px.fill(Qt_.GlobalColor.transparent)
+        p = QP(px)
+        self._paint(p)
+        p.end()
+        px.save(path, "PNG")
+
+    def sizeHint(self) -> QSize:
+        return QSize(420, 240)
+
+
+# ---------------------------------------------------------------------------
+# MultiRunChart — overlaid fitness curves for up to 4 runs
+# ---------------------------------------------------------------------------
+
+class MultiRunChart(QWidget):
+    """Shows overlaid best-fitness curves for up to 4 runs or config groups.
+
+    Each run in ``self._runs``::
+
+        {"name": str, "iterations": [int, ...], "best_fitness": [float, ...]}
+
+    When a run dict contains ``"median"``, ``"q1"``, ``"q3"`` (same length
+    as iterations), a shaded IQR band is drawn behind the median line.
+    """
+
+    _COLORS = [
+        QColor("#89b4fa"),   # blue
+        QColor("#a6e3a1"),   # green
+        QColor("#fab387"),   # peach
+        QColor("#cba6f7"),   # mauve
+    ]
+
+    _BAND_ALPHA = 40  # alpha for shaded IQR band (0-255)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._runs: list[dict] = []
+        self.setMinimumHeight(160)
+
+    def set_runs(self, runs: list[dict]) -> None:
+        self._runs = runs[:4]
+        self.update()
+
+    def clear(self) -> None:
+        self._runs = []
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    @staticmethod
+    def compute_bands(runs: list[dict]) -> list[dict]:
+        """Group runs by name prefix (same config), compute median/IQR bands.
+
+        Returns a new list of run dicts where runs with the same name
+        prefix are merged into one dict with median/q1/q3 keys.
+        Runs with unique names are returned as-is.
+        """
+        # Group by name prefix (strip trailing " (N)" seed markers)
+        from collections import defaultdict
+        groups: dict[str, list[dict]] = defaultdict(list)
+        for run in runs:
+            name = run.get("name", "Unknown")
+            groups[name].append(run)
+
+        result: list[dict] = []
+        for name, group in groups.items():
+            if len(group) == 1:
+                result.append(group[0])
+                continue
+
+            # Find common iteration points across all runs
+            iterations = group[0].get("iterations", [])
+            step = max(1, len(iterations) // 50) if iterations else 1
+            sample_its = iterations[::step]
+
+            # Gather fitness at each sample point
+            medians: list[float] = []
+            q1s: list[float] = []
+            q3s: list[float] = []
+            for idx, it in enumerate(sample_its):
+                vals = []
+                for run in group:
+                    fits = run.get("best_fitness", [])
+                    if idx < len(fits):
+                        vals.append(fits[idx])
+                if vals:
+                    sv = sorted(vals)
+                    medians.append(_linear_percentile(sv, 0.50))
+                    q1s.append(_linear_percentile(sv, 0.25))
+                    q3s.append(_linear_percentile(sv, 0.75))
+
+            result.append({
+                "name": name,
+                "iterations": sample_its,
+                "best_fitness": medians,
+                "median": medians,
+                "q1": q1s,
+                "q3": q3s,
+            })
+        return result
+
+    def _paint(self, painter: QPainter) -> None:
+        w, h = self.width(), self.height()
+        painter.fillRect(0, 0, w, h, _C_BG)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        runs = self._runs
+        if not runs:
+            painter.setPen(_C_TEXT)
+            painter.drawText(QRectF(0, 0, w, h),
+                             Qt.AlignmentFlag.AlignCenter,
+                             "Keine Runs geladen — Runs auswählen um Kurven anzuzeigen")
+            return
+
+        # Collect axis bounds across all runs
+        all_iter: list[int] = []
+        all_fit: list[float] = []
+        for run in runs:
+            all_iter.extend(run.get("iterations", []))
+            all_fit.extend(run.get("best_fitness", []))
+
+        if not all_iter or not all_fit:
+            return
+
+        iter_max = max(all_iter)
+        fit_min, fit_max = min(all_fit), max(all_fit)
+        if fit_max == fit_min:
+            fit_max = fit_min + 1.0
+
+        pad_l, pad_r, pad_t, pad_b = 48, 14, 14, 28
+        chart_w = max(1, w - pad_l - pad_r)
+        chart_h = max(1, h - pad_t - pad_b)
+
+        def _x(it: int) -> int:
+            return pad_l + int(chart_w * it / iter_max) if iter_max > 0 else pad_l
+
+        def _y(ft: float) -> int:
+            return pad_t + int(chart_h * (1.0 - (ft - fit_min) / (fit_max - fit_min)))
+
+        # Grid lines
+        painter.setPen(QPen(_C_GRID, 1))
+        for step in range(4):
+            gy = pad_t + step * chart_h // 3
+            painter.drawLine(pad_l, gy, w - pad_r, gy)
+
+        # Axis labels
+        font = QFont()
+        font.setPixelSize(9)
+        painter.setFont(font)
+        painter.setPen(_C_TEXT)
+        for i in range(4):
+            val = fit_max - i * (fit_max - fit_min) / 3
+            gy = int(pad_t + i * chart_h / 3)
+            painter.drawText(0, gy - 4, pad_l - 3, 12,
+                             Qt.AlignmentFlag.AlignRight, f"{val:.2f}")
+
+        # Curves: draw IQR bands first (behind), then median/individual lines
+        for run_idx, run in enumerate(runs):
+            iters = run.get("iterations", [])
+            if len(iters) < 2:
+                continue
+
+            color = self._COLORS[run_idx % len(self._COLORS)]
+
+            # IQR band if available
+            q1 = run.get("q1")
+            q3 = run.get("q3")
+            if q1 and q3 and len(q1) == len(iters):
+                band_color = QColor(color)
+                band_color.setAlpha(self._BAND_ALPHA)
+                painter.setBrush(QBrush(band_color))
+                painter.setPen(Qt.PenStyle.NoPen)
+
+                band_path = QPainterPath()
+                band_path.moveTo(_x(iters[0]), _y(q1[0]))
+                for it, q1v in zip(iters[1:], q1[1:]):
+                    band_path.lineTo(_x(it), _y(q1v))
+                for it, q3v in zip(reversed(iters), reversed(q3)):
+                    band_path.lineTo(_x(it), _y(q3v))
+                band_path.closeSubpath()
+                painter.drawPath(band_path)
+
+            # Determine which y-values to plot (median if available, else individual)
+            fits = run.get("median") or run.get("best_fitness", [])
+            if len(fits) < 2:
+                continue
+
+            pen = QPen(color, 1.8)
+            painter.setPen(pen)
+            if run.get("median"):
+                pen.setWidth(2.5)
+                painter.setPen(pen)
+
+            points = []
+            for it, ft in zip(iters, fits):
+                points.append(QPointF(_x(it), _y(ft)))
+
+            path = QPainterPath()
+            path.moveTo(points[0])
+            for pt in points[1:]:
+                path.lineTo(pt)
+            painter.drawPath(path)
+
+        # Legend
+        legend_x = pad_l + 4
+        legend_y = pad_t + 4
+        font.setPixelSize(10)
+        painter.setFont(font)
+        for run_idx, run in enumerate(runs):
+            color = self._COLORS[run_idx % len(self._COLORS)]
+            painter.setBrush(QBrush(color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(QRectF(legend_x, legend_y, 7, 7))
+            painter.setPen(color)
+            name = run.get("name", f"Run {run_idx + 1}")
+            painter.drawText(legend_x + 10, legend_y + 8, name)
+            legend_x += 12 + len(name) * 5 + 10
+
+        # X-axis iteration label
+        painter.setPen(_C_TEXT)
+        painter.drawText(QRectF(0, h - pad_b, w, pad_b),
+                         Qt.AlignmentFlag.AlignCenter,
+                         f"Iterationen (0 – {iter_max})")
+
+    def export_png(self, path: str) -> None:
+        """Render the chart to a PNG file."""
+        from PySide6.QtGui import QPixmap, QPainter as QP
+        from PySide6.QtCore import Qt as Qt_
+        px = QPixmap(self.size())
+        px.fill(Qt_.GlobalColor.transparent)
+        p = QP(px)
+        self._paint(p)
+        p.end()
+        px.save(path, "PNG")
+
+    def sizeHint(self) -> QSize:
+        return QSize(400, 220)

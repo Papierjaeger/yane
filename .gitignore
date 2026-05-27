@@ -135,3 +135,10 @@ yane_config.json
 src/neural_network/tests/yane_config.json~
 src/examples/MNIST/mnist_test.csv
 src/examples/MNIST/mnist_train.csv
+*.pclprof
+/.claude
+.claude/settings.local.json
+/.vscode
+/logs
+/.github
+benchmarks/benchmark_runs.db

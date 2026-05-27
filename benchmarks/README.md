@@ -1,0 +1,60 @@
+# YANE Benchmarks
+
+Langzeittests zur Verifikation der Evolutionslogik. Dienen als Referenz bei
+zukünftigen Änderungen, um Regressionen und Verbesserungen zu erkennen.
+
+## Dateistruktur
+
+`YYYY-MM-DD_<umgebung>[_notiz].md` — ein File pro Testsession.
+
+## Skripte
+
+```bash
+python -m yane.benchmarks.run_suite --fast
+python -m yane.benchmarks.long_examples --max-minutes 30 --solved-repeats 10
+python -m yane.benchmarks.long_examples --parallel auto --max-cpu-percent 85 --pause-cpu-percent 95 --min-free-gb 3
+python -m yane.benchmarks.forward_bench --sizes 10 50 200 1000
+python -m yane.benchmarks.compare_lamarck_modes --env Acrobot-v1 --modes hc nes sa cma_es
+python -m yane.benchmarks.descriptor_weight_ablation --max-iter 1000 --seeds 3
+python -m yane.benchmarks.meta_policy_ablation --max-iter 1000 --seeds 3
+python -m yane.benchmarks.cppn_indirect_ablation --max-iter 1000 --seeds 3
+```
+
+- `run_suite.py`: Standard-Suite über mehrere Seeds.
+- `long_examples.py`: Langtest-Harness für alle GUI-Beispiele. Standard ist
+  sequenziell; mit `--parallel N` oder `--parallel auto` laufen mehrere Beispiele
+  in eigenen Prozessen. Der Scheduler startet neue Jobs nur bei CPU-/RAM-Headroom
+  (`--max-cpu-percent`, `--min-free-gb`), pausiert Worker oberhalb von
+  `--pause-cpu-percent`, setzt sie unter `--resume-cpu-percent` fort und schreibt
+  pro Beispiel ein Teilresultat.
+- `forward_bench.py`: Microbenchmarks für `forward()`.
+- `compare_lamarck_modes.py`: Vergleich von Hill-Climbing, NES, SA und CMA-ES auf
+  Acrobot/LunarLander.
+- `descriptor_weight_ablation.py`: Vergleich von Task-only, festen und adaptiven
+  Descriptor-/Fitness-Komponenten auf XOR.
+- `meta_policy_ablation.py`: Vergleich von festen, handadaptiven und evolvierten
+  Policy-Parametern auf XOR.
+- `cppn_indirect_ablation.py`: Vergleich von direkter Kodierung und
+  CPPN-generierten HyperNEAT-Substraten auf XOR.
+
+## Standardkonfiguration (sofern nicht anders angegeben)
+
+| Parameter | Wert |
+|---|---|
+| Pop-Größe | 150 |
+| n\_eval | 3 (mean) |
+| Laufzeit | 30 Min |
+| Branch | major-update |
+
+## Laufende Ergebnisse (Kurzübersicht)
+
+| Datum | Umgebung | Dauer | Gelöst | Best Fitness | Commit |
+|---|---|---|---|---|---|
+| 2026-05-19 | CartPole-v1 | 1 Min | Ja (Iter ~2300) | 500.0 | vor benchmarks |
+| 2026-05-19 | Taxi-v4 | 1 Min | Nein | -147.5 | vor benchmarks |
+| 2026-05-19 | Acrobot-v1 | 30 Min | Ja (Iter 3269) | 11.804 | c7bef0d |
+| 2026-05-19 | MountainCar Cont. | 3 Min | Ja (Iter 3907) | 10.514 | c7bef0d |
+| 2026-05-19 | MountainCar Cont. | 30 Min | Ja (Iter 7255) | 10.514 | c7bef0d |
+| 2026-05-19 | LunarLander-v3 | 30 Min | Nein | 135.54 | c7bef0d |
+| 2026-05-19 | BipedalWalker-v3 | 30 Min | Ja (Iter ~4551, ~16 Min) | 4.67 | 515ca96 |
+| 2026-05-21 | Blackjack-v1 | 3 Min | Nein | −0.0880 | 3ed1b0f |
