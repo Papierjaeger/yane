@@ -140,5 +140,4 @@ src/examples/MNIST/mnist_train.csv
 .claude/settings.local.json
 /.vscode
 /logs
-/.github
 benchmarks/benchmark_runs.db
