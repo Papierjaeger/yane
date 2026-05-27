@@ -141,3 +141,4 @@ src/examples/MNIST/mnist_train.csv
 /.vscode
 /logs
 /.github
+benchmarks/benchmark_runs.db
