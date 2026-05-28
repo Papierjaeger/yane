@@ -26,6 +26,7 @@ from yane.evolution.fitness_transform import (
     ChainTransform,
 )
 from yane.evolution.genome_export import genome_to_python, genome_to_numpy_weights
+from yane.evolution.auto_train import AutoTrainResult
 
 __all__ = [
     "NeuroEvolution",
@@ -69,4 +70,6 @@ __all__ = [
     # Genome export
     "genome_to_python",
     "genome_to_numpy_weights",
+    # P0 Meta-Adaptive
+    "AutoTrainResult",
 ]

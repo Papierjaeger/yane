@@ -47,6 +47,7 @@ from yane.evolution.fitness_transform import (  # noqa: F401  (re-exported for u
     RankTransform, SigmaScaling, LinearNormalize, ClipTransform, ChainTransform,
 )
 from yane.evolution.param_registry import ParamRegistry, build_default_registry
+from yane.evolution.auto_train import AutoTrainResult  # noqa: F401  (re-exported for users)
 
 # Re-export for gui/worker.py backwards compatibility
 _aggregate_fitnesses = aggregate_fitnesses
@@ -4689,6 +4690,178 @@ class NeuroEvolution:
             )
         except Exception:
             pass  # Feature gating is non-critical; never break training
+
+    def auto_train(
+        self,
+        evaluator,
+        n_inputs: "int | None" = None,
+        n_outputs: "int | None" = None,
+        target_fitness: "float | None" = None,
+        max_time_seconds: "float | None" = None,
+        problem_name: "str | None" = None,
+        n_warmup: int = 20,
+    ) -> "AutoTrainResult":
+        """Zero-config training: profile → suggest → configure → train → report.
+
+        Integrates all P0 Meta-Adaptive phases automatically:
+        - Phase 2 (Problem Profiler): auto-detects task type, difficulty, noise.
+        - Phase 4 (Knowledge Base): suggests params from past runs; learns after.
+        - Phase 3 (MetaOptimizer): tunes params continuously during training.
+        - Phase 5 (Feature Gating): auto-selects research features.
+
+        Args:
+            evaluator:         Fitness function ``f(genome) -> float``.
+            n_inputs:          Input count. Required if ``configure()`` not called.
+            n_outputs:         Output count. Required if ``configure()`` not called.
+            target_fitness:    Stop when best fitness reaches this value.
+            max_time_seconds:  Iteration budget estimated from wall-clock time.
+                               Default: ~500 generations with auto pop_size.
+            problem_name:      Label stored in the auto_config_report.
+            n_warmup:          Warmup genomes for the profiler (default 20).
+
+        Returns:
+            :class:`AutoTrainResult` with best genome, diagnostics, and a
+            human-readable ``auto_config_report``.
+        """
+        import time as _time
+        from yane.evolution.auto_train import (
+            apply_cold_start_defaults,
+            build_report,
+            pick_pop_size,
+        )
+
+        t_start = _time.time()
+
+        # ── 1. Configure if needed ──────────────────────────────────────────
+        if n_inputs is not None and n_outputs is not None:
+            self.configure(n_inputs=n_inputs, n_outputs=n_outputs)
+        elif not self.is_configured:
+            raise RuntimeError(
+                "Call configure(n_inputs, n_outputs) first, or pass "
+                "n_inputs/n_outputs to auto_train()."
+            )
+
+        # ── 2. Profile the problem ──────────────────────────────────────────
+        _t_prof = _time.time()
+        profile = self.profile_problem(evaluator, n_warmup=n_warmup)
+        _profiling_ms = (_time.time() - _t_prof) * 1000.0
+
+        # ── 3. Pop-size and iteration budget ────────────────────────────────
+        pop_size = pick_pop_size(profile)
+        self.set_population_size(pop_size)
+
+        if max_time_seconds is not None:
+            # Floor at 1ms so trivially-fast evaluators don't inflate the budget
+            eval_ms_per_genome = max(1.0, _profiling_ms / max(1, n_warmup * 2))
+            budget_ms = max_time_seconds * 1000.0
+            iters = int(budget_ms * 0.9 / eval_ms_per_genome)
+            iters = max(pop_size * 10, min(iters, pop_size * 500))
+        else:
+            iters = pop_size * 500
+        self.set_max_iterations(iters)
+
+        if target_fitness is not None:
+            self.set_min_fitness(target_fitness)
+
+        # ── 4. Knowledge Base & parameter suggestion ────────────────────────
+        if self._knowledge_base is None:
+            self.set_knowledge_base()
+
+        _suggestions: list = []
+        try:
+            _suggestions = self._knowledge_base.suggest(profile, top_k=3)
+        except Exception:
+            pass
+
+        _kb_entries = len(self._knowledge_base) if self._knowledge_base else 0
+        _kb_suggestions_used = False
+        _kb_conf = 0.0
+        _applied_params: dict = {}
+
+        if _suggestions and _suggestions[0].get("confidence", 0.0) >= 0.25:
+            best_sug = _suggestions[0]
+            _kb_conf = best_sug.get("confidence", 0.0)
+            _kb_suggestions_used = True
+            for pname, pval in (best_sug.get("params") or {}).items():
+                try:
+                    self.set_param(pname, pval)
+                    _applied_params[pname] = pval
+                except Exception:
+                    pass
+        else:
+            _applied_params = apply_cold_start_defaults(self, profile)
+
+        # ── 5. MetaOptimizer ────────────────────────────────────────────────
+        self.set_meta_optimizer(
+            enabled=True,
+            tune_interval=5,
+            plateau_patience=30,
+            phase_min_gens=10,
+            max_overhead_pct=10.0,
+        )
+
+        # ── 6. Feature Gating ───────────────────────────────────────────────
+        self.set_auto_features(
+            enabled=True,
+            max_concurrent=2,
+            test_interval=20,
+            test_duration=10,
+            degradation_patience=40,
+        )
+
+        # ── 7. Train ────────────────────────────────────────────────────────
+        self.train(evaluator)
+
+        wall_time = _time.time() - t_start
+
+        # ── 8. Collect results ───────────────────────────────────────────────
+        _best = self._population.get_best() if self._population else None
+        final_fitness = _best.raw_fitness if _best else -float("inf")
+        total_generations = self._n_evaluations_done // max(1, pop_size)
+        active_features = (
+            self._feature_gate.get_active_features()
+            if self._feature_gate is not None else []
+        )
+        final_params: dict = {}
+        try:
+            final_params = {
+                name: info["current"]
+                for name, info in self.get_param_space().items()
+                if info["current"] is not None
+            }
+        except Exception:
+            pass
+
+        # ── 9. Build report ──────────────────────────────────────────────────
+        report = build_report(
+            profile=profile,
+            problem_name=problem_name,
+            kb_entries=_kb_entries,
+            kb_conf=_kb_conf,
+            applied_params=_applied_params,
+            cold_start=not _kb_suggestions_used,
+            meta_diag=self.get_meta_optimizer_diagnostics(),
+            feat_diag=self.get_feature_gating_diagnostics(),
+            active_features=active_features,
+            pop_size=pop_size,
+            max_iters=iters,
+            wall_time=wall_time,
+            total_generations=total_generations,
+            final_fitness=final_fitness,
+        )
+
+        return AutoTrainResult(
+            best_genome=_best,
+            final_fitness=final_fitness,
+            total_generations=total_generations,
+            wall_time=wall_time,
+            active_features=active_features,
+            final_params=final_params,
+            problem_profile=profile,
+            auto_config_report=report,
+            kb_suggestions_used=_kb_suggestions_used,
+            n_kb_suggestions=len(_suggestions),
+        )
 
     def _ensure_configured(self) -> None:
         if not self.is_configured:

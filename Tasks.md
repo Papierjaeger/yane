@@ -45,7 +45,7 @@ Teststand: `1153 passed, 1 skipped`.
 - P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies und evolvierbare Descriptor-Gewichte sind implementiert; DARTS-Lite, Intrinsic Curiosity und Shared Weights vollstaendig integriert; STDP, Neuromodulation, Input-/Output-Gruppierung, Conv-NEAT und ES-HyperNEAT sind noch Spikes/offen.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
 - Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
-- **P0 Meta-Adaptive Orchestration Layer:** Phase 1 (ParamRegistry, 55 Tests) ✓, Phase 2 (ProblemProfiler, 44 Tests) ✓, Phase 4 (KnowledgeBase, 54 Tests) ✓, Phase 3 (MetaOptimizer, 46 Tests) ✓, Phase 5 (Feature Gating, 53 Tests) ✓ abgeschlossen. Naechste Phase: Phase 6 (auto_train). Teststand: `1405 passed, 1 skipped`.
+- **P0 Meta-Adaptive Orchestration Layer:** Phase 1 (ParamRegistry, 55 Tests) ✓, Phase 2 (ProblemProfiler, 44 Tests) ✓, Phase 4 (KnowledgeBase, 54 Tests) ✓, Phase 3 (MetaOptimizer, 46 Tests) ✓, Phase 5 (Feature Gating, 53 Tests) ✓, Phase 6 (auto_train, 38 Tests) ✓ abgeschlossen. Teststand: `1443 passed, 1 skipped`.
 
 ## Legende
 
@@ -465,7 +465,15 @@ Feature mit abnehmendem Impact:
 
 ---
 
-#### Phase 6: Zero-Config Start — `auto_train()`
+#### ✓ Phase 6: Zero-Config Start — `auto_train()`
+
+**Abgeschlossen:** `evolution/auto_train.py` mit `AutoTrainResult`-Dataclass,
+`pick_pop_size()`, `apply_cold_start_defaults()`, `build_report()`.
+`NeuroEvolution.auto_train(evaluator, n_inputs, n_outputs, target_fitness,
+max_time_seconds, problem_name, n_warmup)` orchestriert alle 6 Phasen:
+Profile → KB-Suggest → Configure → MetaOptimizer + FeatureGating → Train →
+KB-Learn → AutoTrainResult mit `auto_config_report`. `AutoTrainResult` in
+`yane.__init__` exportiert. 38 Tests in `tests/test_auto_train.py`.
 
 Das Endziel. Der Nutzer spezifiziert NUR die Aufgabe — YANE macht den Rest.
 
