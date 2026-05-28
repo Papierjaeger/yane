@@ -1816,6 +1816,7 @@ class NeuroEvolution:
         stop_reason: str | None = None
         iterations = 0
         _gen_size = max(1, self._population_size)  # generation boundary for periodic ticks
+        _gen_eval_ms: float = 0.0   # accumulated eval time for current generation
         while True:
             if self._island_model is not None:
                 self._population = self._island_model.islands[
@@ -1826,6 +1827,7 @@ class NeuroEvolution:
             result = self._run_evaluations(genome, fitness_fn)
             fitness = self._finalize_fitness(result.fitness, result.elapsed_ms, genome)
             self._population.submit(genome, fitness, result.elapsed_ms)
+            _gen_eval_ms += result.elapsed_ms
             iterations += 1
             self._n_evaluations_done += result.n_fitness_calls
 
@@ -1921,25 +1923,23 @@ class NeuroEvolution:
                     except Exception:
                         pass
 
-            # --- MetaOptimizer tick (once per generation) -------------------
-            if iterations % _gen_size == 0 and self._meta_optimizer_enabled:
+            # --- MetaOptimizer + FeatureGating tick (once per generation) ----
+            if iterations % _gen_size == 0:
                 _gen_num = iterations // _gen_size
                 _cur_best = self._population.get_best()
                 _cur_fit = _cur_best.raw_fitness if _cur_best else -float("inf")
-                self._tick_meta_optimizer(
-                    generation=_gen_num,
-                    best_fitness=_cur_fit,
-                )
-
-            # --- Feature Gating tick (once per generation) ------------------
-            if iterations % _gen_size == 0 and self._feature_gate_enabled:
-                _gen_num = iterations // _gen_size
-                _cur_best = self._population.get_best()
-                _cur_fit = _cur_best.raw_fitness if _cur_best else -float("inf")
-                self._tick_feature_gating(
-                    generation=_gen_num,
-                    best_fitness=_cur_fit,
-                )
+                if self._meta_optimizer_enabled:
+                    self._tick_meta_optimizer(
+                        generation=_gen_num,
+                        best_fitness=_cur_fit,
+                        eval_ms=_gen_eval_ms,
+                    )
+                if self._feature_gate_enabled:
+                    self._tick_feature_gating(
+                        generation=_gen_num,
+                        best_fitness=_cur_fit,
+                    )
+                _gen_eval_ms = 0.0   # reset for next generation
 
             # --- Periodic CSV logging + heartbeat ---------------------------
             _heartbeat_now = (iterations % 100 == 0)
