@@ -116,7 +116,7 @@ class RunDatabase:
             CREATE INDEX IF NOT EXISTS idx_runs_experiment ON runs (experiment_id);
             CREATE INDEX IF NOT EXISTS idx_runs_name       ON runs (name);
         """)
-        # Migrate existing databases that pre-date the artifacts_json column.
+        # Migrate existing databases — add columns that post-date the initial schema.
         existing = {
             row[1]
             for row in self._db.execute("PRAGMA table_info(runs)").fetchall()
@@ -124,6 +124,10 @@ class RunDatabase:
         if "artifacts_json" not in existing:
             self._db.execute(
                 "ALTER TABLE runs ADD COLUMN artifacts_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        if "problem_profile_json" not in existing:
+            self._db.execute(
+                "ALTER TABLE runs ADD COLUMN problem_profile_json TEXT"
             )
         self._db.commit()
 
@@ -207,12 +211,14 @@ class RunDatabase:
         diagnostics: dict,
         stop_reason: str | None,
         artifacts: dict | None = None,
+        problem_profile: dict | None = None,
     ) -> None:
         """Update the run row when training finishes."""
         self._db.execute(
             "UPDATE runs"
             " SET fitness_history_json = ?, diagnostics_json = ?,"
-            "     artifacts_json = ?, end_time = ?, stop_reason = ?"
+            "     artifacts_json = ?, end_time = ?, stop_reason = ?,"
+            "     problem_profile_json = ?"
             " WHERE run_id = ?",
             (
                 json.dumps(fitness_history),
@@ -220,6 +226,7 @@ class RunDatabase:
                 json.dumps(artifacts or {}),
                 _now(),
                 stop_reason,
+                json.dumps(problem_profile) if problem_profile else None,
                 run_id,
             ),
         )

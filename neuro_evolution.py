@@ -46,6 +46,7 @@ from yane.evolution.events import EventBus
 from yane.evolution.fitness_transform import (  # noqa: F401  (re-exported for users)
     RankTransform, SigmaScaling, LinearNormalize, ClipTransform, ChainTransform,
 )
+from yane.evolution.param_registry import ParamRegistry, build_default_registry
 
 # Re-export for gui/worker.py backwards compatibility
 _aggregate_fitnesses = aggregate_fitnesses
@@ -256,6 +257,17 @@ class NeuroEvolution:
         self._darts_prune_threshold: float = 0.1
         # Shared Weights
         self._shared_weights_enabled: bool = False
+        # Unified Parameter Registry (lazy-init on first access)
+        self._param_registry: ParamRegistry | None = None
+        # Knowledge Base (None = disabled)
+        self._knowledge_base: Any = None   # KnowledgeBase | None
+        self._last_problem_profile: Any = None   # ProblemProfile | None
+        # MetaOptimizer (None = disabled)
+        self._meta_optimizer_obj: Any = None   # MetaOptimizer | None
+        self._meta_optimizer_enabled: bool = False
+        # Feature Gating (None = disabled)
+        self._feature_gate: Any = None   # FeatureGate | None
+        self._feature_gate_enabled: bool = False
 
     @property
     def current_genome(self) -> Genome | None:
@@ -1908,6 +1920,26 @@ class NeuroEvolution:
                     except Exception:
                         pass
 
+            # --- MetaOptimizer tick (once per generation) -------------------
+            if iterations % _gen_size == 0 and self._meta_optimizer_enabled:
+                _gen_num = iterations // _gen_size
+                _cur_best = self._population.get_best()
+                _cur_fit = _cur_best.raw_fitness if _cur_best else -float("inf")
+                self._tick_meta_optimizer(
+                    generation=_gen_num,
+                    best_fitness=_cur_fit,
+                )
+
+            # --- Feature Gating tick (once per generation) ------------------
+            if iterations % _gen_size == 0 and self._feature_gate_enabled:
+                _gen_num = iterations // _gen_size
+                _cur_best = self._population.get_best()
+                _cur_fit = _cur_best.raw_fitness if _cur_best else -float("inf")
+                self._tick_feature_gating(
+                    generation=_gen_num,
+                    best_fitness=_cur_fit,
+                )
+
             # --- Periodic CSV logging + heartbeat ---------------------------
             _heartbeat_now = (iterations % 100 == 0)
             _csv_now = (iterations % _log_interval == 0)
@@ -2140,6 +2172,13 @@ class NeuroEvolution:
                         "DARTS post-training pruning: removed %d connections "
                         "(threshold=%.2f).", n_pruned, self._darts_prune_threshold,
                     )
+
+        # Knowledge Base: auto-learn from this run
+        _best_for_kb = self._population.get_best() if self._population else None
+        self._auto_kb_learn(
+            best_fitness=_best_for_kb.fitness if _best_for_kb else 0.0,
+            stop_reason=stop_reason,
+        )
 
         return iterations
 
@@ -4323,6 +4362,333 @@ class NeuroEvolution:
         if seed_population:
             self.load_genome_as_seed(current, freeze_layers=freeze_layers)
         return current
+
+    # -------------------------------------------------------------------------
+    # Unified Parameter Registry — Phase 1 of P0 Meta-Adaptive Orchestration
+    # -------------------------------------------------------------------------
+
+    def _ensure_param_registry(self) -> ParamRegistry:
+        """Return the registry, creating and populating it on first call."""
+        if self._param_registry is None:
+            self._param_registry = build_default_registry(self)
+        return self._param_registry
+
+    def set_param(self, name: str, value: object) -> None:
+        """Set a YANE hyperparameter by name.
+
+        Validates the value against the parameter's domain, dispatches to the
+        appropriate ``set_*()`` method, and records the change in the registry.
+
+        This is the universal setter used by the MetaOptimizer.  Calling it is
+        equivalent to calling the specific ``set_*()`` method directly — it
+        never bypasses or overrides the underlying setter.
+
+        Parameters
+        ----------
+        name:   Dot-namespaced identifier, e.g. ``"lamarck.mode"``.
+        value:  New value; must satisfy the parameter's type and domain.
+
+        Raises
+        ------
+        KeyError:   Unknown parameter name.
+        ValueError: Value outside the allowed domain.
+        TypeError:  Value has the wrong Python type.
+
+        Examples
+        --------
+        >>> yane.set_param("lamarck.mode", "cma_es")
+        >>> yane.set_param("pop.size", 200)
+        >>> yane.set_param("anytime.enabled", True)
+        """
+        self._ensure_param_registry().dispatch(self, name, value)
+
+    def get_param_space(self) -> dict:
+        """Return the full parameter catalog as a plain, serialisable dict.
+
+        Each entry contains: ``type``, ``domain``, ``default``, ``current``,
+        ``stage``, ``subsystem``, ``description``, ``impact_history``.
+
+        Returns
+        -------
+        dict
+            Mapping parameter name → parameter info dict, sorted by name.
+        """
+        return self._ensure_param_registry().get_param_space()
+
+    def get_param_registry(self) -> ParamRegistry:
+        """Return the live ``ParamRegistry`` instance.
+
+        Useful for recording fitness impacts, listing parameter names, or
+        reading the change log from test code and the MetaOptimizer.
+        """
+        return self._ensure_param_registry()
+
+    # -------------------------------------------------------------------------
+    # Problem Profiler — Phase 2 of P0 Meta-Adaptive Orchestration
+    # -------------------------------------------------------------------------
+
+    def profile_problem(
+        self,
+        evaluator: "Callable",
+        n_warmup: int = 50,
+    ) -> "ProblemProfile":
+        """Profile the fitness landscape before training.
+
+        Runs ``n_warmup`` random genomes through the evaluator (each evaluated
+        twice) and returns a ``ProblemProfile`` containing task type, difficulty,
+        noise level, and other landscape properties.
+
+        Requires ``configure()`` to have been called first.
+
+        Parameters
+        ----------
+        evaluator:  Fitness function ``(genome) → float``.
+        n_warmup:   Number of random genomes (minimum 5).
+
+        Returns
+        -------
+        ProblemProfile
+
+        Example
+        -------
+        >>> yane.configure(n_inputs=4, n_outputs=2)
+        >>> profile = yane.profile_problem(my_evaluator, n_warmup=30)
+        >>> print(profile.task_type, profile.estimated_difficulty)
+        """
+        self._ensure_configured()
+        from yane.evolution.problem_profiler import ProblemProfile, ProblemProfiler  # noqa: F401
+        profile = ProblemProfiler(self).profile(evaluator, n_warmup=n_warmup)
+        self._last_problem_profile = profile
+        return profile
+
+    # -------------------------------------------------------------------------
+    # Knowledge Base — Phase 4 of P0 Meta-Adaptive Orchestration
+    # -------------------------------------------------------------------------
+
+    def set_knowledge_base(self, path: "str | Path | None" = None) -> None:
+        """Enable the cross-run Knowledge Base.
+
+        Parameters
+        ----------
+        path: JSON file for persistence.  If the file already exists, its
+              entries are loaded immediately.  Pass ``None`` to create an
+              in-memory-only KB (not persisted across processes).
+
+        After this call, ``train()`` automatically calls ``kb.learn()`` with
+        the run's best fitness and current param-space snapshot.
+        """
+        from yane.evolution.knowledge_base import KnowledgeBase
+        self._knowledge_base = KnowledgeBase(path=path)
+
+    @property
+    def knowledge_base(self):
+        """The active ``KnowledgeBase`` instance, or ``None`` if not set.
+
+        Use ``set_knowledge_base(path)`` to enable.
+        """
+        return self._knowledge_base
+
+    def suggest_params(
+        self,
+        problem_profile: "Any | None" = None,
+        top_k: int = 5,
+    ) -> "list[dict]":
+        """Return parameter suggestions from the Knowledge Base.
+
+        Parameters
+        ----------
+        problem_profile: A ``ProblemProfile`` object.  If omitted, uses the
+                         last profile produced by ``profile_problem()``.
+        top_k:           Maximum number of suggestions to return.
+
+        Returns
+        -------
+        list[dict]  — see ``KnowledgeBase.suggest()`` for the format.
+
+        Raises
+        ------
+        RuntimeError  — if no KB is configured or no profile is available.
+        """
+        if self._knowledge_base is None:
+            raise RuntimeError(
+                "No Knowledge Base configured.  Call set_knowledge_base() first."
+            )
+        profile = problem_profile or self._last_problem_profile
+        if profile is None:
+            raise RuntimeError(
+                "No problem profile available.  Call profile_problem() first."
+            )
+        return self._knowledge_base.suggest(profile, top_k=top_k)
+
+    # -------------------------------------------------------------------------
+    # MetaOptimizer — Phase 3 of P0 Meta-Adaptive Orchestration
+    # -------------------------------------------------------------------------
+
+    def set_meta_optimizer(
+        self,
+        enabled: bool = True,
+        *,
+        tune_interval: int = 20,
+        max_overhead_pct: float = 5.0,
+        plateau_patience: int = 30,
+        phase_min_gens: int = 20,
+        ucb1_c: float = 2.0,
+    ) -> None:
+        """Enable the MetaOptimizer for automatic hyperparameter tuning.
+
+        When enabled, the MetaOptimizer is called once per generation during
+        ``train()``.  It tunes parameters via UCB1 bandits (categorical) and
+        Bayesian Optimisation (continuous), and advances through four
+        training phases (EXPLORE → EXPLOIT → REFINE → CONVERGE) based on
+        fitness plateau detection.
+
+        Parameters
+        ----------
+        enabled:          Enable or disable the MetaOptimizer.
+        tune_interval:    Tune parameters every N generations (default 20).
+        max_overhead_pct: Stop tuning when MetaOptimizer overhead exceeds
+                          this fraction of total evaluation time (default 5%).
+        plateau_patience: Generations without improvement before a phase
+                          transition (default 30).
+        ucb1_c:           UCB1 exploration constant (default 2.0).
+        """
+        self._meta_optimizer_enabled = bool(enabled)
+        if enabled:
+            from yane.evolution.meta_optimizer import MetaOptimizer
+            self._meta_optimizer_obj = MetaOptimizer(
+                tune_interval=tune_interval,
+                max_overhead_pct=max_overhead_pct,
+                plateau_patience=plateau_patience,
+                phase_min_gens=phase_min_gens,
+                ucb1_c=ucb1_c,
+                seed=self._seed,
+            )
+        else:
+            self._meta_optimizer_obj = None
+
+    def get_meta_optimizer_diagnostics(self) -> dict:
+        """Return diagnostics from the active MetaOptimizer.
+
+        Returns an empty dict if the MetaOptimizer is not enabled.
+        """
+        if self._meta_optimizer_obj is None:
+            return {"enabled": False}
+        return self._meta_optimizer_obj.get_diagnostics()
+
+    def _tick_meta_optimizer(
+        self,
+        generation: int,
+        best_fitness: float,
+        eval_ms: float = 0.0,
+    ) -> None:
+        """Internal: called every generation by train()."""
+        if not self._meta_optimizer_enabled or self._meta_optimizer_obj is None:
+            return
+        try:
+            self._meta_optimizer_obj.tick(
+                generation=generation,
+                best_fitness=best_fitness,
+                ne=self,
+                eval_ms_this_gen=eval_ms,
+            )
+        except Exception:
+            pass  # MetaOptimizer is non-critical; never break training
+
+    def _auto_kb_learn(
+        self,
+        best_fitness: float,
+        stop_reason: str | None,
+    ) -> None:
+        """Called at the end of train() to record this run in the KB."""
+        if self._knowledge_base is None:
+            return
+        profile = self._last_problem_profile
+        if profile is None:
+            return
+        try:
+            params = {
+                name: info["current"]
+                for name, info in self.get_param_space().items()
+                if info["current"] is not None
+            }
+            self._knowledge_base.learn(
+                profile=profile,
+                final_params=params,
+                final_fitness=best_fitness,
+                run_id=self._active_run_id,
+            )
+        except Exception:
+            pass  # KB is non-critical; never break training
+
+    def set_auto_features(
+        self,
+        enabled: bool = True,
+        max_concurrent: int = 3,
+        test_interval: int = 50,
+        test_duration: "int | None" = None,
+        impact_threshold: float = 0.0,
+        degradation_patience: int = 30,
+        reactivation_delay: int = 100,
+    ) -> None:
+        """Automatically select and gate research features via UCB1 + Successive Halving.
+
+        Every ``test_interval`` generations an inactive feature is enabled for
+        ``test_duration`` generations.  If global best-fitness improved the feature
+        stays active; otherwise it is returned to the candidate pool.  Active
+        features whose fitness contribution drops are gradually degraded and
+        eventually disabled.
+
+        Args:
+            enabled:              Pass False to disable feature gating entirely.
+            max_concurrent:       Maximum number of features simultaneously active
+                                  or under test (default 3).
+            test_interval:        Generations between starting new trials (default 50).
+            test_duration:        Length of each trial window. Defaults to
+                                  ``max(10, test_interval // 2)``.
+            impact_threshold:     Minimum absolute fitness improvement for a feature
+                                  to be kept active (default 0.0 = any improvement).
+            degradation_patience: Consecutive generations with no improvement before
+                                  degradation_level increases (default 30).
+            reactivation_delay:   Generations after disabling before auto-reactivation
+                                  into the candidate pool (default 100).
+        """
+        self._feature_gate_enabled = bool(enabled)
+        if not enabled:
+            self._feature_gate = None
+            return
+        from yane.evolution.feature_gating import FeatureGate, _register_known_features
+        fg = FeatureGate(
+            max_concurrent=max_concurrent,
+            test_interval=test_interval,
+            test_duration=test_duration,
+            impact_threshold=impact_threshold,
+            degradation_patience=degradation_patience,
+            reactivation_delay=reactivation_delay,
+        )
+        _register_known_features(fg, self)
+        self._feature_gate = fg
+
+    def get_feature_gating_diagnostics(self) -> dict:
+        """Return diagnostics from the active FeatureGate.
+
+        Returns ``{"enabled": False}`` when feature gating is not configured.
+        """
+        if self._feature_gate is None:
+            return {"enabled": False}
+        return self._feature_gate.get_diagnostics()
+
+    def _tick_feature_gating(self, generation: int, best_fitness: float) -> None:
+        """Internal: called every generation by train()."""
+        if not self._feature_gate_enabled or self._feature_gate is None:
+            return
+        try:
+            self._feature_gate.tick(
+                generation=generation,
+                best_fitness=best_fitness,
+                ne=self,
+            )
+        except Exception:
+            pass  # Feature gating is non-critical; never break training
 
     def _ensure_configured(self) -> None:
         if not self.is_configured:
