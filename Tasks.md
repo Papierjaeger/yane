@@ -5,8 +5,8 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** P0 komplett inkl. GUI-Integration. P1 WandB/MLflow Tracking + Regression Benchmarking Suite implementiert.
-Teststand: `1487 passed, 2 skipped`.
+**Aktueller Stand:** P0 komplett. P1: WandB/MLflow, Regression Benchmarking Suite, Hardware-Aware NEAT implementiert.
+Teststand: `1516 passed, 2 skipped`.
 
 > **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
 > Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
@@ -1069,47 +1069,18 @@ yane.submit_feedback(genome_id, rating)  # programmatisch
 
 ---
 
-### □ P1 Hardware-Aware NEAT (Deployment-Constraint-Evolution)
+### ✓ P1 Hardware-Aware NEAT (Deployment-Constraint-Evolution)
 
-Genome werden in der Cloud oder auf lokaler Workstation evolviert, aber auf
-Edge-Geraeten deployed. YANE soll Genome direkt unter Hardware-Constraints
-evolvieren: maximale FLOPs, Speicher, Latenz, Energie.
-
-**Ziel:** `set_hardware_constraints()` erweitert `efficiency_score` um reale
-HW-Metriken und bestraft Genome die HW-Budget ueberschreiten.
-
-**Design: `HardwareConstraint` in `evolution/hardware_aware.py`**
-
-```python
-yane.set_hardware_constraints(
-    max_flops=1_000_000,      # 1M FLOPs pro Forward-Pass
-    max_memory_bytes=4096,    # 4KB
-    max_latency_us=100,       # 100µs
-    target_platform="cortex-m4"
-)
-```
-
-**Metrik-Berechnung (deterministisch, aus Genom-Topologie):**
-
-- `flops_per_forward()`: Zaehlt Multiplikationen + Additionen pro Forward.
-- `memory_bytes()`: `n_nodes * sizeof(Node) + n_connections * sizeof(Connection)`.
-- `latency_us()`: Schaetzung basierend auf FLOPs / Zielplattform-MHz * Safety-Factor.
-
-**Vordefinierte Profile:** `"cortex-m4"`, `"cortex-m7"`, `"esp32"`,
-`"raspberry-pi-zero"`, `"raspberry-pi-4"`, `"desktop"`.
-
-> **Integration:** Dieser Task wird vom P1 ResourceBudget-System orchestriert.
-> `HardwareConstraint` definiert die ZIEL-Hardware fuers Deployment;
-> `ResourceBudget` managed die LAUFZEIT-Ressourcen waehrend des Trainings.
-
-**Akzeptanzkriterien:**
-
-- `hardware_profile()` gibt korrekte FLOPs/Memory/Latenz zurueck.
-- Fitness-Penalty ist proportional zur Constraint-Ueberschreitung.
-- Vordefinierte Profile laden korrekte Werte.
-- `hw_pareto_front` enthaelt nicht-dominierte Genome.
-- Tests: FLOPs-Zaehlung; Memory-Schaetzung; Penalty-Berechnung;
-  Plattform-Profile; Pareto-Front.
+**Implementiert** in `evolution/hardware_aware.py`:
+- `HardwareMetrics`: flops, memory_bytes, latency_us (alle deterministisch aus Topologie)
+- `HardwareConstraints`: max_flops, max_memory_bytes, max_latency_us, target_platform, penalty_scale
+- `PLATFORM_PROFILES`: cortex-m4, cortex-m7, esp32, raspberry-pi-zero, raspberry-pi-4, desktop, mobile-arm
+- `compute_hardware_metrics()`: FLOPs = 2×n_conns + activation-FLOPs pro Node; Memory = n_nodes×8 + n_conns×8 (konfigurierbar); Latenz = FLOPs / (MHz/cycles_per_flop) × 1e6
+- `compute_penalty()`: proportional zur Überschreitung × penalty_scale, summiert über alle verletzten Constraints
+- `hw_pareto_front()`: nicht-dominierte Menge (maximise fitness, minimise cost), sortiert nach Fitness
+- `NeuroEvolution.set_hardware_constraints()`, `.hardware_profile()`, `.hw_pareto_front()`
+- Penalty in `_finalize_fitness()` integriert — fehlerresistent, bricht Training nie ab
+- 29 Tests, alle bestanden.
 
 ---
 
