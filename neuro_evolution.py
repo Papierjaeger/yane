@@ -76,6 +76,7 @@ class NeuroEvolution:
         self._current_genome: Genome | None = None
         self._efficiency_penalty: EfficiencyPenalty | None = None
         self._hw_constraints = None  # HardwareConstraints | None
+        self._aug_pool = None        # AugmentationPool | None
         self._complexity_penalty_nodes: float = 0.0
         self._complexity_penalty_connections: float = 0.0
         self._resource_guard = ResourceGuard()
@@ -830,6 +831,66 @@ class NeuroEvolution:
         if not evaluated:
             return []
         return _front(list(evaluated), self._hw_constraints)
+
+    def set_evolutionary_augmentation(
+        self,
+        enabled: bool = True,
+        augmentation_space: list[str] | None = None,
+        population_augmentations: int = 8,
+        pipeline_length: int = 3,
+        evolution_interval: int = 20,
+        mutation_sigma: float = 0.1,
+    ) -> None:
+        """Co-evolve input augmentation pipelines alongside the genome population.
+
+        When active, every call to ``genome.forward(inputs)`` during training
+        transparently applies the current best augmentation pipeline to
+        ``inputs`` before forwarding them through the network.  A small pool
+        of candidate pipelines evolves via UCB1 selection and genetic
+        operators (crossover + mutation), guided by the NEAT population's
+        per-generation fitness improvement.
+
+        This acts as a learned regulariser for small datasets: augmentation
+        introduces variety in the training distribution without requiring
+        labelled examples.
+
+        Parameters
+        ----------
+        enabled:                Toggle augmentation on or off.
+        augmentation_space:     Subset of transformations to use.
+                                Defaults to all: ``["gaussian_noise",
+                                "dropout_noise", "scaling", "translation",
+                                "cutout"]``.
+        population_augmentations: Number of candidate pipelines in the pool.
+        pipeline_length:        Number of transformations per pipeline.
+        evolution_interval:     Evolve the pool every N generations.
+        mutation_sigma:         Std-dev for Gaussian mutation of probability
+                                and magnitude parameters.
+        """
+        if not enabled:
+            self._aug_pool = None
+            return
+        from yane.evolution.augmentation import AugmentationPool, AUGMENTATION_TYPES
+        space = augmentation_space or AUGMENTATION_TYPES
+        self._aug_pool = AugmentationPool(
+            augmentation_space=space,
+            population_size=population_augmentations,
+            pipeline_length=pipeline_length,
+            evolution_interval=evolution_interval,
+            mutation_sigma=mutation_sigma,
+            seed=self._seed,
+        )
+
+    def get_augmentation_diagnostics(self) -> dict:
+        """Return diagnostics for the active augmentation pool.
+
+        Returns ``{"enabled": False}`` when augmentation is not configured.
+        """
+        if self._aug_pool is None:
+            return {"enabled": False}
+        d = self._aug_pool.get_diagnostics()
+        d["enabled"] = True
+        return d
 
     def set_multi_eval(
         self,
@@ -1946,6 +2007,11 @@ class NeuroEvolution:
                 _li("Tracking backend init failed (%s): %s",
                     type(_tb_backend).__name__, _tb_err)
 
+        # Augmentation: select the first pipeline before any evaluations.
+        if self._aug_pool is not None:
+            self._aug_pool.select()
+            self._aug_prev_fit = -float("inf")
+
         self._n_evaluations_done = 0
         stop_reason: str | None = None
         iterations = 0
@@ -2074,6 +2140,15 @@ class NeuroEvolution:
                         best_fitness=_cur_fit,
                     )
                 _gen_eval_ms = 0.0   # reset for next generation
+
+                # Augmentation pool: reward current pipeline, maybe evolve, select next.
+                if self._aug_pool is not None:
+                    _aug_reward = max(0.0, _cur_fit - getattr(self, "_aug_prev_fit", _cur_fit))
+                    self._aug_pool.update_reward(_aug_reward)
+                    if self._aug_pool.should_evolve(_gen_num):
+                        self._aug_pool.evolve()
+                    self._aug_pool.select()   # select pipeline for next generation
+                    self._aug_prev_fit = _cur_fit
 
                 # Tracking backends: log once per generation.
                 if self._tracking_backends:
@@ -3590,6 +3665,16 @@ class NeuroEvolution:
             _t = self._input_transform
             _orig_fwd = genome.forward
             genome.__dict__["forward"] = lambda data: _orig_fwd(_t(data))
+        _aug_active = False
+        if self._aug_pool is not None:
+            _aug_active = True
+            _aug_pipeline = self._aug_pool._active
+            _aug_rng = self._aug_pool.rng
+            _fwd_pre_aug = genome.forward
+            genome.__dict__["forward"] = (
+                lambda data, _fwd=_fwd_pre_aug, _pl=_aug_pipeline, _r=_aug_rng:
+                    _fwd(_pl.apply(list(data), _r))
+            )
         _curiosity_active = False
         if self._curiosity_enabled and self._curiosity_module is not None:
             _curiosity_active = True
@@ -3639,7 +3724,7 @@ class NeuroEvolution:
                 self._eval_middleware_diagnostics["evaluator_components"] = dict(_cs)
             return result
         finally:
-            if self._input_transform is not None or _curiosity_active:
+            if self._input_transform is not None or _aug_active or _curiosity_active:
                 genome.__dict__.pop("forward", None)
             # Note: _curiosity_task_base is intentionally NOT removed here.
             # finalize_fitness_value() reads and removes it so that raw_fitness
