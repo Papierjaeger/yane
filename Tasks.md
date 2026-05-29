@@ -5,8 +5,8 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** P0 Meta-Adaptive Orchestration Layer komplett inkl. GUI-Integration. P1 WandB/MLflow Tracking implementiert.
-Teststand: `1456 passed, 2 skipped`.
+**Aktueller Stand:** P0 komplett inkl. GUI-Integration. P1 WandB/MLflow Tracking + Regression Benchmarking Suite implementiert.
+Teststand: `1487 passed, 2 skipped`.
 
 > **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
 > Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
@@ -30,6 +30,7 @@ Teststand: `1456 passed, 2 skipped`.
 - **auto_train Bugfixes (via PI-Beispiel-Testing):** (1) `raw_fitness` enthielt Curiosity-Bonus → Stop-Bedingung feuerte auf aufgeblähten Wert; (2) ungekappter Curiosity-Bonus ermöglichte Reward Hacking (Fitness ~10⁹) wenn DARTS numerisch instabile Outputs produzierte; (3) `max_time_seconds`-Budget ignorierte Lamarck-Overhead. Alle drei behoben.
 - **Code-Qualität:** Tote Parameter/Funktionen entfernt (`total_entries` in `_confidence`, `_median`, `_prev_best`); UCB1-Reward-Attribution in EXPLOIT-Phase korrigiert (`best()` tracked jetzt `_last_idx`).
 - **P1 WandB/MLflow Tracking:** `TrackingBackend`-Protocol, `WandbBackend`, `MlflowBackend`, `set_tracking_backend(*backends)`; Metrics werden einmal pro Generation geloggt.
+- **P1 Regression Benchmarking Suite:** `RegressionDetector`, `BaselineStore`, `HistoryStore`, `TrendReport`, `BenchmarkReport`; CLI `python -m yane.benchmarks --ci` mit Exit-Codes 0/1/2.
 
 ## Legende
 
@@ -994,54 +995,19 @@ print(result.auto_config_report)
 
 ---
 
-### □ P1 Automated Regression Benchmarking Suite (CI-faehige Benchmark-Pipeline)
+### ✓ P1 Automated Regression Benchmarking Suite (CI-faehige Benchmark-Pipeline)
 
-Benchmarks werden derzeit manuell gestartet und die Ergebnisse nur informell
-in `benchmarks/` abgelegt. Es gibt keine automatisierte Erkennung von
-Regressionen zwischen Code-Aenderungen.
+**Implementiert** in `benchmarks/regression.py`, `benchmarks/benchmarks.yaml`, `benchmarks/__main__.py`:
 
-**Ziel:** Eine CI-faehige Benchmark-Suite, die automatisch Regressionen erkennt,
-Reports generiert und historische Trends verfolgt.
-
-**Design: `BenchmarkRunner` und `RegressionDetector`**
-
-- `BenchmarkRunner`: liest eine `benchmarks.yaml`-Konfiguration mit
-  Beispielen, Seeds, Timeouts, Target-Fitness und Vergleichsbasislinie.
-- `RegressionDetector`: vergleicht aktuelle Runs mit gespeicherten
-  Baseline-Werten (Median-Fitness, Konvergenz-Iterationen, Erfolgsrate).
-  Nutzt Mann-Whitney-U-Test fuer statistische Signifikanz (p < 0.05).
-- `run_benchmark_suite(path="benchmarks.yaml")`: fuehrt alle definierten
-  Benchmarks aus und gibt einen `BenchmarkReport` zurueck.
-- `RegressionSeverity`: `NONE`, `MINOR` (<5% Verschlechterung), `MAJOR`
-  (5-20%), `CRITICAL` (>20% oder Erfolgsrate bricht ein).
-- `baseline/`-Verzeichnis: speichert Referenzwerte pro Benchmark als JSON.
-  `--update-baseline` Flag aktualisiert sie nach manueller Pruefung.
-
-**CI-Integration:**
-
-- Exit-Code: 0 bei `NONE`/`MINOR`, 1 bei `MAJOR`, 2 bei `CRITICAL`.
-- `python -m yane.benchmarks --ci` fuer CI-Pipelines.
-- JSON-Report auf stdout fuer einfaches Parsen in GitHub Actions/GitLab CI.
-- Optionale GitHub-Issue-Erstellung bei `CRITICAL`-Regression (via CLI-Flag).
-
-**Trend-Tracking:**
-
-- `benchmarks/history/` speichert Zeitreihen pro Benchmark (Datum, Commit,
-  Median-Fitness, Konvergenz-Iterationen).
-- `benchmark_trend(example_name) → TrendReport` mit Visualisierung (ASCII-Plot
-  oder PNG via Matplotlib, falls verfuegbar).
-
-**Akzeptanzkriterien:**
-
-- Alle existierenden Benchmarks in `benchmarks/` sind in der Suite
-  konfigurierbar.
-- Regression-Erkennung meldet korrekt eine absichtlich verschlechterte
-  Mutation (z. B. `sigma_global` auf Extremwert).
-- CI-Mode gibt korrekten Exit-Code.
-- Baseline-Update ueberschreibt nur mit explizitem Flag.
-- Trend-Tracking speichert und laedt historische Daten korrekt.
-- Tests: RegressionDetector mit synthetischen Fitness-Verlaeufen;
-  CI-Exit-Codes; Baseline-Laden/Speichern.
+- `RegressionSeverity`: NONE / MINOR (<5%) / MAJOR (5–20%) / CRITICAL (>20% oder Success-Rate bricht um >20pp ein)
+- `RegressionDetector`: prüft `median_fitness`, `success_rate` und `median_iterations`; Mann-Whitney-U via scipy (fallback: kein p-Wert); MINOR → NONE wenn p ≥ 0.05
+- `BaselineStore`: JSON-Dateien in `benchmarks/baseline/`; `save/load/list_names`
+- `HistoryStore`: JSONL-Zeitreihen in `benchmarks/history/`; `append/load`
+- `TrendReport.ascii_plot()`: Unicode-Sparkline mit Richtungspfeil (↑↓→)
+- `BenchmarkReport`: `exit_code()` → 0/1/2; `to_dict()` → JSON; `format_text()` → lesbar
+- `run_benchmark_suite(path, update_baseline)`: lädt `benchmarks.yaml`, läuft alle Benchmarks, vergleicht Baselines, hängt an History an
+- CLI `python -m yane.benchmarks --ci` → JSON-stdout + Exit-Code; `--update-baseline`; `--trend NAME`; `--list-baselines`
+- 31 Tests, alle bestanden.
 
 ---
 
