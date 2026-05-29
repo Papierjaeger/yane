@@ -652,5 +652,104 @@ class TestCheckpointMetadataGUI(unittest.TestCase):
         tab.close()
 
 
+class TestAutoTrainGUI(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = _app()
+
+    def test_auto_train_button_exists(self):
+        from yane.gui.tabs.training_tab import TrainingTab
+        tab = TrainingTab()
+        self.assertTrue(hasattr(tab, "btn_auto_train"))
+        self.assertTrue(tab.btn_auto_train.isEnabled())
+        tab.close()
+
+    def test_left_panel_has_meta_adaptive_labels(self):
+        from yane.gui.panels.left_panel import LeftPanel
+        panel = LeftPanel()
+        for attr in ("lbl_meta_phase", "lbl_meta_overhead", "lbl_meta_ticks",
+                     "lbl_meta_changes", "lbl_fg_active", "lbl_fg_status"):
+            self.assertTrue(hasattr(panel, attr), f"missing {attr}")
+        # group is hidden until P0 is active
+        self.assertFalse(panel._meta_grp.isVisible())
+        panel.close()
+
+    def test_left_panel_updates_meta_adaptive_from_mem(self):
+        from yane.gui.panels.left_panel import LeftPanel
+        from yane import NeuroEvolution
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        yane.set_population_size(4)
+        genome = yane.next_genome()
+        yane.submit_fitness(0.5, 1.0)
+        genome = yane.get_best().copy()
+        mem = yane.population_memory_info()
+        mem["meta_optimizer"] = {
+            "enabled": True,
+            "phase": "EXPLORE",
+            "overhead_pct": 2.5,
+            "n_ticks": 3,
+            "n_skipped": 1,
+            "recent_changes": [{"generation": 10, "param": "lamarck.n_steps", "value": 5}],
+        }
+        mem["feature_gating"] = {
+            "enabled": True,
+            "n_active": 2,
+            "n_testing": 1,
+            "features": {
+                "curiosity": {"status": "active", "degradation_level": 0.0},
+                "lamarck":   {"status": "testing", "degradation_level": 0.3},
+            },
+        }
+        panel = LeftPanel()
+        panel.show()
+        self.app.processEvents()
+        panel.update_genome(genome, mem, do_heavy=False)
+        self.app.processEvents()
+        self.assertTrue(panel._meta_grp.isVisible())
+        self.assertEqual(panel.lbl_meta_phase.text(), "EXPLORE")
+        self.assertIn("2.5", panel.lbl_meta_overhead.text())
+        self.assertIn("3", panel.lbl_meta_ticks.text())
+        self.assertIn("lamarck.n_steps", panel.lbl_meta_changes.text())
+        self.assertIn("2", panel.lbl_fg_active.text())
+        self.assertIn("curiosity", panel.lbl_fg_status.text())
+        panel.close()
+
+    def test_auto_train_worker_profiles_and_signals(self):
+        from yane import NeuroEvolution
+        from yane.gui.worker import AutoSetupWorker
+        from PySide6.QtCore import QCoreApplication
+
+        yane = NeuroEvolution()
+        yane.configure(2, 1)
+        yane.set_population_size(4)
+
+        def make_eval(render_cb=None):
+            def eval_fn(genome):
+                return float(sum(genome.forward([0.5, 0.5])))
+            return eval_fn
+
+        results = []
+        errors = []
+
+        worker = AutoSetupWorker(yane, make_eval, n_warmup=4)
+        worker.setup_done.connect(results.append)
+        worker.error_occurred.connect(errors.append)
+        worker.start()
+        worker.wait(10_000)  # max 10 s
+        self.app.processEvents()  # deliver queued cross-thread signals
+
+        self.assertEqual(errors, [], errors)
+        self.assertEqual(len(results), 1)
+        info = results[0]
+        self.assertIn("task_type", info)
+        self.assertIn("pop_size", info)
+        self.assertIn("kb_entries", info)
+        # MetaOptimizer and FeatureGating should be configured
+        self.assertTrue(yane._meta_optimizer_enabled)
+        self.assertIsNotNone(yane._meta_optimizer_obj)
+        self.assertTrue(yane._feature_gate_enabled)
+
+
 if __name__ == "__main__":
     unittest.main()

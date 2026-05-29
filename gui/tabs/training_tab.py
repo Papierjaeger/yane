@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
 
 from yane.gui.canvas import FitnessChart, SpeciesChart
-from yane.gui.worker import TrainingWorker, EpisodeRunner
+from yane.gui.worker import TrainingWorker, EpisodeRunner, AutoSetupWorker
 from yane.gui.examples import load_examples
 from yane.gui._helpers import _label, _divider, CollapsibleGroup
 from yane.gui.remote_config import RemoteEvaluationConfig
@@ -86,6 +86,8 @@ class TrainingTab(QWidget):
         super().__init__(parent)
         self._examples = load_examples()
         self._worker: TrainingWorker | None = None
+        self._auto_worker: AutoSetupWorker | None = None
+        self._auto_profile_info: dict | None = None
         self._episode_runner: EpisodeRunner | None = None
         self._yane = None
         self._best_genome = None
@@ -966,6 +968,14 @@ class TrainingTab(QWidget):
         self.btn_start.clicked.connect(self.start_training)
         self.btn_pause.clicked.connect(self._toggle_pause)
         self.btn_stop.clicked.connect(self.stop_training)
+        self.btn_auto_train = QPushButton("⚡ Auto-Train")
+        self.btn_auto_train.setObjectName("autoTrainBtn")
+        self.btn_auto_train.setToolTip(
+            "Startet Zero-Config-Training:\n"
+            "Profile problem → Knowledge-Base lookup → MetaOptimizer + FeatureGating → Train.\n"
+            "Kein manuelles Konfigurieren nötig."
+        )
+        self.btn_auto_train.clicked.connect(self.start_auto_train)
         self.btn_render = QPushButton("Render: Off")
         self.btn_render.setCheckable(True)
         self.btn_render.setVisible(False)
@@ -977,6 +987,7 @@ class TrainingTab(QWidget):
         ctrl_row.addWidget(self.btn_start)
         ctrl_row.addWidget(self.btn_pause)
         ctrl_row.addWidget(self.btn_stop)
+        ctrl_row.addWidget(self.btn_auto_train)
         ctrl_row.addWidget(self.btn_render)
         ctrl_row.addWidget(self.btn_run_best)
         ctrl_row.addWidget(self.status_lbl)
@@ -1784,9 +1795,101 @@ class TrainingTab(QWidget):
             self.btn_pause.setText("⏸  Pause")
             self.btn_stop.setEnabled(False)
             self.status_lbl.setText("Stopping…")
+        elif self._auto_worker and self._auto_worker.isRunning():
+            self._auto_worker.terminate()
+            self._auto_worker = None
+            self._reset_training_buttons()
+            self.status_lbl.setText("Stopped")
         else:
             self._reset_training_buttons()
             self.status_lbl.setText("Stopped")
+
+    def start_auto_train(self) -> None:
+        """Start zero-config training: profile → KB → MetaOptimizer → FeatureGating → Train."""
+        ex = self._current_example()
+        if ex is None:
+            return
+        if (self._worker and self._worker.isRunning()) or \
+           (self._auto_worker and self._auto_worker.isRunning()):
+            return
+
+        try:
+            research_cfg = self._configure_yane_core(ex)
+            self._apply_evolution_options(research_cfg)
+            make_eval_fn = self._make_eval_factory(ex)
+            remote_cfg = self._current_remote_config()
+            self._configure_quality_diversity()
+            self._configure_curriculum(ex)
+            self._setup_gui_run_logging(ex)
+        except Exception as exc:
+            QMessageBox.critical(self, "Setup Error", str(exc))
+            return
+
+        self._run_id += 1
+        run_id = self._run_id
+        self._had_error = False
+        self._last_ram_color = ""
+        self._auto_profile_info = None
+
+        self.btn_start.setEnabled(False)
+        self.btn_auto_train.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.status_lbl.setText("Profiling problem…")
+        self.chart.clear()
+        self.species_chart.clear()
+        self._start_time = _time.perf_counter()
+        self._last_heavy_update = 0.0
+        self.lbl_workers_active.setText("")
+        self._render_widget.clear_frame()
+        self._score_lbl.setVisible(False)
+
+        self.training_started.emit()
+        if self._yane is not None:
+            self.ne_ready.emit(self._yane)
+        self.btn_save_ckpt.setEnabled(True)
+        self.btn_run_best.setEnabled(False)
+
+        setup_worker = AutoSetupWorker(self._yane, make_eval_fn)
+        setup_worker.finished.connect(setup_worker.deleteLater)
+        setup_worker.status_message.connect(self.status_lbl.setText)
+        setup_worker.error_occurred.connect(self._on_auto_error)
+        setup_worker.setup_done.connect(
+            lambda info: self._on_auto_setup_done(info, make_eval_fn, remote_cfg, run_id)
+        )
+        self._auto_worker = setup_worker
+        setup_worker.start(QThread.Priority.LowPriority)
+
+    def _on_auto_setup_done(self, info: dict, make_eval_fn, remote_cfg, run_id: int) -> None:
+        self._auto_worker = None
+        self._auto_profile_info = info
+
+        task = info.get("task_type", "?")
+        diff = info.get("difficulty", "?")
+        pop  = info.get("pop_size", "?")
+        kb   = f"KB conf={info.get('kb_conf', 0):.2f}" if info.get("kb_used") else "cold-start"
+        self.status_lbl.setText(f"Auto [{task} diff={diff} pop={pop} {kb}] Training…")
+
+        ex = self._current_example()
+        render_cb = self._render_callback_for_example(ex) if ex else None
+
+        worker = TrainingWorker(self._yane, make_eval_fn,
+                                render_cb=render_cb, remote_config=remote_cfg)
+        worker.finished.connect(worker.deleteLater)
+        worker.iteration_done.connect(self._on_iteration)
+        worker.error_occurred.connect(self._on_error)
+        worker.info_message.connect(self.status_lbl.setText)
+        worker.workers_resolved.connect(self._on_workers_resolved)
+        worker.finished.connect(lambda: self._on_finished(run_id))
+        worker.start(QThread.Priority.LowPriority)
+        self._worker = worker
+        self.btn_pause.setEnabled(True)
+
+    def _on_auto_error(self, msg: str) -> None:
+        self._auto_worker = None
+        self._auto_profile_info = None
+        self._reset_training_buttons()
+        self.status_lbl.setText("Error")
+        QMessageBox.critical(self, "Auto-Train Setup Error", msg)
 
     def _on_workers_resolved(self, n: int) -> None:
         if n <= 1:
@@ -2012,6 +2115,7 @@ class TrainingTab(QWidget):
 
     def _reset_training_buttons(self) -> None:
         self.btn_start.setEnabled(True)
+        self.btn_auto_train.setEnabled(True)
         self.btn_pause.setEnabled(False)
         self.btn_pause.setText("⏸  Pause")
         self.btn_stop.setEnabled(False)
@@ -2079,9 +2183,54 @@ class TrainingTab(QWidget):
                 self.genome_updated.emit(best, mem, True)  # full update on finish
             except Exception:
                 pass
+        # Auto-train report — build before _yane is cleared
+        if self._auto_profile_info is not None and not self._had_error and self._yane is not None:
+            try:
+                from yane.evolution.auto_train import build_report
+                pop_size = self._auto_profile_info.get("pop_size", 0)
+                best_fit = self._yane.get_best().fitness if self._yane._population else -float("inf")
+                total_gen = getattr(self._yane, "_n_evaluations_done", 0) // max(1, pop_size)
+                report = build_report(
+                    profile=self._auto_profile_info.get("profile"),
+                    problem_name=None,
+                    kb_entries=self._auto_profile_info.get("kb_entries", 0),
+                    kb_conf=self._auto_profile_info.get("kb_conf", 0.0),
+                    applied_params=self._auto_profile_info.get("applied_params", {}),
+                    cold_start=self._auto_profile_info.get("cold_start", True),
+                    meta_diag=self._yane.get_meta_optimizer_diagnostics(),
+                    feat_diag=self._yane.get_feature_gating_diagnostics(),
+                    active_features=(self._yane._feature_gate.get_active_features()
+                                     if self._yane._feature_gate else []),
+                    pop_size=pop_size,
+                    max_iters=getattr(self._yane, "_max_iterations", 0) or 0,
+                    wall_time=_time.perf_counter() - self._start_time,
+                    total_generations=total_gen,
+                    final_fitness=best_fit,
+                )
+                self._show_auto_report(report)
+            except Exception:
+                pass
+            self._auto_profile_info = None
+
         self._update_ram_bar()
         self._worker = None
         self._yane = None
+
+    def _show_auto_report(self, report: str) -> None:
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Auto-Train Report")
+        dlg.resize(580, 420)
+        lay = QVBoxLayout(dlg)
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        txt.setFontFamily("monospace")
+        txt.setPlainText(report)
+        lay.addWidget(txt)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(dlg.accept)
+        lay.addWidget(btns)
+        dlg.exec()
 
     def _update_adaptive_labels(self, mem: dict) -> None:
         """Update live display of adaptive control diagnostics."""

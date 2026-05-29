@@ -563,6 +563,18 @@ class TrainingWorker(QThread):
         except RuntimeError:
             return
         mem = self._yane.population_memory_info()
+        try:
+            meta = self._yane.get_meta_optimizer_diagnostics()
+            if meta.get("enabled"):
+                mem["meta_optimizer"] = meta
+        except Exception:
+            pass
+        try:
+            fg = self._yane.get_feature_gating_diagnostics()
+            if fg.get("enabled"):
+                mem["feature_gating"] = fg
+        except Exception:
+            pass
         self.iteration_done.emit(iteration, fitness, best, mem)
 
     def _emit_final(self) -> None:
@@ -582,6 +594,84 @@ class TrainingWorker(QThread):
     def stop(self) -> None:
         self._paused = False
         self._running = False
+
+
+class AutoSetupWorker(QThread):
+    """Profiles the problem and configures P0 meta-adaptive features in background.
+
+    Runs profile_problem (~20 warmup evals) then sets up KB, MetaOptimizer,
+    and FeatureGating so the normal TrainingWorker can start immediately after.
+    """
+
+    setup_done     = Signal(dict)   # profile summary + applied-param info
+    error_occurred = Signal(str)
+    status_message = Signal(str)
+
+    def __init__(self, yane, make_eval_fn: "Callable", n_warmup: int = 20,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self._yane = yane
+        self._make_eval_fn = make_eval_fn
+        self._n_warmup = n_warmup
+
+    def run(self) -> None:
+        from yane.evolution.auto_train import apply_cold_start_defaults, pick_pop_size
+        try:
+            self.status_message.emit("Profiling problem…")
+            eval_fn = self._make_eval_fn(None)
+            profile = self._yane.profile_problem(eval_fn, n_warmup=self._n_warmup)
+
+            pop_size = pick_pop_size(profile)
+            self._yane.set_population_size(pop_size)
+
+            if self._yane._knowledge_base is None:
+                self._yane.set_knowledge_base()
+            suggestions: list = []
+            try:
+                suggestions = self._yane._knowledge_base.suggest(profile, top_k=3)
+            except Exception:
+                pass
+
+            applied_params: dict = {}
+            kb_used = False
+            kb_conf = 0.0
+            if suggestions and suggestions[0].get("confidence", 0.0) >= 0.25:
+                kb_used = True
+                kb_conf = suggestions[0].get("confidence", 0.0)
+                for pname, pval in (suggestions[0].get("params") or {}).items():
+                    try:
+                        self._yane.set_param(pname, pval)
+                        applied_params[pname] = pval
+                    except Exception:
+                        pass
+            else:
+                applied_params = apply_cold_start_defaults(self._yane, profile)
+
+            self.status_message.emit("Configuring MetaOptimizer & FeatureGating…")
+            self._yane.set_meta_optimizer(
+                enabled=True, tune_interval=5,
+                plateau_patience=30, phase_min_gens=10, max_overhead_pct=10.0,
+            )
+            self._yane.set_auto_features(
+                enabled=True, max_concurrent=2, test_interval=20,
+                test_duration=10, degradation_patience=40,
+            )
+
+            self.setup_done.emit({
+                "profile":        profile,
+                "task_type":      profile.task_type,
+                "difficulty":     round(profile.estimated_difficulty, 3),
+                "noise":          round(profile.noise_level, 3),
+                "temporal":       round(profile.temporal_dependency, 3),
+                "pop_size":       pop_size,
+                "kb_used":        kb_used,
+                "kb_conf":        round(kb_conf, 3),
+                "kb_entries":     len(self._yane._knowledge_base) if self._yane._knowledge_base else 0,
+                "applied_params": applied_params,
+                "cold_start":     not kb_used,
+            })
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
 
 
 class EpisodeRunner(QThread):

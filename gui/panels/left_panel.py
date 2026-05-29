@@ -304,6 +304,40 @@ class LeftPanel(QWidget):
         research_grp.addRow("Module library:", self.lbl_module_library)
         layout.addWidget(research_grp)
 
+        # ── Meta-Adaptive Orchestration (P0) ──────────────────────────────
+        meta_grp = _CollapsibleGroup("Meta-Adaptive (P0)", collapsed=False)
+        self.lbl_meta_phase       = _label("—", "statValue")
+        self.lbl_meta_overhead    = _label("—", "mutRate")
+        self.lbl_meta_ticks       = _label("—", "mutRate")
+        self.lbl_meta_changes     = _label("—", "mutRate")
+        self.lbl_meta_changes.setWordWrap(True)
+        self.lbl_fg_active        = _label("—", "statValue")
+        self.lbl_fg_status        = _label("—", "mutRate")
+        self.lbl_fg_status.setWordWrap(True)
+        self.lbl_meta_phase.setToolTip(
+            "Aktuelle MetaOptimizer-Phase:\n"
+            "  EXPLORE  — UCB1 erkundet Parameterraum breit\n"
+            "  EXPLOIT  — Beste Parameter werden ausgenutzt\n"
+            "  REFINE   — Feinabstimmung der besten Region\n"
+            "  CONVERGE — Training fast abgeschlossen")
+        self.lbl_meta_overhead.setToolTip(
+            "Overhead des MetaOptimizers als Anteil der Trainingszeit.\n"
+            "Ab max_overhead_pct wird der Tuner gedrosselt.")
+        self.lbl_meta_ticks.setToolTip("Anzahl durchgeführter / übersprungener Tuning-Schritte.")
+        self.lbl_meta_changes.setToolTip("Letzte vom MetaOptimizer vorgenommene Parameter-Änderungen.")
+        self.lbl_fg_active.setToolTip("Anzahl aktiver Research-Features (via Feature-Gating).")
+        self.lbl_fg_status.setToolTip(
+            "Status aller Features: active/testing/inactive/disabled mit Degradation-Level.")
+        meta_grp.addRow("Phase:",         self.lbl_meta_phase)
+        meta_grp.addRow("Overhead:",      self.lbl_meta_overhead)
+        meta_grp.addRow("Ticks/skipped:", self.lbl_meta_ticks)
+        meta_grp.addRow("Last changes:",  self.lbl_meta_changes)
+        meta_grp.addRow("Active features:", self.lbl_fg_active)
+        meta_grp.addRow("Feature status:", self.lbl_fg_status)
+        self._meta_grp = meta_grp
+        meta_grp.setVisible(False)   # only shown when P0 is active
+        layout.addWidget(meta_grp)
+
         # ── Curriculum ────────────────────────────────────────────────────
         cur_grp = _CollapsibleGroup("Curriculum", collapsed=False)
         self.lbl_cur_stage  = _label("—", "statValue")
@@ -653,6 +687,43 @@ class LeftPanel(QWidget):
         self.lbl_fitness_components.setText(research["fitness_components"])
         self.lbl_meta_policy.setText(research["meta_policy"])
         self.lbl_module_library.setText(research["module_library"])
+
+        # Meta-Adaptive P0
+        meta = mem.get("meta_optimizer")
+        fg   = mem.get("feature_gating")
+        p0_active = bool(meta) or bool(fg)
+        self._meta_grp.setVisible(p0_active)
+        if meta:
+            self.lbl_meta_phase.setText(meta.get("phase", "—"))
+            overhead = meta.get("overhead_pct", 0.0)
+            self.lbl_meta_overhead.setText(f"{overhead:.1f} %")
+            ticks   = meta.get("n_ticks", 0)
+            skipped = meta.get("n_skipped", 0)
+            self.lbl_meta_ticks.setText(f"{ticks} / {skipped}")
+            changes = meta.get("recent_changes", [])
+            if changes:
+                last = changes[-1]
+                self.lbl_meta_changes.setText(
+                    f"gen {last.get('generation','?')}: "
+                    f"{last.get('param','?')} = {last.get('value','?')}"
+                )
+            else:
+                self.lbl_meta_changes.setText("—")
+        if fg:
+            n_active = fg.get("n_active", 0)
+            n_test   = fg.get("n_testing", 0)
+            self.lbl_fg_active.setText(f"{n_active} active, {n_test} testing")
+            features = fg.get("features", {})
+            parts = []
+            for fname, finfo in sorted(features.items()):
+                st = finfo.get("status", "?")
+                dg = finfo.get("degradation_level", 0.0)
+                short = fname[:12]
+                if dg > 0:
+                    parts.append(f"{short}:{st[:3]}({dg:.1f})")
+                else:
+                    parts.append(f"{short}:{st[:3]}")
+            self.lbl_fg_status.setText("  ".join(parts) or "—")
 
         # Fitness histogram
         fh = mem.get("fitness_histogram")
