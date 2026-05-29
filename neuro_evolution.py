@@ -174,6 +174,7 @@ class NeuroEvolution:
         self._tensorboard_logdir: Path | None = None
         self._tensorboard_writer = None         # SummaryWriter, created lazily
         self._log_callbacks: list[Callable] = []
+        self._tracking_backends: list = []      # TrackingBackend instances
         # Event system
         self._event_bus: EventBus = EventBus()
         # Anomaly detection (None = disabled)
@@ -1502,6 +1503,32 @@ class NeuroEvolution:
                 "Install it with:  pip install torch"
             ) from None
 
+    def set_tracking_backend(self, *backends) -> None:
+        """Register one or more experiment-tracking backends.
+
+        Each backend receives per-generation metrics, the training config, and
+        a ``finish()`` call at the end of ``train()``.  Multiple backends are
+        dispatched in registration order; all receive identical data.
+
+        Built-in backends::
+
+            from yane.evolution.tracking import WandbBackend, MlflowBackend
+            yane.set_tracking_backend(WandbBackend(project="myproject"))
+            yane.set_tracking_backend(MlflowBackend())
+
+        Custom backends only need to implement the
+        :class:`~yane.evolution.tracking.TrackingBackend` protocol (duck-typed,
+        no inheritance required).
+
+        Calling ``set_tracking_backend()`` with no arguments clears all
+        registered backends.
+        """
+        if not backends:
+            self._tracking_backends = []
+            return
+        for backend in backends:
+            self._tracking_backends.append(backend)
+
     def set_log_callbacks(
         self,
         on_generation: "Callable[[dict], None] | None" = None,
@@ -1812,6 +1839,24 @@ class NeuroEvolution:
         else:
             self._tensorboard_writer = None
 
+        # Tracking backends: init + log config once per run.
+        _tracking_config: dict = {
+            "n_inputs":        self._n_inputs,
+            "n_outputs":       self._n_outputs,
+            "population_size": self._population_size,
+            "max_nodes":       self._max_nodes,
+            "max_connections": self._max_connections,
+            "seed":            self._seed,
+            "run_name":        name,
+        }
+        for _tb_backend in self._tracking_backends:
+            try:
+                _tb_backend.init(_tracking_config)
+                _tb_backend.log_config(_tracking_config)
+            except Exception as _tb_err:
+                _li("Tracking backend init failed (%s): %s",
+                    type(_tb_backend).__name__, _tb_err)
+
         self._n_evaluations_done = 0
         stop_reason: str | None = None
         iterations = 0
@@ -1940,6 +1985,17 @@ class NeuroEvolution:
                         best_fitness=_cur_fit,
                     )
                 _gen_eval_ms = 0.0   # reset for next generation
+
+                # Tracking backends: log once per generation.
+                if self._tracking_backends:
+                    from yane.evolution.tracking import _scalar_metrics as _scm
+                    _tb_mem = self.population_memory_info()
+                    _tb_scalars = _scm(_tb_mem)
+                    for _tb_backend in self._tracking_backends:
+                        try:
+                            _tb_backend.log_metrics(_tb_scalars, _gen_num)
+                        except Exception:
+                            pass
 
             # --- Periodic CSV logging + heartbeat ---------------------------
             _heartbeat_now = (iterations % 100 == 0)
@@ -2156,6 +2212,11 @@ class NeuroEvolution:
             except Exception:
                 pass
             self._tensorboard_writer = None
+        for _tb_backend in self._tracking_backends:
+            try:
+                _tb_backend.finish()
+            except Exception:
+                pass
 
         # Post-training pruning
         if self._post_pruning_enabled:
