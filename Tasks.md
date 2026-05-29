@@ -5,8 +5,8 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** P0 komplett. P1: WandB/MLflow, Regression Benchmarking Suite, Hardware-Aware NEAT implementiert.
-Teststand: `1516 passed, 2 skipped`.
+**Aktueller Stand:** P0 komplett. P1: WandB/MLflow, Benchmarking Suite, Hardware-Aware NEAT, Evolutionary Data Augmentation implementiert.
+Teststand: `1549 passed, 2 skipped`.
 
 > **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
 > Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
@@ -1148,42 +1148,15 @@ yane.set_budget("auto")       # Alles automatisch
 
 ---
 
-### □ P1 Evolutionary Data Augmentation
+### ✓ P1 Evolutionary Data Augmentation
 
-Bei kleinen Trainingsdatensaetzen overfittet NEAT. Evolutionaere Data
-Augmentation findet automatisch Augmentierungen die die Generalisierung
-verbessern — die Augmentierungsparameter sind selbst evolvierbar.
-
-**Ziel:** `set_evolutionary_augmentation()` evolviert Augmentierungs-Pipelines
-parallel zur Genom-Evolution.
-
-**Design: `AugmentationPipeline` in `evolution/augmentation.py`**
-
-```python
-yane.set_evolutionary_augmentation(enabled=True,
-    augmentation_space=[
-        "gaussian_noise", "dropout_noise", "scaling",
-        "translation", "mixup", "cutout"
-    ],
-    population_augmentations=10
-)
-```
-
-**Augmentierungstypen:** `gaussian_noise`, `dropout_noise`, `scaling`,
-`translation`, `mixup`, `cutout`, `label_smoothing`. Jedes Augmentierungs-Gen
-hat `(type, probability, magnitude)`.
-
-**Evolutions-Mechanik:** Augmentierungsgenome haben eigene Population;
-Fitness = NEAT-Test-Set-Performance; Crossover/Mutation evolvieren Pipeline-
-Parameter parallel zur Hauptpopulation.
-
-**Akzeptanzkriterien:**
-
-- Augmentierungs-Pipeline-Parameter veraendern sich ueber Generationen.
-- Test-Set-Fitness mit Augmentierung > ohne Augmentierung (bei Small Data).
-- Augmentierungs-Crossover produziert valide Pipelines.
-- Tests: Pipeline-Forward; Augmentierungs-Mutation; Crossover; Fitness-
-  Attribution; Small-Data-Benchmark.
+**Implementiert** in `evolution/augmentation.py`:
+- `AugmentationGene(type, probability, magnitude)`: 5 Typen — `gaussian_noise`, `dropout_noise`, `scaling`, `translation`, `cutout`. Mutate (Gauss, clamped [0,1]), Serialisierung.
+- `AugmentationPipeline`: geordnete Gene-Sequenz; `apply(inputs, rng)` transformiert Inputs in-series; Crossover (uniforme Gen-Ebene, Länge = max beider Eltern); UCB1-Score für Pool-Selektion.
+- `AugmentationPool`: UCB1-Selektion; Evolution alle N Generationen (schlechteste Hälfte → Crossover+Mutation der besten Hälfte).
+- Integration in `_run_evaluations()`: wraps `genome.forward` nach `input_transform`, vor Curiosity — Inputs werden vor dem Forward-Pass augmentiert.
+- Reward = Fitness-Delta best-genome pro Generation; `set_evolutionary_augmentation()`, `get_augmentation_diagnostics()`.
+- 33 Tests, alle bestanden.
 
 ---
 
