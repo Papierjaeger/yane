@@ -146,28 +146,29 @@ class TestWeightedDistance:
 
 class TestConfidence:
     def test_zero_distance_gives_high_confidence(self):
-        conf = _confidence(0.0, [0.0, 0.5, 1.0], total_entries=10)
+        conf = _confidence(0.0, [0.0, 0.5, 1.0])
         assert conf > 0.5
 
     def test_max_distance_gives_low_confidence(self):
-        conf = _confidence(1.0, [0.0, 0.5, 1.0], total_entries=10)
+        conf = _confidence(1.0, [0.0, 0.5, 1.0])
         assert conf < 0.5
 
-    def test_confidence_increases_with_more_entries(self):
-        c1 = _confidence(0.1, [0.0, 0.1, 0.2], total_entries=1)
-        c2 = _confidence(0.1, [0.0, 0.1, 0.2], total_entries=10)
+    def test_confidence_increases_with_denser_neighborhood(self):
+        # Sparse neighbourhood (entries spread out; query far from cluster)
+        c1 = _confidence(0.5, [0.1, 0.5, 0.9])
+        # Dense neighbourhood (entries tightly clustered; query close)
+        c2 = _confidence(0.1, [0.05, 0.1, 0.15])
         assert c2 > c1
 
     def test_confidence_in_range(self):
-        for n in [1, 3, 10]:
-            c = _confidence(0.2, [0.1, 0.2, 0.5], total_entries=n)
+        for _ in [1, 3, 10]:
+            c = _confidence(0.2, [0.1, 0.2, 0.5])
             assert 0.0 <= c <= 1.0
 
     def test_all_same_distance_gives_uniform_confidence(self):
-        # When all top-K distances are equal, dist_score=0; count_score > 0 for
-        # 3 entries → confidence comes purely from count component (non-zero but equal)
-        c1 = _confidence(0.5, [0.5, 0.5, 0.5], total_entries=3)
-        c2 = _confidence(0.5, [0.5, 0.5, 0.5], total_entries=3)
+        # When all top-K distances are equal, dist_score=0; agreement=1.0 → confidence=0.3
+        c1 = _confidence(0.5, [0.5, 0.5, 0.5])
+        c2 = _confidence(0.5, [0.5, 0.5, 0.5])
         assert c1 == pytest.approx(c2)   # all entries have same confidence
         assert 0.0 <= c1 <= 1.0
 

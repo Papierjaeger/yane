@@ -304,10 +304,10 @@ class _CatBandit:
     def best(self) -> Any:
         if not any(self._counts):
             return self.candidates[0]
-        return self.candidates[
-            max(range(len(self._rewards)),
-                key=lambda i: self._rewards[i] / max(self._counts[i], 1))
-        ]
+        idx = max(range(len(self._rewards)),
+                  key=lambda i: self._rewards[i] / max(self._counts[i], 1))
+        self._last_idx = idx
+        return self.candidates[idx]
 
     def get_diagnostics(self) -> dict:
         return {
@@ -349,7 +349,8 @@ class _ContOptimizer:
 
     def update(self, reward: float) -> None:
         if self._last_val is not None:
-            self._gp.observe(self._last_val, max(0.0, reward))
+            # Allow negative rewards so the GP learns bad regions too
+            self._gp.observe(self._last_val, reward)
 
     def get_diagnostics(self) -> dict:
         return {
@@ -415,7 +416,7 @@ class MetaOptimizer:
 
         self._generation: int = 0
         self._last_best: float = -math.inf
-        self._prev_best: float = -math.inf
+        self._best_at_last_tune: float = -math.inf  # for interval-delta reward
         self._total_eval_ms: float = 0.0
         self._meta_ms: float = 0.0
         self._n_ticks: int = 0
@@ -451,16 +452,16 @@ class MetaOptimizer:
         if transitioned:
             self._apply_phase_actions(ne)
 
-        # Compute fitness delta for bandit rewards
-        delta = max(0.0, best_fitness - self._prev_best)
-        self._prev_best = self._last_best
         self._last_best = best_fitness
 
         # Tune params every tune_interval generations
         if generation % self.tune_interval == 0 and generation > 0:
             if self._can_run():
                 t0 = time.monotonic()
-                self._tune(delta, ne)
+                # Use improvement since last tune as reward (not just 1-gen delta)
+                interval_delta = max(0.0, best_fitness - self._best_at_last_tune)
+                self._best_at_last_tune = best_fitness
+                self._tune(interval_delta, ne)
                 self._meta_ms += (time.monotonic() - t0) * 1000
                 self._n_ticks += 1
             else:

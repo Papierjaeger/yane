@@ -216,7 +216,7 @@ class KnowledgeBase:
 
         result: list[dict] = []
         for dist, entry in top:
-            conf = _confidence(dist, top_distances, len(self._entries))
+            conf = _confidence(dist, top_distances)
             result.append({
                 "params": dict(entry.final_params),
                 "expected_fitness": entry.final_fitness,
@@ -383,22 +383,28 @@ def _weighted_distance(
 def _confidence(
     distance: float,
     top_k_distances: list[float],
-    total_entries: int,
 ) -> float:
     """Confidence in [0, 1].
 
     Increases when:
-    - The query is close to this entry (low distance).
-    - More entries exist in the KB (more evidence).
+    - The query is close to this entry (low distance relative to the spread).
+    - Many of the top-K are within 1.5× of this entry's distance (neighbourhood
+      agreement — genuinely similar runs).
     """
     max_d = max(top_k_distances) if top_k_distances else 1.0
     if max_d < 1e-10:
-        dist_score = 1.0
-    else:
-        dist_score = max(0.0, 1.0 - distance / (max_d + 1e-10))
-    # Count score saturates at 5 entries; accounts for "Confidence steigt mit Anzahl"
-    count_score = min(1.0, total_entries / 5.0)
-    return min(1.0, 0.7 * dist_score + 0.3 * count_score)
+        return 1.0
+
+    dist_score = max(0.0, 1.0 - distance / (max_d + 1e-10))
+
+    # Neighbourhood-agreement: how many top-K entries agree with this one?
+    # "Agree" = within 1.5× of THIS entry's distance (or absolute threshold)
+    threshold = max(distance * 1.5, 0.05)
+    agreeing = sum(1 for d in top_k_distances if d <= threshold)
+    agreement = agreeing / max(1, len(top_k_distances))
+
+    return min(1.0, 0.7 * dist_score + 0.3 * agreement)
+
 
 
 def _profile_to_dict(profile: "ProblemProfile") -> dict:

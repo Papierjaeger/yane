@@ -82,7 +82,66 @@ Ziel: Layer 1 wartbar halten; Layer 2 durch das Policy-Interface erweiterbar mac
 
 ---
 
-### □ P0 Meta-Adaptive Orchestration Layer — Das selbstoptimierende YANE
+### □ P1 GUI-Integration für P0 Meta-Adaptive Orchestration Layer
+
+Die sechs P0-Phasen (ParamRegistry, ProblemProfiler, MetaOptimizer,
+KnowledgeBase, FeatureGating, auto_train) sind backendseitig vollständig
+implementiert, haben aber **keinerlei GUI-Integration**. Die GUI nutzt
+weiterhin das ältere `set_meta_adaptive_policies()`-Feature.
+
+**Ziel:** Live-Anzeige und Steuerung aller P0-Komponenten in der GUI —
+insbesondere ein `auto_train`-Button im Training-Tab und Live-Diagnostics
+im Left-Panel.
+
+**Umfang:**
+
+1. **Training-Tab (`gui/tabs/training_tab.py`):**
+   - `auto_train`-Button: führt `yane.auto_train(evaluator, ...)` aus und
+     zeigt Fortschritt live an.
+   - `AutoTrainResult`-Anzeige nach Abschluss: `auto_config_report` als
+     formatierter Text, Problem-Profil-Daten (Task-Typ, Difficulty, Noise etc.).
+   - Checkboxen für `set_meta_optimizer()` und `set_auto_features()` als
+     optionale manuelle Overrides (standardmäßig von `auto_train` gesetzt).
+
+2. **Left-Panel — Research-Features-Gruppe (`gui/panels/left_panel.py`):**
+   - MetaOptimizer-Status: aktuelle Phase (EXPLORE/EXPLOIT/REFINE/CONVERGE),
+     Stagnation-Generations, Overhead-%, letzte Param-Änderungen.
+   - Feature-Gating-Status: aktive Features, degradierte Features,
+     Degradation-Level pro Feature, Test-Fortschritt.
+   - Datenquelle: `get_meta_optimizer_diagnostics()` und
+     `get_feature_gating_diagnostics()`.
+
+3. **Neuer „Auto-Config"-Tab oder Panel:**
+   - Knowledge-Base-Status: Anzahl Einträge, letzter KB-Learn, Cold-Start-Modus.
+   - KB-Vorschläge für das aktuelle Problem (`suggest_params()`).
+   - ParamRegistry-Live-View: alle registrierten Parameter mit
+     aktuellem Wert, Default, Domain und Impact-History.
+
+4. **Während des Trainings (Live-Updates):**
+   - `_tick_feature_gating` und `_tick_meta_optimizer` feuern bereits im
+     `train()`-Loop. Die GUI soll einmal pro Generation die Diagnostics
+     pollen und anzeigen.
+   - Feature-Degradation-Warnungen („curiosity degraded to level 0.6").
+   - Phasen-Übergangs-Events („EXPLORE → EXPLOIT at gen 80").
+
+5. **Inspect-Tab-Erweiterung:**
+   - Problem-Profile-Replay: `yane.profile_problem(evaluator)` manuell
+     auslösbar, Ergebnis als Tabelle.
+
+**Akzeptanzkriterien:**
+
+- `auto_train`-Button startet Training ohne manuelle `configure()`/`set_*()`-Aufrufe.
+- `auto_config_report` wird nach Trainingsende vollständig in der GUI angezeigt.
+- MetaOptimizer-Phase und Feature-Gating-Status sind live sichtbar.
+- KB-Status (Einträge, Cold-Start) wird korrekt dargestellt.
+- ParamRegistry-View zeigt ≥30 Parameter mit aktuellen Werten.
+- Alle Anzeigen aktualisieren sich ohne manuellen Refresh.
+- GUI bleibt responsive während `auto_train` läuft (non-blocking).
+- Tests: GUI-Widgets rendern ohne Crash; Diagnostics-Daten werden korrekt
+  formatiert; `auto_train`-Button-Callback läuft ohne Exception.
+
+---
+### ✓ P0 Meta-Adaptive Orchestration Layer — Das selbstoptimierende YANE
 
 **Das zentrale Architektur-Feature der nächsten Evolutionsstufe.** YANE soll
 ein „System der unendlichen Adaption" werden: kein manuelles Tuning von
@@ -983,6 +1042,8 @@ yane = NeuroEvolution()
 result = yane.auto_train(evaluator)
 print(result.auto_config_report)
 ```
+
+---
 
 ---
 
