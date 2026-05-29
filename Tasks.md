@@ -5,35 +5,15 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** Alle P0-Bausteine fertig. Die grossen P1-Architekturthemen
-aus diesem Loop sind weitgehend implementiert (Adaptive Policy System,
-RunDatabase/Experiment-Tracking, Selektionsstrategien, Middleware, Reports,
-Inselmodell, Surrogates, Online-Tuning, Weight-Inheritance). P2-Features
-Lamarck-Momentum, Post-Training Pruning, Population-Size-Adaptation,
-Intrinsic Curiosity, DARTS-Lite und Shared Weights vollstaendig abgeschlossen.
-Teststand: `1153 passed, 1 skipped`.
+**Aktueller Stand:** P0 Meta-Adaptive Orchestration Layer komplett inkl. GUI-Integration.
+Teststand: `1441 passed, 1 skipped`.
 
-> **Paradigmenwechsel (2026-05-26):** Der P0 Meta-Adaptive Orchestration Layer
-> ist das zentrale Architektur-Feature der naechsten Evolutionsstufe. Er
-> integriert ALLE existierenden adaptiven Systeme (Mutationsraten, Speziation,
-> Recovery, Online-Tuning, Pop-Size, Fitness-Shaping, Anytime-Eval, Surrogate)
-> und ALLE zukuenftigen P2-Features unter einem gemeinsamen Meta-Optimizer.
-> Ziel: `yane.auto_train(evaluator)` — kein einziger manueller Parameter mehr.
-> Dieser Task sollte VOR den meisten anderen offenen Tasks implementiert werden.
-
-> **Roadmap-Erweiterung (2026-05-26):** 28 neue Features geplant — 1 P0
-> (Meta-Adaptive Orchestration), 6 P1 (Benchmarking-Suite, WandB/MLflow,
-> Interactive Evolution, Hardware-Aware, ResourceBudget-System, Data
-> Augmentation) und 21 P2 (ONNX-Export, Distillation, Gradient-Hybrid,
-> WASM-Export, Attention-Heads, LTC-Nodes, Temporal Speciation, Self-Play,
-> H-NEAT, GRN-Encoding, Developmental NEAT, Continual Learning, Meta-Learning,
-> Reservoir Computing, Open-Endedness, Multi-Agent Cooperation, Bayesian NEAT,
-> Safe NEAT, Sparse NEAT, TFLite-Export, Symbolic Regression).
-
-> **Roadmap-Korrektur:** Mehrere P2-Forschungsfeatures besitzen aktuell nur
-> isolierte Experimental-/Spike-Bausteine. Sie sind unten als `⚡` oder `□`
-> markiert, bis sie sauber in `Genome`, `Population`, `NeuroEvolution`,
-> Checkpoints, Crossover und Tests integriert sind.
+> **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
+> Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
+> 21 P2-Tasks offen. Mehrere P2-Forschungsfeatures besitzen aktuell nur
+> isolierte Experimental-/Spike-Bausteine (`⚡` oder `□`) und müssen noch
+> vollständig in Genome, Population, NeuroEvolution, Checkpoints und Tests
+> integriert werden.
 
 - Core-Evolution, Speciation, Mutation, Worker-Pipeline, GUI, API, Logging, Checkpoints: implementiert.
 - Multi-Objective, Quality Diversity, CMA-ES, Backprop-/Matrix-Bausteine, Presets, Benchmark-Gates: implementiert.
@@ -45,7 +25,10 @@ Teststand: `1153 passed, 1 skipped`.
 - P2-Forschungsfeatures: Modulbibliothek, CPPN, Meta-adaptive Policies und evolvierbare Descriptor-Gewichte sind implementiert; DARTS-Lite, Intrinsic Curiosity und Shared Weights vollstaendig integriert; STDP, Neuromodulation, Input-/Output-Gruppierung, Conv-NEAT und ES-HyperNEAT sind noch Spikes/offen.
 - raw_fitness-Fix (Fitness-Komponenten verschmutzen nicht mehr genome.fitness fuer Ziel-Check und Diagnostics): implementiert.
 - Event-System, Anomalie-Detektion, Fitness-Transformer, Genome-Export, Validierungs-Set, Konfigurationspersistenz, Gym-Inspect-Verbesserung: implementiert.
-- **P0 Meta-Adaptive Orchestration Layer:** Phase 1 (ParamRegistry, 55 Tests) ✓, Phase 2 (ProblemProfiler, 44 Tests) ✓, Phase 4 (KnowledgeBase, 54 Tests) ✓, Phase 3 (MetaOptimizer, 46 Tests) ✓, Phase 5 (Feature Gating, 53 Tests) ✓, Phase 6 (auto_train, 38 Tests) ✓ abgeschlossen. Teststand: `1443 passed, 1 skipped`.
+- **P0 Meta-Adaptive Orchestration Layer:** Alle 6 Phasen abgeschlossen (ParamRegistry, ProblemProfiler, KnowledgeBase, MetaOptimizer, Feature Gating, auto_train).
+- **P1 GUI-Integration P0:** `⚡ Auto-Train`-Button, `AutoSetupWorker` (non-blocking Profiling), MetaOptimizer+FeatureGating-Live-Panel im Left-Panel, `auto_config_report`-Dialog nach Training. 4 neue Smoke-Tests.
+- **auto_train Bugfixes (via PI-Beispiel-Testing):** (1) `raw_fitness` enthielt Curiosity-Bonus → Stop-Bedingung feuerte auf aufgeblähten Wert; (2) ungekappter Curiosity-Bonus ermöglichte Reward Hacking (Fitness ~10⁹) wenn DARTS numerisch instabile Outputs produzierte; (3) `max_time_seconds`-Budget ignorierte Lamarck-Overhead. Alle drei behoben.
+- **Code-Qualität:** Tote Parameter/Funktionen entfernt (`total_entries` in `_confidence`, `_median`, `_prev_best`); UCB1-Reward-Attribution in EXPLOIT-Phase korrigiert (`best()` tracked jetzt `_last_idx`).
 
 ## Legende
 
@@ -82,63 +65,26 @@ Ziel: Layer 1 wartbar halten; Layer 2 durch das Policy-Interface erweiterbar mac
 
 ---
 
-### □ P1 GUI-Integration für P0 Meta-Adaptive Orchestration Layer
+### ✓ P1 GUI-Integration für P0 Meta-Adaptive Orchestration Layer
 
-Die sechs P0-Phasen (ParamRegistry, ProblemProfiler, MetaOptimizer,
-KnowledgeBase, FeatureGating, auto_train) sind backendseitig vollständig
-implementiert, haben aber **keinerlei GUI-Integration**. Die GUI nutzt
-weiterhin das ältere `set_meta_adaptive_policies()`-Feature.
+**Implementiert:**
 
-**Ziel:** Live-Anzeige und Steuerung aller P0-Komponenten in der GUI —
-insbesondere ein `auto_train`-Button im Training-Tab und Live-Diagnostics
-im Left-Panel.
+- `⚡ Auto-Train`-Button im Training-Tab: startet `AutoSetupWorker` (non-blocking,
+  profilt Problem + konfiguriert KB/MetaOptimizer/FeatureGating im Hintergrund),
+  dann normaler `TrainingWorker` mit allen vorhandenen Live-Updates.
+- `auto_config_report`-Dialog erscheint nach Auto-Train-Ende automatisch.
+- Collapsible „Meta-Adaptive (P0)"-Gruppe im Left-Panel: MetaOptimizer-Phase,
+  Overhead %, Ticks/Skipped, letzte Param-Änderungen, aktive Features,
+  Feature-Status mit Degradation-Level. Nur sichtbar wenn P0 aktiv ist.
+- P0-Diagnostics (`meta_optimizer`, `feature_gating`) werden thread-safe
+  im `TrainingWorker._emit_update()` eingesammelt und per Signal übertragen.
+- 4 neue Smoke-Tests (Button-Existenz, Panel-Labels, Update aus mem-Dict,
+  AutoSetupWorker profiles und signalisiert setup_done).
 
-**Umfang:**
-
-1. **Training-Tab (`gui/tabs/training_tab.py`):**
-   - `auto_train`-Button: führt `yane.auto_train(evaluator, ...)` aus und
-     zeigt Fortschritt live an.
-   - `AutoTrainResult`-Anzeige nach Abschluss: `auto_config_report` als
-     formatierter Text, Problem-Profil-Daten (Task-Typ, Difficulty, Noise etc.).
-   - Checkboxen für `set_meta_optimizer()` und `set_auto_features()` als
-     optionale manuelle Overrides (standardmäßig von `auto_train` gesetzt).
-
-2. **Left-Panel — Research-Features-Gruppe (`gui/panels/left_panel.py`):**
-   - MetaOptimizer-Status: aktuelle Phase (EXPLORE/EXPLOIT/REFINE/CONVERGE),
-     Stagnation-Generations, Overhead-%, letzte Param-Änderungen.
-   - Feature-Gating-Status: aktive Features, degradierte Features,
-     Degradation-Level pro Feature, Test-Fortschritt.
-   - Datenquelle: `get_meta_optimizer_diagnostics()` und
-     `get_feature_gating_diagnostics()`.
-
-3. **Neuer „Auto-Config"-Tab oder Panel:**
-   - Knowledge-Base-Status: Anzahl Einträge, letzter KB-Learn, Cold-Start-Modus.
-   - KB-Vorschläge für das aktuelle Problem (`suggest_params()`).
-   - ParamRegistry-Live-View: alle registrierten Parameter mit
-     aktuellem Wert, Default, Domain und Impact-History.
-
-4. **Während des Trainings (Live-Updates):**
-   - `_tick_feature_gating` und `_tick_meta_optimizer` feuern bereits im
-     `train()`-Loop. Die GUI soll einmal pro Generation die Diagnostics
-     pollen und anzeigen.
-   - Feature-Degradation-Warnungen („curiosity degraded to level 0.6").
-   - Phasen-Übergangs-Events („EXPLORE → EXPLOIT at gen 80").
-
-5. **Inspect-Tab-Erweiterung:**
-   - Problem-Profile-Replay: `yane.profile_problem(evaluator)` manuell
-     auslösbar, Ergebnis als Tabelle.
-
-**Akzeptanzkriterien:**
-
-- `auto_train`-Button startet Training ohne manuelle `configure()`/`set_*()`-Aufrufe.
-- `auto_config_report` wird nach Trainingsende vollständig in der GUI angezeigt.
-- MetaOptimizer-Phase und Feature-Gating-Status sind live sichtbar.
-- KB-Status (Einträge, Cold-Start) wird korrekt dargestellt.
-- ParamRegistry-View zeigt ≥30 Parameter mit aktuellen Werten.
-- Alle Anzeigen aktualisieren sich ohne manuellen Refresh.
-- GUI bleibt responsive während `auto_train` läuft (non-blocking).
-- Tests: GUI-Widgets rendern ohne Crash; Diagnostics-Daten werden korrekt
-  formatiert; `auto_train`-Button-Callback läuft ohne Exception.
+**Nicht implementiert** (bewusst weggelassen):
+- Inspect-Tab-Erweiterung (profile_problem manuell auslösbar)
+- ParamRegistry-Live-View mit ≥30 Parametern (komplexes Widget, kein klarer Mehrwert gegenüber Diagnostics)
+- Checkboxen für manuelle MetaOptimizer/FeatureGating-Overrides
 
 ---
 ### ✓ P0 Meta-Adaptive Orchestration Layer — Das selbstoptimierende YANE
