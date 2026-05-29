@@ -1,4 +1,9 @@
-"""Tests for experimental Layer-3 features (experimental.py)."""
+"""Tests for experimental Layer-3 features (experimental.py).
+
+Note: InputGrouping and OutputGrouping tests have been removed — these spikes
+are superseded by evolution/input_grouping.py and evolution/output_grouping.py
+with dedicated test suites (test_input_grouping.py, test_output_grouping.py).
+"""
 from __future__ import annotations
 import unittest
 import pytest
@@ -6,34 +11,6 @@ from yane.core.genome import Genome
 from yane.core.node import Node, NodeType
 from yane.core.connection import Connection
 from yane.util.activation import ActivationType
-
-
-@pytest.mark.ci
-class TestInputGrouping(unittest.TestCase):
-
-    def test_grouping_reduces_dimension(self):
-        from yane.evolution.experimental import InputGrouping
-        ig = InputGrouping(n_raw=8, n_groups=2)
-        out = ig.forward([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
-        self.assertEqual(len(out), 2)
-
-    def test_grouping_mean(self):
-        from yane.evolution.experimental import InputGrouping
-        ig = InputGrouping(n_raw=4, n_groups=2)
-        ig.assignment = [0, 0, 1, 1]
-        out = ig.forward([2.0, 4.0, 6.0, 8.0])
-        self.assertAlmostEqual(out[0], 3.0)
-        self.assertAlmostEqual(out[1], 7.0)
-
-
-@pytest.mark.ci
-class TestOutputGrouping(unittest.TestCase):
-
-    def test_expands_outputs(self):
-        from yane.evolution.experimental import OutputGrouping
-        og = OutputGrouping(n_outputs=2, n_actions=5)
-        out = og.forward([0.0, 1.0])
-        self.assertEqual(len(out), 5)
 
 
 @pytest.mark.ci

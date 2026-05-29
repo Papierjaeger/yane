@@ -4,15 +4,18 @@ These features are modular and fully toggleable via the NeuroEvolution API.
 All features are disabled by default and impose no runtime cost when off.
 
 Contents:
-- InputGrouping / OutputGrouping: evolvable aggregation layers
 - SharedWeights: weight sharing across connections
-- ConvNEAT: convolutional NEAT modules
-- ESHyperNEAT: evolvable substrate HyperNEAT
 - DARTSLite: differentiable architecture search relaxation
 - CuriosityModule: intrinsic reward for exploration
 - STDP: spike-timing-dependent plasticity rule
 - Neuromodulation: dynamic gating of plasticity
 - CoEvolution: paired environment-agent co-evolution
+
+Note: InputGrouping, OutputGrouping, and ConvModule were spikes that have been
+superseded by production-quality modules:
+  - InputGrouping  → evolution/input_grouping.py
+  - OutputGrouping → evolution/output_grouping.py
+  - ConvModule     → evolution/conv_neat.py
 """
 from __future__ import annotations
 
@@ -21,71 +24,7 @@ import random
 from typing import Any, Callable
 
 from yane.core.genome import Genome
-from yane.core.node import Node, NodeType
 from yane.core.connection import Connection
-from yane.util.activation import ActivationType
-
-
-# =====================================================================
-# Input / Output Grouping — evolvable aggregation layers
-# =====================================================================
-
-class InputGrouping:
-    """Evolvable input aggregation: group raw inputs before feeding to network.
-
-    Each group applies a configurable reduction (mean, max, sum) to a subset
-    of input channels.  The grouping pattern is encoded as strategy genes
-    on the genome.
-    """
-
-    def __init__(self, n_raw: int, n_groups: int = 4):
-        self.n_raw = n_raw
-        self.n_groups = n_groups
-        # Group assignment: raw_input_idx → group_idx
-        self.assignment: list[int] = [i % n_groups for i in range(n_raw)]
-        self.reduction: str = "mean"  # mean, max, sum
-
-    def forward(self, raw_inputs: list[float]) -> list[float]:
-        groups = [0.0] * self.n_groups
-        counts = [0] * self.n_groups
-        for i, v in enumerate(raw_inputs):
-            g = self.assignment[i] if i < len(self.assignment) else i % self.n_groups
-            groups[g] += v
-            counts[g] += 1
-        if self.reduction == "mean":
-            return [groups[g] / max(counts[g], 1) for g in range(self.n_groups)]
-        elif self.reduction == "max":
-            # Recompute with max
-            vals = [0.0] * self.n_groups
-            for i, v in enumerate(raw_inputs):
-                g = self.assignment[i] if i < len(self.assignment) else i % self.n_groups
-                vals[g] = max(vals[g], v)
-            return vals
-        return groups  # sum
-
-
-class OutputGrouping:
-    """Evolvable output de-aggregation: expand few output nodes to many actions.
-
-    Maps network outputs to action channels via duplication or interpolation.
-    """
-
-    def __init__(self, n_outputs: int, n_actions: int):
-        self.n_outputs = n_outputs
-        self.n_actions = n_actions
-
-    def forward(self, outputs: list[float]) -> list[float]:
-        if self.n_actions <= self.n_outputs:
-            return outputs[:self.n_actions]
-        # Stretch via linear interpolation
-        result = []
-        for i in range(self.n_actions):
-            src = i * (self.n_outputs - 1) / max(self.n_actions - 1, 1)
-            lo = int(src)
-            hi = min(lo + 1, self.n_outputs - 1)
-            frac = src - lo
-            result.append(outputs[lo] * (1 - frac) + outputs[hi] * frac)
-        return result
 
 
 # =====================================================================
@@ -119,66 +58,6 @@ def apply_shared_weights(genome: Genome, groups: list[SharedWeightGroup]) -> Non
     for group in groups:
         for conn in group.connections:
             conn.weight = group.weight
-
-
-# =====================================================================
-# ConvNEAT — convolutional NEAT (CoDeepNEAT-inspired)
-# =====================================================================
-
-class ConvModule:
-    """A convolutional module that can be evolved by NEAT.
-
-    The module wraps a small genome that acts as a convolution kernel:
-    it processes local receptive fields and shares weights across space.
-    """
-
-    def __init__(self, kernel_size: int = 3, in_channels: int = 1):
-        self.kernel_size = kernel_size
-        self.in_channels = in_channels
-        # Internal genome encodes the kernel weights
-        self.genome = Genome()
-        # Create input nodes for each kernel element
-        for i in range(kernel_size * kernel_size * in_channels):
-            n = Node(NodeType.INPUT, i)
-            n.activation = ActivationType.LINEAR
-            self.genome.input_nodes.append(n)
-            self.genome.nodes.append(n)
-        # Output node
-        out = Node(NodeType.OUTPUT, kernel_size * kernel_size * in_channels)
-        out.activation = ActivationType.SIGMOID
-        self.genome.output_nodes.append(out)
-        self.genome.nodes.append(out)
-
-    def forward(self, patch: list[float]) -> float:
-        """Process a local patch and return the convolved value."""
-        out = self.genome.forward(patch)
-        return out[0] if out else 0.0
-
-
-# =====================================================================
-# ES-HyperNEAT — evolvable substrate
-# =====================================================================
-
-class Substrate:
-    """A geometric substrate defining node positions for ES-HyperNEAT.
-
-    Nodes are placed on a 2D grid; connection weights are generated by
-    querying a CPPN at the source/target coordinates.
-    """
-
-    def __init__(self, width: int = 4, height: int = 4):
-        self.width = width
-        self.height = height
-        self.nodes: list[tuple[float, float]] = [
-            (x / width, y / height)
-            for y in range(height) for x in range(width)
-        ]
-
-    def query_cppn(self, cppn: Genome, src: tuple[float, float],
-                   tgt: tuple[float, float]) -> float:
-        """Query a CPPN genome to get the weight between two substrate nodes."""
-        out = cppn.forward([src[0], src[1], tgt[0], tgt[1]])
-        return out[0] if out else 0.0
 
 
 # =====================================================================

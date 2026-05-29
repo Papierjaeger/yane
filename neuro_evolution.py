@@ -89,6 +89,14 @@ class NeuroEvolution:
         self._output_grouping_initial: list | None = None  # list[OutputGroup] | None
         self._conv_neat_enabled: bool = False
         self._conv_neat_stack = None  # ConvStack | None (template for new genomes)
+        self._hybrid_mode_enabled: bool = False
+        self._hybrid_bp_interval: int = 10
+        self._hybrid_bp_epochs: int = 50
+        self._hybrid_bp_lr: float = 0.01
+        self._hybrid_bp_batch_size: int = 32
+        self._hybrid_top_k: int = 3
+        self._hybrid_train_data: list | None = None  # list[(inputs, targets)] | None
+        self._hybrid_replay_buffer = None  # ReplayBuffer | None
         self._complexity_penalty_nodes: float = 0.0
         self._complexity_penalty_connections: float = 0.0
         self._resource_guard = ResourceGuard()
@@ -1261,6 +1269,72 @@ class NeuroEvolution:
                 for g in grouper.groups
             ] if grouper else [],
         }
+
+    def set_hybrid_mode(
+        self,
+        enabled: bool = True,
+        bp_interval: int = 10,
+        bp_epochs: int = 50,
+        bp_lr: float = 0.01,
+        bp_batch_size: int = 32,
+        top_k: int = 3,
+        train_data: "list | None" = None,
+        replay_buffer_size: int = 10_000,
+    ) -> None:
+        """Enable Gradient-NEAT Hybrid mode (backprop interleaved with evolution).
+
+        Every ``bp_interval`` generations the top-K genomes receive a short
+        backprop fine-tuning phase before being returned to evolution.  This
+        combines NEAT's global structural search with gradient descent's
+        efficient local weight tuning.
+
+        Requires PyTorch (``pip install torch``).  The backprop phase raises
+        ``ImportError`` when PyTorch is absent; calling :meth:`set_hybrid_mode`
+        itself does not require PyTorch.
+
+        Parameters
+        ----------
+        enabled :
+            Toggle hybrid mode on or off.
+        bp_interval :
+            Run a backprop phase every this many generations.
+        bp_epochs :
+            Gradient-descent steps per genome per backprop phase.
+        bp_lr :
+            Adam optimiser learning rate.
+        bp_batch_size :
+            Number of samples drawn from the replay buffer per gradient step.
+        top_k :
+            Number of best-fitness genomes to fine-tune each backprop phase.
+        train_data :
+            Optional list of ``(inputs, targets)`` pairs to use as supervised
+            training data.  When *None*, the replay buffer is used (inputs
+            seen during NEAT evaluation, labelled by the current best genome).
+        replay_buffer_size :
+            Maximum entries in the auto-accumulated replay buffer.
+
+        Example
+        -------
+        ::
+
+            yane.set_hybrid_mode(bp_interval=10, bp_epochs=30, bp_lr=0.005,
+                                 train_data=[([0,0],[0]), ([0,1],[1]),
+                                             ([1,0],[1]), ([1,1],[0])])
+            yane.train(xor_fitness_fn)
+        """
+        if not enabled:
+            self._hybrid_mode_enabled = False
+            self._hybrid_replay_buffer = None
+            return
+        from yane.evolution.hybrid_neat import ReplayBuffer
+        self._hybrid_mode_enabled = True
+        self._hybrid_bp_interval = max(1, bp_interval)
+        self._hybrid_bp_epochs = max(1, bp_epochs)
+        self._hybrid_bp_lr = bp_lr
+        self._hybrid_bp_batch_size = max(1, bp_batch_size)
+        self._hybrid_top_k = max(1, top_k)
+        self._hybrid_train_data = list(train_data) if train_data is not None else None
+        self._hybrid_replay_buffer = ReplayBuffer(max_size=replay_buffer_size)
 
     def set_conv_neat(
         self,
@@ -2468,6 +2542,25 @@ class NeuroEvolution:
         if self._budget_enforcer is not None:
             self._budget_enforcer.start()
 
+        # Hybrid mode: wrap fitness_fn to capture inputs for replay buffer.
+        if self._hybrid_mode_enabled and self._hybrid_replay_buffer is not None:
+            _rb = self._hybrid_replay_buffer
+            _orig_fitness_fn = fitness_fn
+            def fitness_fn(g, _fn=_orig_fitness_fn):
+                _inputs_seen: list = []
+                _orig_fwd = g.forward
+                def _capturing_fwd(inp):
+                    _inputs_seen.append(list(inp))
+                    return _orig_fwd(inp)
+                g.__dict__["forward"] = _capturing_fwd
+                try:
+                    result = _fn(g)
+                finally:
+                    g.__dict__.pop("forward", None)
+                for inp in _inputs_seen:
+                    _rb.add(inp)
+                return result
+
         self._n_evaluations_done = 0
         stop_reason: str | None = None
         iterations = 0
@@ -2596,6 +2689,10 @@ class NeuroEvolution:
                         best_fitness=_cur_fit,
                     )
                 _gen_eval_ms = 0.0   # reset for next generation
+
+                # Hybrid NEAT: run backprop phase every bp_interval generations.
+                if self._hybrid_mode_enabled and _gen_num > 0 and _gen_num % self._hybrid_bp_interval == 0:
+                    self._run_hybrid_backprop(_gen_num)
 
                 # Augmentation pool: reward current pipeline, maybe evolve, select next.
                 if self._aug_pool is not None:
@@ -4577,6 +4674,57 @@ class NeuroEvolution:
                 self._autosave_report(name, self._active_run_id)
             except Exception:
                 pass
+
+    def _run_hybrid_backprop(self, generation: int) -> None:
+        """Execute one backprop phase for the hybrid NEAT mode."""
+        from yane.util.logger import get_logger
+        log = get_logger()
+        from yane.evolution.hybrid_neat import run_hybrid_backprop
+
+        teachers = self._population.get_top(self._hybrid_top_k)
+        if not teachers:
+            return
+
+        # Determine training data
+        if self._hybrid_train_data is not None:
+            inputs_batch = [list(x) for x, _ in self._hybrid_train_data]
+            targets_batch = [list(y) for _, y in self._hybrid_train_data]
+        else:
+            # Self-supervised: use replay buffer inputs + best genome as teacher
+            rb = self._hybrid_replay_buffer
+            if rb is None or len(rb) == 0:
+                return
+            n_sample = min(self._hybrid_bp_batch_size * 4, len(rb))
+            inputs_batch = rb.sample(n_sample)
+            if not inputs_batch:
+                return
+            best = self._population.get_best()
+            targets_batch = []
+            for inp in inputs_batch:
+                best.reset()
+                try:
+                    targets_batch.append([float(v) for v in best.forward(inp)])
+                except Exception:
+                    targets_batch.append([0.0] * len(best.output_nodes))
+
+        try:
+            result = run_hybrid_backprop(
+                genomes=teachers,
+                inputs_batch=inputs_batch,
+                targets_batch=targets_batch,
+                bp_epochs=self._hybrid_bp_epochs,
+                bp_lr=self._hybrid_bp_lr,
+                bp_batch_size=self._hybrid_bp_batch_size,
+            )
+            log.info(
+                "[hybrid] Gen %d: backprop on %d genomes, final losses: %s",
+                generation, len(teachers),
+                [f"{l:.4f}" for l in result.get("losses", [])],
+            )
+        except ImportError as e:
+            log.warning("[hybrid] Backprop skipped: %s", e)
+        except Exception as e:
+            log.warning("[hybrid] Backprop error (ignored): %s", e)
 
     def _enforce_memory_limit(self) -> None:
         if not self._resource_guard.process_over_limit():

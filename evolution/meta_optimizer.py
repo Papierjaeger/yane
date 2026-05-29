@@ -281,15 +281,19 @@ class _CatBandit:
         self._last_idx: int | None = None
 
     def select(self) -> Any:
+        from yane.evolution.online_tuning import ucb1_score as _ucb1
         self._total += 1
         if 0 in self._counts:
             # Ensure each arm tried at least once
             idx = self._counts.index(0)
         else:
-            log_t = math.log(self._total + 1)
             scores = [
-                self._rewards[i] / self._counts[i]
-                + self.c * math.sqrt(log_t / self._counts[i])
+                _ucb1(
+                    self._rewards[i] / self._counts[i],
+                    self._counts[i],
+                    self._total,
+                    c=self.c,
+                )
                 for i in range(len(self.candidates))
             ]
             idx = max(range(len(scores)), key=lambda i: scores[i])

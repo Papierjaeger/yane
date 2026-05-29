@@ -18,7 +18,6 @@ Disabled features re-enter the candidate pool automatically after
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -62,11 +61,9 @@ class FeatureRecord:
     impact_history: list = field(default_factory=list)
 
     def ucb1_score(self, total_selections: int, c: float = 2.0) -> float:
-        if self.n_trials == 0:
-            return float("inf")
-        mean = self.total_reward / self.n_trials
-        exploration = c * math.sqrt(math.log(max(total_selections, 1)) / self.n_trials)
-        return mean + exploration
+        from yane.evolution.online_tuning import ucb1_score as _ucb1
+        mean = self.total_reward / self.n_trials if self.n_trials > 0 else 0.0
+        return _ucb1(mean, self.n_trials, total_selections, c=c)
 
     def update_ucb1(self, reward: float) -> None:
         self.n_trials += 1

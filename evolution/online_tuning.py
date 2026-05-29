@@ -11,6 +11,39 @@ import random
 from typing import Any
 
 
+# ---------------------------------------------------------------------------
+# Shared UCB1 formula — single source of truth for all bandit implementations
+# ---------------------------------------------------------------------------
+
+def ucb1_score(
+    mean_reward: float,
+    n_trials: int,
+    total_trials: int,
+    c: float = 2.0,
+) -> float:
+    """Standard UCB1 upper confidence bound score.
+
+    ``score = mean_reward + c * sqrt(log(total_trials + 1) / n_trials)``
+
+    Returns ``+inf`` when *n_trials == 0* (force exploration of untried arms).
+
+    Parameters
+    ----------
+    mean_reward :
+        Average reward accumulated for this arm so far.
+    n_trials :
+        Number of times this arm has been selected.
+    total_trials :
+        Total selections across ALL arms.
+    c :
+        Exploration weight.  Classic UCB1 uses ``c = sqrt(2) ≈ 1.414``;
+        higher values favour exploration.
+    """
+    if n_trials == 0:
+        return float("inf")
+    return mean_reward + c * math.sqrt(math.log(max(total_trials, 1) + 1) / n_trials)
+
+
 class UCB1Bandit:
     """UCB1 multi-armed bandit for discrete hyperparameter candidates.
 
@@ -91,10 +124,13 @@ class UCB1Bandit:
         if total_pulls == 0:
             return self._rng.randint(0, len(self.candidates) - 1)
 
-        log_t = math.log(total_pulls + 1)
         scores = [
-            (self.rewards[i] / max(self.counts[i], 1)
-             + math.sqrt(2.0 * log_t / max(self.counts[i], 1)))
+            ucb1_score(
+                self.rewards[i] / max(self.counts[i], 1),
+                max(self.counts[i], 1),
+                total_pulls,
+                c=math.sqrt(2.0),  # classic UCB1
+            )
             for i in range(len(self.candidates))
         ]
         return max(range(len(scores)), key=lambda i: scores[i])
