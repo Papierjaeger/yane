@@ -75,6 +75,7 @@ class NeuroEvolution:
         self._seed: int | None = seed
         self._current_genome: Genome | None = None
         self._efficiency_penalty: EfficiencyPenalty | None = None
+        self._hw_constraints = None  # HardwareConstraints | None
         self._complexity_penalty_nodes: float = 0.0
         self._complexity_penalty_connections: float = 0.0
         self._resource_guard = ResourceGuard()
@@ -741,6 +742,94 @@ class NeuroEvolution:
 
     def set_efficiency_penalty(self, max_ms: float, penalty_per_ms: float) -> None:
         self._efficiency_penalty = EfficiencyPenalty(max_ms, penalty_per_ms)
+
+    def set_hardware_constraints(
+        self,
+        max_flops: int | None = None,
+        max_memory_bytes: int | None = None,
+        max_latency_us: float | None = None,
+        target_platform: str = "desktop",
+        penalty_scale: float = 1.0,
+        bytes_per_node: int = 8,
+        bytes_per_connection: int = 8,
+    ) -> None:
+        """Evolve genomes under deployment-hardware constraints.
+
+        Each generation, the hardware cost of every genome is estimated from
+        its topology (FLOPs, memory bytes, latency).  Genomes that exceed the
+        configured budget receive a penalty subtracted from their fitness,
+        proportional to the violation.  NEAT will naturally prefer smaller,
+        faster networks without needing a separate objective.
+
+        Parameters
+        ----------
+        max_flops:          Maximum floating-point operations per forward pass.
+        max_memory_bytes:   Maximum on-device footprint in bytes.
+        max_latency_us:     Maximum inference latency in microseconds.
+        target_platform:    Platform profile for latency estimation.
+                            Available: ``"cortex-m4"``, ``"cortex-m7"``,
+                            ``"esp32"``, ``"raspberry-pi-zero"``,
+                            ``"raspberry-pi-4"``, ``"desktop"``,
+                            ``"mobile-arm"``.
+        penalty_scale:      Multiply the violation fraction by this value.
+                            Default 1.0: a 10% FLOP overshoot → −0.1 fitness.
+        bytes_per_node:     Bytes in the minimal C-struct per node (default 8).
+        bytes_per_connection: Bytes per connection in the deployment struct (default 8).
+
+        Call ``hardware_profile(genome)`` to inspect metrics for any genome.
+        Call ``hw_pareto_front()`` to get the non-dominated (fitness, cost) set.
+        """
+        from yane.evolution.hardware_aware import HardwareConstraints
+        self._hw_constraints = HardwareConstraints(
+            max_flops=max_flops,
+            max_memory_bytes=max_memory_bytes,
+            max_latency_us=max_latency_us,
+            target_platform=target_platform,
+            penalty_scale=penalty_scale,
+            bytes_per_node=bytes_per_node,
+            bytes_per_connection=bytes_per_connection,
+        )
+
+    def hardware_profile(self, genome, target_platform: str | None = None):
+        """Return hardware cost metrics for *genome*.
+
+        Returns a :class:`~yane.evolution.hardware_aware.HardwareMetrics`
+        dataclass with ``flops``, ``memory_bytes``, and ``latency_us``.
+
+        *target_platform* overrides the platform set via
+        :meth:`set_hardware_constraints` (or defaults to ``"desktop"``).
+        """
+        from yane.evolution.hardware_aware import (
+            compute_hardware_metrics, HardwareConstraints,
+        )
+        constraints = self._hw_constraints
+        if target_platform is not None or constraints is None:
+            constraints = HardwareConstraints(
+                target_platform=target_platform or "desktop",
+            )
+        return compute_hardware_metrics(genome, constraints)
+
+    def hw_pareto_front(self):
+        """Return the non-dominated (fitness × hardware-cost) Pareto front.
+
+        Evaluates all currently-evaluated genomes and returns the subset where
+        no other genome is simultaneously higher-fitness AND cheaper on all
+        hardware metrics.
+
+        Each element in the returned list is a
+        ``(genome, HardwareMetrics)`` tuple, sorted by descending fitness.
+        Raises ``RuntimeError`` if no population exists or if hardware
+        constraints have not been configured.
+        """
+        if self._population is None:
+            raise RuntimeError("No active population — run configure() first.")
+        if self._hw_constraints is None:
+            raise RuntimeError("Call set_hardware_constraints() first.")
+        from yane.evolution.hardware_aware import hw_pareto_front as _front
+        evaluated = self._population._evaluated
+        if not evaluated:
+            return []
+        return _front(list(evaluated), self._hw_constraints)
 
     def set_multi_eval(
         self,
@@ -3468,8 +3557,8 @@ class NeuroEvolution:
         elapsed_ms: float | None,
         genome: Genome | None = None,
     ) -> float:
-        """Sanitize + efficiency penalty. Applied by every submission path."""
-        return finalize_fitness_value(
+        """Sanitize + efficiency penalty + hardware penalty. Applied by every submission path."""
+        result = finalize_fitness_value(
             fitness,
             elapsed_ms,
             genome,
@@ -3483,6 +3572,14 @@ class NeuroEvolution:
                 complexity_penalty_connections=self._complexity_penalty_connections,
             ),
         )
+        if self._hw_constraints is not None and genome is not None:
+            from yane.evolution.hardware_aware import compute_hardware_metrics, compute_penalty
+            try:
+                hw_metrics = compute_hardware_metrics(genome, self._hw_constraints)
+                result -= compute_penalty(hw_metrics, self._hw_constraints)
+            except Exception:
+                pass   # hardware estimation is non-critical; never break training
+        return result
 
     def _run_evaluations(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]
