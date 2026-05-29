@@ -5,8 +5,8 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** P0 Meta-Adaptive Orchestration Layer komplett inkl. GUI-Integration.
-Teststand: `1441 passed, 1 skipped`.
+**Aktueller Stand:** P0 Meta-Adaptive Orchestration Layer komplett inkl. GUI-Integration. P1 WandB/MLflow Tracking implementiert.
+Teststand: `1456 passed, 2 skipped`.
 
 > **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
 > Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
@@ -29,6 +29,7 @@ Teststand: `1441 passed, 1 skipped`.
 - **P1 GUI-Integration P0:** `⚡ Auto-Train`-Button, `AutoSetupWorker` (non-blocking Profiling), MetaOptimizer+FeatureGating-Live-Panel im Left-Panel, `auto_config_report`-Dialog nach Training. 4 neue Smoke-Tests.
 - **auto_train Bugfixes (via PI-Beispiel-Testing):** (1) `raw_fitness` enthielt Curiosity-Bonus → Stop-Bedingung feuerte auf aufgeblähten Wert; (2) ungekappter Curiosity-Bonus ermöglichte Reward Hacking (Fitness ~10⁹) wenn DARTS numerisch instabile Outputs produzierte; (3) `max_time_seconds`-Budget ignorierte Lamarck-Overhead. Alle drei behoben.
 - **Code-Qualität:** Tote Parameter/Funktionen entfernt (`total_entries` in `_confidence`, `_median`, `_prev_best`); UCB1-Reward-Attribution in EXPLOIT-Phase korrigiert (`best()` tracked jetzt `_last_idx`).
+- **P1 WandB/MLflow Tracking:** `TrackingBackend`-Protocol, `WandbBackend`, `MlflowBackend`, `set_tracking_backend(*backends)`; Metrics werden einmal pro Generation geloggt.
 
 ## Legende
 
@@ -1044,56 +1045,18 @@ Reports generiert und historische Trends verfolgt.
 
 ---
 
-### □ P1 WandB / MLflow Integration (Experiment-Tracking-Backends)
+### ✓ P1 WandB / MLflow Integration (Experiment-Tracking-Backends)
 
-TensorBoard-Support existiert bereits (`set_tensorboard_logdir()`), aber viele
-Teams nutzen WandB (Weights & Biases) oder MLflow fuer Experiment-Tracking,
-Hyperparameter-Vergleiche und Team-Kollaboration.
-
-**Ziel:** Alternative Tracking-Backends, die parallel zu TensorBoard und
-RunDatabase laufen koennen.
-
-**Design: `TrackingBackend`-Protokoll**
-
-```python
-class TrackingBackend:
-    def init(self, config: dict) -> None: ...
-    def log_metrics(self, metrics: dict, step: int) -> None: ...
-    def log_artifact(self, path: str, artifact_type: str) -> None: ...
-    def log_config(self, config: dict) -> None: ...
-    def finish(self) -> None: ...
-```
-
-- `NeuroEvolution.set_tracking_backend(backend)` registriert einen
-  TrackingBackend; mehrere Backends sind gleichzeitig moeglich (wandb +
-  tensorboard + mlflow).
-- `WandbBackend`: nutzt `wandb.init()`, `wandb.log()`,
-  `wandb.log_artifact()`. API-Key aus Umgebungsvariable `WANDB_API_KEY`.
-- `MlflowBackend`: nutzt `mlflow.start_run()`, `mlflow.log_metrics()`,
-  `mlflow.log_artifact()`. Tracking-URI aus Umgebungsvariable
-  `MLFLOW_TRACKING_URI`.
-- Generations-Metriken (Best-Fitness, Mean-Fitness, Species-Count, IQR,
-  Novelty, etc.) werden automatisch geloggt.
-- Checkpoint-Dateien werden als Artifacts hochgeladen (optional).
-- Run-Konfiguration wird als `config`-Dict geloggt.
-- `finish()` wird automatisch am Ende von `train()` aufgerufen.
-
-**Abgrenzung zu RunDatabase:**
-
-- RunDatabase ist der lokale, YANE-eigene Persistenz-Layer (SQLite).
-- Tracking-Backends sind externe Cloud-/Team-Dienste fuer Visualisierung und
-  Kollaboration.
-- Beide koennen parallel genutzt werden.
-
-**Akzeptanzkriterien:**
-
-- `WandbBackend` loggt Metriken ohne Fehler (Test mit `wandb.init(mode="disabled")`).
-- `MlflowBackend` loggt Metriken in lokales Tracking-Verzeichnis.
-- Mehrere Backends gleichzeitig aktiv: alle erhalten dieselben Metriken.
-- Fehlende optionale Abhaengigkeiten (`wandb`, `mlflow`) werden mit klarem
-  ImportError gemeldet, nicht als harte Abhaengigkeit.
-- Tests: Mock-Backend verifiziert korrekte Metrik-Uebergabe; ImportError bei
-  fehlenden Paketen; Multi-Backend-Dispatch.
+**Implementiert** in `evolution/tracking.py`:
+- `TrackingBackend` Protocol (duck-typed, keine Vererbung nötig)
+- `WandbBackend`: `wandb.init/log/finish`, Metriken als `yane/<key>`
+- `MlflowBackend`: `mlflow.start_run/log_params/log_metrics/end_run`
+- `_scalar_metrics()`: filtert NaN und nicht-skalare Werte aus `mem`
+- `NeuroEvolution.set_tracking_backend(*backends)`: variadic; kein Argument → löscht alle
+- Hooks in `train()`: `init+log_config` einmalig, `log_metrics` einmal pro Generation,
+  `finish` am Ende. Backend-Fehler brechen Training nie ab.
+- 16 Tests (15 passed, 1 skipped wenn mlflow nicht installiert): Protocol, Dispatch,
+  Mock-Backends für WandB und MLflow, BrokenBackend-Resilience.
 
 ---
 
