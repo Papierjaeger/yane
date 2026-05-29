@@ -77,6 +77,18 @@ class NeuroEvolution:
         self._efficiency_penalty: EfficiencyPenalty | None = None
         self._hw_constraints = None  # HardwareConstraints | None
         self._aug_pool = None        # AugmentationPool | None
+        self._interactive_evaluator = None  # InteractiveEvaluator | None
+        self._budget_enforcer = None  # BudgetEnforcer | None
+        self._input_grouping_enabled: bool = False
+        self._input_grouping_n_raw: int | None = None
+        self._input_grouping_n_groups: int | None = None
+        self._input_grouping_initial: list | None = None  # list[InputGroup] | None
+        self._output_grouping_enabled: bool = False
+        self._output_grouping_n_outputs: int | None = None
+        self._output_grouping_n_proto: int | None = None
+        self._output_grouping_initial: list | None = None  # list[OutputGroup] | None
+        self._conv_neat_enabled: bool = False
+        self._conv_neat_stack = None  # ConvStack | None (template for new genomes)
         self._complexity_penalty_nodes: float = 0.0
         self._complexity_penalty_connections: float = 0.0
         self._resource_guard = ResourceGuard()
@@ -361,6 +373,55 @@ class NeuroEvolution:
         # else: empty start — bootstrap adds connections via add_connection(tracker)
 
         initial._invalidate_topology()
+
+        # Conv NEAT: attach a conv_stack to the initial genome if configured.
+        if self._conv_neat_enabled and self._conv_neat_stack is not None:
+            initial.conv_stack = self._conv_neat_stack.copy()
+
+        # Output Grouping: attach an out_grouper to the initial genome if configured.
+        # The out_grouper maps n_outputs proto-outputs → _n_external_outputs expanded outputs.
+        if self._output_grouping_enabled:
+            from yane.evolution.output_grouping import OutputGrouper, OutputGroup
+            n_ext = self._output_grouping_n_outputs or n_outputs
+            initial.out_grouper = OutputGrouper(
+                n_outputs=n_ext,
+                initial_groups=self._output_grouping_initial,
+            )
+            # Trim/rebuild groups to match n_outputs (the configured network output count)
+            if len([g for g in initial.out_grouper.groups if g.enabled]) != n_outputs:
+                per = n_ext / max(1, n_outputs)
+                import math as _math
+                groups = []
+                for k in range(n_outputs):
+                    start = int(round(k * per))
+                    end = int(round((k + 1) * per))
+                    targets = list(range(start, min(end, n_ext))) or [k % n_ext]
+                    groups.append(OutputGroup(targets=targets))
+                initial.out_grouper = OutputGrouper(n_outputs=n_ext, initial_groups=groups)
+
+        # Input Grouping: attach a grouper to the initial genome if configured.
+        # The grouper maps _n_raw inputs → n_inputs grouped inputs.
+        if self._input_grouping_enabled:
+            from yane.evolution.input_grouping import InputGrouper
+            n_raw = self._input_grouping_n_raw or n_inputs
+            initial.grouper = InputGrouper(
+                n_raw=n_raw,
+                initial_groups=self._input_grouping_initial,
+            )
+            # Trim groups to match n_inputs (the configured network input count)
+            if len([g for g in initial.grouper.groups if g.enabled]) != n_inputs:
+                # Rebuild with n_inputs groups distributing n_raw evenly
+                import math
+                groups = []
+                per = n_raw / max(1, n_inputs)
+                for k in range(n_inputs):
+                    start = int(round(k * per))
+                    end = int(round((k + 1) * per))
+                    members = list(range(start, min(end, n_raw))) or [k % n_raw]
+                    from yane.evolution.input_grouping import InputGroup, AggType
+                    groups.append(InputGroup(members=members))
+                initial.grouper = InputGrouper(n_raw=n_raw, initial_groups=groups)
+
         self._population = Population(
             max_size=self._population_size,
             initial_genome=initial,
@@ -713,6 +774,99 @@ class NeuroEvolution:
             max_process_gb=max_process_gb,
         )
 
+    def set_budget(
+        self,
+        preset: str | None = None,
+        total_time: "str | float | None" = None,
+        max_memory: "str | int | None" = None,
+        max_cpu_pct: float | None = None,
+        target_platform: str | None = None,
+    ) -> None:
+        """Set a unified resource budget for training.
+
+        Pass ``"auto"`` (or ``preset="auto"``) to auto-calibrate from the
+        current hardware.  Otherwise specify individual limits using
+        human-readable strings::
+
+            yane.set_budget("auto")
+            yane.set_budget(total_time="30min")
+            yane.set_budget(total_time="1h", max_memory="auto")
+            yane.set_budget(total_time="2h",
+                            max_memory="4GB",
+                            target_platform="cortex-m4")
+
+        Parameters
+        ----------
+        preset :
+            ``"auto"`` auto-detects available RAM and uses 80 % as the
+            memory limit.  Any other string raises ``ValueError``.
+        total_time :
+            Wall-clock time limit.  Strings like ``"30min"``, ``"1h"``,
+            ``"45s"`` are accepted, as well as bare seconds as float/int.
+        max_memory :
+            Per-process RSS cap.  ``"auto"`` → 80 % of available RAM;
+            ``"4GB"`` → 4 000 000 000 bytes; ``"80%"`` → 80 % of available
+            RAM.
+        max_cpu_pct :
+            CPU-usage ceiling (stored for diagnostics, not enforced).
+        target_platform :
+            Deployment target forwarded to any active
+            :class:`~yane.evolution.hardware_aware.HardwareConstraints`.
+        """
+        from yane.evolution.resource_budget import (
+            BudgetConfig, BudgetEnforcer, ResourceDiscovery,
+            parse_time, parse_memory,
+        )
+        if isinstance(preset, str) and preset.strip().lower() == "auto":
+            config = BudgetConfig(
+                total_time_seconds=None,
+                max_memory_bytes=ResourceDiscovery.auto_memory_budget(0.80),
+                max_cpu_pct=75.0,
+                target_platform=target_platform,
+                auto=True,
+            )
+        elif preset is not None:
+            raise ValueError(f"Unknown budget preset: {preset!r}. Use 'auto' or keyword args.")
+        else:
+            config = BudgetConfig(
+                total_time_seconds=parse_time(total_time),
+                max_memory_bytes=parse_memory(max_memory),
+                max_cpu_pct=max_cpu_pct,
+                target_platform=target_platform,
+                auto=False,
+            )
+        self._budget_enforcer = BudgetEnforcer(config, ne_ref=self)
+        # Propagate memory budget to ResourceGuard for consistent enforcement
+        if config.max_memory_bytes is not None:
+            max_gb = config.max_memory_bytes / 1_073_741_824
+            self._resource_guard = ResourceGuard(max_process_gb=max_gb)
+
+    def budget_status(self) -> dict:
+        """Return the current resource-budget status dict.
+
+        Returns an empty dict when no budget has been configured via
+        :meth:`set_budget`.
+
+        Example output::
+
+            {
+                "elapsed_seconds": 47.3,
+                "time_budget_seconds": 1800.0,
+                "time_remaining_seconds": 1752.7,
+                "time_fraction_used": 0.026,
+                "memory_budget_bytes": 8000000000,
+                "memory_current_bytes": 312000000,
+                "degradation_level": 0,
+                "degradation_actions": [],
+                "stop_requested": False,
+                "emergency_checkpoint": None,
+                "target_platform": None,
+            }
+        """
+        if self._budget_enforcer is None:
+            return {}
+        return self._budget_enforcer.status()
+
     def set_checkpoint_policy(
         self,
         interval: int = 100,
@@ -891,6 +1045,303 @@ class NeuroEvolution:
         d = self._aug_pool.get_diagnostics()
         d["enabled"] = True
         return d
+
+    def set_interactive_evaluation(
+        self,
+        evaluator: "InteractiveEvaluator | None" = None,
+        mode: str = "rating",
+        surrogate_model: bool = True,
+        surrogate_update_interval: int = 5,
+    ) -> "InteractiveEvaluator":
+        """Enable Human-in-the-Loop evaluation.
+
+        Attaches an :class:`~yane.evolution.interactive_eval.InteractiveEvaluator`
+        that collects human feedback (ratings, pairwise comparisons, rankings)
+        as the fitness signal.  Use :meth:`submit_feedback` to deliver feedback
+        from the GUI or programmatically, or call
+        :meth:`~yane.evolution.interactive_eval.InteractiveEvaluator.set_feedback_source`
+        on the returned evaluator to attach a synchronous oracle.
+
+        Parameters
+        ----------
+        evaluator :
+            An already-configured :class:`~yane.evolution.interactive_eval.InteractiveEvaluator`
+            instance.  When *None* (default), a new one is created from the
+            remaining keyword arguments.
+        mode :
+            Feedback collection mode (``"rating"``, ``"pairwise"``,
+            ``"ranking"``, ``"implicit"``).  Ignored when *evaluator* is given.
+        surrogate_model :
+            Enable a lightweight linear surrogate to predict ratings and
+            reduce the number of required human queries.
+        surrogate_update_interval :
+            Unused parameter kept for API symmetry; the surrogate updates
+            automatically after every real human query.
+
+        Returns
+        -------
+        InteractiveEvaluator
+            The evaluator attached to this instance (create a reference to
+            call ``submit_feedback`` on it directly).
+
+        Example
+        -------
+        ::
+
+            from yane.evolution.interactive_eval import InteractiveEvaluator
+            eval = InteractiveEvaluator(mode="rating")
+            eval.set_feedback_source(lambda g: oracle(g))
+            yane.set_interactive_evaluation(eval)
+            yane.train(eval)
+        """
+        from yane.evolution.interactive_eval import InteractiveEvaluator as _IE
+        if evaluator is None:
+            evaluator = _IE(
+                mode=mode,
+                surrogate_model=surrogate_model,
+            )
+        self._interactive_evaluator = evaluator
+        return evaluator
+
+    def submit_feedback(self, genome_id: int, value: float) -> None:
+        """Deliver human feedback for a genome awaiting evaluation.
+
+        Parameters
+        ----------
+        genome_id :
+            The ``_genome_id`` attribute of the genome being rated.
+        value :
+            For ``"rating"`` / ``"implicit"``: fitness score (0–100).
+            For ``"pairwise"``: 0 if this genome won, 1 if opponent won.
+            For ``"ranking"``: rank position (1 = best).
+
+        Raises
+        ------
+        RuntimeError
+            When no :class:`~yane.evolution.interactive_eval.InteractiveEvaluator`
+            has been configured via :meth:`set_interactive_evaluation`.
+        """
+        if self._interactive_evaluator is None:
+            raise RuntimeError(
+                "No InteractiveEvaluator configured. "
+                "Call set_interactive_evaluation() first."
+            )
+        self._interactive_evaluator.submit_feedback(genome_id, value)
+
+    def set_input_grouping(
+        self,
+        enabled: bool = True,
+        n_groups: int | None = None,
+        n_raw: int | None = None,
+        initial_groups: "list | None" = None,
+    ) -> None:
+        """Enable evolvable input aggregation (Input-Gruppierung).
+
+        Groups raw input channels into *K* aggregated inputs before they reach
+        the network.  Useful for high-dimensional inputs where direct NEAT
+        connectivity would create an explosion of connections.
+
+        Call **before** :meth:`configure` so the network topology is built with
+        the correct (reduced) number of input nodes.
+
+        Parameters
+        ----------
+        enabled :
+            Toggle input grouping on or off.
+        n_groups :
+            Number of output groups (*K*).  Defaults to ``n_raw`` (identity
+            mapping with individual groups per raw input).
+        n_raw :
+            Total number of raw input channels (*N*).  If *None*, inferred
+            from ``n_inputs`` at :meth:`configure` time.
+        initial_groups :
+            List of :class:`~yane.evolution.input_grouping.InputGroup` objects
+            for a custom initial layout.  When *None*, each raw input gets its
+            own single-member group.
+
+        Example
+        -------
+        ::
+
+            from yane.evolution.input_grouping import InputGroup, AggType
+            yane.set_input_grouping(n_groups=4, n_raw=16)
+            yane.configure(n_inputs=4, n_outputs=2)   # network sees 4 grouped inputs
+            yane.train(lambda g: eval_fn(g, raw_data))
+        """
+        if not enabled:
+            self._input_grouping_enabled = False
+            return
+        from yane.evolution.input_grouping import InputGroup as _IG  # noqa: F401
+        self._input_grouping_enabled = True
+        self._input_grouping_n_raw = n_raw
+        self._input_grouping_n_groups = n_groups
+        self._input_grouping_initial = list(initial_groups) if initial_groups else None
+
+    def get_input_grouping_diagnostics(self) -> dict:
+        """Return diagnostics for the active input grouping configuration.
+
+        Returns ``{"enabled": False}`` when input grouping is not active.
+        """
+        if not self._input_grouping_enabled:
+            return {"enabled": False}
+        pop = getattr(self, "_population", None)
+        sample = pop.get_best() if (pop and pop._evaluated) else None
+        grouper = getattr(sample, "grouper", None) if sample else None
+        return {
+            "enabled": True,
+            "n_raw": self._input_grouping_n_raw,
+            "n_groups": grouper.n_outputs if grouper else self._input_grouping_n_groups,
+            "groups": [
+                {"members": g.members, "agg": g.aggregation.value, "enabled": g.enabled}
+                for g in grouper.groups
+            ] if grouper else [],
+        }
+
+    def set_output_grouping(
+        self,
+        enabled: bool = True,
+        n_proto: int | None = None,
+        n_outputs: int | None = None,
+        initial_groups: "list | None" = None,
+    ) -> None:
+        """Enable evolvable output expansion (Output-Gruppierung).
+
+        The genome internally has *K* proto-output nodes.  Callers always
+        receive *N* output values — the :class:`~yane.evolution.output_grouping.OutputGrouper`
+        expands the network's *K* proto-outputs to *N* external outputs.
+
+        Call **before** :meth:`configure` so the topology is built with the
+        correct (reduced) number of output nodes.
+
+        Parameters
+        ----------
+        enabled :
+            Toggle output grouping on or off.
+        n_proto :
+            Number of internal output nodes (*K*).  When *None*, equals
+            ``n_outputs`` (identity mapping).
+        n_outputs :
+            Number of external output channels (*N*).  When *None*, inferred
+            from ``n_outputs`` at :meth:`configure` time.
+        initial_groups :
+            Custom initial group layout.
+
+        Example
+        -------
+        ::
+
+            yane.set_output_grouping(n_proto=2, n_outputs=4)
+            yane.configure(n_inputs=3, n_outputs=2)  # 2 proto-outputs → 4 external
+            yane.train(lambda g: eval_fn(g))          # forward() returns 4 values
+        """
+        if not enabled:
+            self._output_grouping_enabled = False
+            return
+        self._output_grouping_enabled = True
+        self._output_grouping_n_proto = n_proto
+        self._output_grouping_n_outputs = n_outputs
+        self._output_grouping_initial = list(initial_groups) if initial_groups else None
+
+    def get_output_grouping_diagnostics(self) -> dict:
+        """Return diagnostics for the active output grouping configuration.
+
+        Returns ``{"enabled": False}`` when output grouping is not active.
+        """
+        if not self._output_grouping_enabled:
+            return {"enabled": False}
+        pop = getattr(self, "_population", None)
+        sample = pop.get_best() if (pop and pop._evaluated) else None
+        grouper = getattr(sample, "out_grouper", None) if sample else None
+        return {
+            "enabled": True,
+            "n_outputs": self._output_grouping_n_outputs,
+            "n_proto": grouper.n_proto if grouper else self._output_grouping_n_proto,
+            "groups": [
+                {"targets": g.targets, "exp": g.expansion.value, "enabled": g.enabled}
+                for g in grouper.groups
+            ] if grouper else [],
+        }
+
+    def set_conv_neat(
+        self,
+        enabled: bool = True,
+        conv_stack: "ConvStack | None" = None,
+        n_image_channels: int = 1,
+        n_blocks: int = 1,
+        kernel_size: int = 3,
+        out_channels: int = 8,
+        activation: str = "relu",
+    ) -> "ConvStack | None":
+        """Enable a convolutional NEAT front-end for image inputs.
+
+        Each genome gains a :class:`~yane.evolution.conv_neat.ConvStack` that
+        preprocesses image inputs before the NEAT network.  Use
+        :meth:`genome.forward_image` in your evaluator instead of
+        :meth:`genome.forward`.
+
+        Call **before** :meth:`configure`.  The network's ``n_inputs`` must
+        equal :meth:`conv_n_inputs`.
+
+        Parameters
+        ----------
+        enabled :
+            Toggle on or off.
+        conv_stack :
+            Pre-built :class:`~yane.evolution.conv_neat.ConvStack`.  When
+            *None*, a stack is built from the remaining parameters.
+        n_image_channels :
+            Number of channels in the input images.
+        n_blocks :
+            Number of conv blocks in the auto-built stack.
+        kernel_size :
+            Kernel size for every auto-built block.
+        out_channels :
+            Output channels for every auto-built block.
+        activation :
+            Activation function for every auto-built block.
+
+        Returns
+        -------
+        ConvStack | None
+            The stack attached to new genomes, or *None* when disabled.
+
+        Example
+        -------
+        ::
+
+            stack = yane.set_conv_neat(n_image_channels=1, n_blocks=2,
+                                       kernel_size=3, out_channels=8)
+            yane.configure(n_inputs=yane.conv_n_inputs(), n_outputs=10)
+            yane.train(lambda g: eval_fn(g, images, labels))
+        """
+        if not enabled:
+            self._conv_neat_enabled = False
+            self._conv_neat_stack = None
+            return None
+        from yane.evolution.conv_neat import make_conv_stack, ConvStack as _CS
+        if conv_stack is None:
+            conv_stack = make_conv_stack(
+                n_image_channels=n_image_channels,
+                n_blocks=n_blocks,
+                kernel_size=kernel_size,
+                out_channels=out_channels,
+                activation=activation,
+            )
+        self._conv_neat_enabled = True
+        self._conv_neat_stack = conv_stack
+        return conv_stack
+
+    def conv_n_inputs(self) -> int:
+        """Return the flat feature dimension produced by the active conv stack.
+
+        Pass this value as ``n_inputs`` to :meth:`configure` when using
+        :meth:`set_conv_neat`.  Raises ``RuntimeError`` when no stack is set.
+        """
+        if self._conv_neat_stack is None:
+            raise RuntimeError(
+                "No ConvStack configured.  Call set_conv_neat() first."
+            )
+        return self._conv_neat_stack.n_outputs
 
     def set_multi_eval(
         self,
@@ -1923,7 +2374,8 @@ class NeuroEvolution:
             on_stop: Optional callback called with the stop reason string when
                 training ends.  Possible values: ``"target_reached"``,
                 ``"max_evaluations"``, ``"max_iterations"``, ``"converged"``,
-                ``"curriculum_complete"``, ``"external"``.
+                ``"curriculum_complete"``, ``"external"``,
+                ``"budget_exceeded"``.
             on_iteration: Optional callback invoked after each genome is
                 evaluated.  Signature:
                 ``callback(iteration: int, fitness: float, elapsed_ms: float) -> bool``.
@@ -2011,6 +2463,10 @@ class NeuroEvolution:
         if self._aug_pool is not None:
             self._aug_pool.select()
             self._aug_prev_fit = -float("inf")
+
+        # Budget enforcer: record start time once per run.
+        if self._budget_enforcer is not None:
+            self._budget_enforcer.start()
 
         self._n_evaluations_done = 0
         stop_reason: str | None = None
@@ -2314,10 +2770,21 @@ class NeuroEvolution:
                 if stop_reason is not None:
                     break
 
+            # Budget: time check is cheap, run every iteration.
+            if self._budget_enforcer is not None and self._budget_enforcer.is_time_over():
+                stop_reason = "budget_exceeded"
+                break
+
             if iterations % self._resource_check_interval == 0:
                 self._enforce_memory_limit()
                 while not self._resource_guard.system_ok():
                     time.sleep(0.5)
+                # Budget: memory check (heavier, run at same cadence as psutil).
+                if self._budget_enforcer is not None:
+                    self._budget_enforcer.check_memory()
+                    if self._budget_enforcer.degradation.stop_requested:
+                        stop_reason = "budget_exceeded"
+                        break
 
         # --- on_stop callback ------------------------------------------------
         if self._island_model is not None:
@@ -3661,6 +4128,18 @@ class NeuroEvolution:
     ) -> EvaluationResult:
         if self._matrix_forward_enabled:
             return self._run_with_matrix_forward(genome, fitness_fn)
+        _grouper_active = False
+        if self._input_grouping_enabled and getattr(genome, "grouper", None) is not None:
+            _grouper_active = True
+            _grouper = genome.grouper
+            _orig_fwd_grp = genome.forward
+            genome.__dict__["forward"] = lambda data: _orig_fwd_grp(_grouper.transform(data))
+        _out_grouper_active = False
+        if self._output_grouping_enabled and getattr(genome, "out_grouper", None) is not None:
+            _out_grouper_active = True
+            _out_grouper = genome.out_grouper
+            _orig_fwd_out = genome.forward
+            genome.__dict__["forward"] = lambda data, _fwd=_orig_fwd_out, _og=_out_grouper: _og.expand(_fwd(data))
         if self._input_transform is not None:
             _t = self._input_transform
             _orig_fwd = genome.forward
@@ -3724,7 +4203,7 @@ class NeuroEvolution:
                 self._eval_middleware_diagnostics["evaluator_components"] = dict(_cs)
             return result
         finally:
-            if self._input_transform is not None or _aug_active or _curiosity_active:
+            if self._input_transform is not None or _aug_active or _curiosity_active or _grouper_active or _out_grouper_active:
                 genome.__dict__.pop("forward", None)
             # Note: _curiosity_task_base is intentionally NOT removed here.
             # finalize_fitness_value() reads and removes it so that raw_fitness
@@ -4466,6 +4945,38 @@ class NeuroEvolution:
             Path(path).write_text(src)
         return src
 
+    def export_genome_onnx(
+        self,
+        path: "str | Path | None" = None,
+        opset_version: int = 17,
+        unroll_steps: int = 1,
+    ) -> "onnx.ModelProto":
+        """Export the best genome as an ONNX model.
+
+        Requires the ``onnx`` package (``pip install onnx``).
+
+        Parameters
+        ----------
+        path :
+            Optional file path to save the model.
+        opset_version :
+            ONNX opset version (default: 17).
+        unroll_steps :
+            Recurrent unroll depth for cyclic genomes.
+
+        Returns
+        -------
+        onnx.ModelProto
+        """
+        from yane.evolution.onnx_export import genome_to_onnx
+        self._ensure_configured()
+        return genome_to_onnx(
+            self._population.get_best(),
+            path=path,
+            opset_version=opset_version,
+            unroll_steps=unroll_steps,
+        )
+
     def export_genome_weights(self) -> dict:
         """Return the best genome's weight matrix and bias vector.
 
@@ -4475,6 +4986,87 @@ class NeuroEvolution:
         from yane.evolution.genome_export import genome_to_numpy_weights
         self._ensure_configured()
         return genome_to_numpy_weights(self._population.get_best())
+
+    def distill_ensemble(
+        self,
+        k: int = 5,
+        target_nodes: int = 10,
+        distillation_steps: int = 500,
+        probe_inputs: "list[list[float]] | None" = None,
+        n_probes: int = 100,
+        sigma: float = 0.1,
+        sigma_decay: float = 0.99,
+        seed: int | None = None,
+    ) -> "DistillationResult":
+        """Compress the top-K trained genomes into a compact student genome.
+
+        Distillation runs ``distillation_steps`` hill-climbing steps that
+        minimise the MSE between the student's outputs and the ensemble's
+        mean outputs on a set of probe inputs.
+
+        Parameters
+        ----------
+        k :
+            Number of top genomes that form the teacher ensemble.
+        target_nodes :
+            Maximum total node count for the student genome (inputs + hidden
+            + outputs).  Lower values → more compression.
+        distillation_steps :
+            Total hill-climbing steps.  More steps → lower final MSE.
+        probe_inputs :
+            Fixed probe inputs to supervise distillation.  When *None*,
+            ``n_probes`` random inputs in ``[0, 1]^n_inputs`` are generated.
+        n_probes :
+            Number of random probes when *probe_inputs* is *None*.
+        sigma :
+            Initial perturbation noise for hill-climbing.
+        sigma_decay :
+            Multiplicative sigma decay per mini-epoch (0.99 = slow annealing).
+        seed :
+            RNG seed for reproducibility.
+
+        Returns
+        -------
+        DistillationResult
+            Contains the student genome, final/initial MSE, loss history,
+            and compression metrics.
+
+        Example
+        -------
+        ::
+
+            yane.train(fitness_fn)
+            result = yane.distill_ensemble(k=5, target_nodes=8,
+                                           distillation_steps=300)
+            print(f"Compression ratio: {result.compression_ratio:.2f}×")
+        """
+        from yane.evolution.distillation import (
+            distill_ensemble as _distill,
+            _make_student,
+            DistillationResult,
+        )
+        self._ensure_configured()
+        teachers = self._population.get_top(k)
+        if not teachers:
+            raise RuntimeError("Population has no evaluated genomes.  Run train() first.")
+
+        n_inputs = len(teachers[0].input_nodes)
+        n_outputs = len(teachers[0].output_nodes)
+        rng_seed = seed if seed is not None else (self._seed or 0)
+        import random as _rnd
+        rng = _rnd.Random(rng_seed)
+        student = _make_student(n_inputs, n_outputs, target_nodes, rng)
+
+        return _distill(
+            teachers=teachers,
+            student=student,
+            probe_inputs=probe_inputs,
+            distillation_steps=distillation_steps,
+            n_probes=n_probes,
+            sigma=sigma,
+            sigma_decay=sigma_decay,
+            seed=rng_seed,
+        )
 
     def export_best_weights_npy(self, path: str | Path) -> None:
         """Save the best genome's weight matrix as a NumPy ``.npy`` file.

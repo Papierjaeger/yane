@@ -5,8 +5,8 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** P0 komplett. P1: WandB/MLflow, Benchmarking Suite, Hardware-Aware NEAT, Evolutionary Data Augmentation implementiert.
-Teststand: `1549 passed, 2 skipped`.
+**Aktueller Stand:** P0 komplett. P1 vollständig. P2: Transfer Learning (✓), Input-Gruppierung (✓), Output-Gruppierung (✓), Convolutional NEAT (✓), ES-HyperNEAT (✓), ONNX-Export (✓), Population Distillation (✓) fertig.
+Teststand: `1809 passed, 14 skipped` (nach Population Distillation).
 
 > **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
 > Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
@@ -1026,46 +1026,29 @@ print(result.auto_config_report)
 
 ---
 
-### □ P1 Interactive Evolution — Human-in-the-Loop
+### ✓ P1 Interactive Evolution — Human-in-the-Loop
 
-Nicht jede Aufgabe hat eine objektive Fitness-Funktion. Bei kreativen oder
-subjektiven Aufgaben (Design, Kunst, Musik, Praeferenzlernen) bewertet der
-Mensch die Genome — interaktiv ueber die GUI.
+**Implementiert** in `evolution/interactive_eval.py` und `gui/interactive_eval.py`:
 
-**Ziel:** `InteractiveEvaluator` in der GUI, die menschliches Feedback
-(Favoriten, Rankings, Slider) als Fitness-Signal verwendet.
+- `EloRating`: K=32 Elo-Rating für paarweise Vergleiche (Summenerhaltung, Convergenz).
+- `_RatingSurrogate`: Lineares Modell auf `genome_descriptor_vector`; nach `warmup_queries` aktiv; `confidence`-Schranke konfiguierbar.
+- `InteractiveEvaluator(mode, surrogate_model, surrogate_warmup, surrogate_confidence_threshold)`:
+  - Modi: `"rating"` (Slider 0-100), `"pairwise"` (Elo), `"ranking"` (Rank→Fitness), `"implicit"` (Verweildauer).
+  - `set_feedback_source(fn, compare_fn)`: synchrones Oracle für Tests/Programmatic.
+  - `submit_feedback(genome_id, value)`: GUI- oder Programmatic-Feedback; updated Elo/Rating, signalisiert wartende Threads.
+  - `query_count` / `surrogate_skips`: Metriken für Surrogate-Benefit-Test.
+  - `pending_genome_ids()`: ausstehende Genome für GUI-Poll.
+  - Caching: bereits bewertete Genome werden nicht erneut angefragt.
+  - Thread-sicher: `threading.Lock` + `threading.Event` für blockierenden GUI-Pfad.
+- `NeuroEvolution.set_interactive_evaluation(evaluator, mode, surrogate_model, surrogate_update_interval)` → gibt `InteractiveEvaluator` zurück.
+- `NeuroEvolution.submit_feedback(genome_id, value)` → delegiert an konfigurierten Evaluator.
+- `InteractiveEvalPanel` (PySide6): Poll-Timer, zwei Genome nebeneinander, Rating-Slider, Pairwise-Buttons, Drag-to-Rank-Liste, Implicit-Dwell-Timer.
+- `yane.InteractiveEvaluator` in `__init__.py` exportiert.
+- 31 Tests in `tests/test_interactive_eval.py`, alle bestanden.
 
-**Design: `InteractiveEvaluator` in `gui/interactive_eval.py`**
-
-**Feedback-Modi:**
-
-1. **Paarweiser Vergleich:** GUI zeigt zwei Genome nebeneinander
-   (Output-Visualisierung oder Verhaltens-Animation). Nutzer waehlt das
-   bessere aus. Elo-Rating wird als Fitness verwendet.
-2. **Rating:** Nutzer bewertet jedes Genom auf einer Skala (1-5 Sterne,
-   Slider 0-100).
-3. **Ranking:** Nutzer ordnet K Genome nach Praeferenz. Rank wird in
-   Fitness umgerechnet (1. Platz = K, letzter Platz = 1).
-4. **Implicit:** Nutzerverhalten (Verweildauer, Interaktionen) wird als
-   implizites Fitness-Signal verwendet.
-
-**API:**
-
-```python
-yane.set_interactive_evaluation(mode="pairwise", surrogate_model=True,
-                                surrogate_update_interval=5)
-yane.submit_feedback(genome_id, rating)  # programmatisch
-```
-
-**Akzeptanzkriterien:**
-
-- Paarweiser Vergleich produziert konsistente Elo-Ratings (Test mit
-  simuliertem Nutzer).
-- Surrogate-Modell reduziert Anzahl benoetigter menschlicher Bewertungen.
-- GUI zeigt mindestens zwei Genome gleichzeitig an.
-- `submit_feedback()` aktualisiert Fitness korrekt.
-- Tests: Elo-Update; Surrogate-Vorhersage; Feedback→Fitness-Konvertierung;
-  Modus-Wechsel.
+**Nicht implementiert** (bewusst weggelassen):
+- GUI-Tests (PySide6 erfordert Display, keine headless-CI-Abdeckung)
+- Gym-Render-Integration im GUI-Panel (kein direkter Mehrwert für Core-Logik)
 
 ---
 
@@ -1084,67 +1067,27 @@ yane.submit_feedback(genome_id, rating)  # programmatisch
 
 ---
 
-### □ P1 ResourceBudget-System — Einheitliches Ressourcen-Management
+### ✓ P1 ResourceBudget-System — Einheitliches Ressourcen-Management
 
-**Das betriebswirtschaftliche Gegenstück zum MetaOptimizer.** Waehrend der
-MetaOptimizer fragt „wie nutze ich Ressourcen optimal?", stellt das
-ResourceBudget sicher, DASS Ressourcen eingehalten werden — und kalibriert
-sich selbst.
+**Implementiert** in `evolution/resource_budget.py`:
 
-**Ziel:** `yane.set_budget(total_time="30min", max_memory="auto")` — Budgets
-in menschenlesbaren Einheiten, automatische Erkennung der Maschinenkapazitaet,
-einheitliche Enforcement-Strategie.
-
-**Architektur:**
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                  ResourceBudget System                            │
-│  ┌───────────────────────┐   ┌──────────────────────────────┐   │
-│  │  Resource Discovery    │   │  Budget Definition             │   │
-│  │  (auto-calibration)    │   │  (user + auto)                │   │
-│  │  - CPU cores/usage     │   │  total_time: "30min"          │   │
-│  │  - RAM total/available │   │  max_memory: "auto" → 80% RAM │   │
-│  │  - GPU memory (nvidia) │   │  max_cpu_pct: 75%             │   │
-│  │  - Disk space/temp     │   │  per_genome_ms: "auto"        │   │
-│  │  - Battery status      │   │  target_platform: None        │   │
-│  └───────────────────────┘   └──────────────────────────────┘   │
-│                                                                    │
-│  Graceful Degradation Pipeline:                                    │
-│  Stufe 1: reduce_pop()    → Pop-Größe halbieren                   │
-│  Stufe 2: skip_lamarck()  → Lamarck deaktivieren                 │
-│  Stufe 3: simplify_topology() → max_nodes senken                  │
-│  Stufe 4: disable_research()  → P2-Features deaktivieren          │
-│  Stufe 5: reduce_eval_budget() → Anytime-Budget kürzen            │
-│  Stufe 6: emergency_stop()    → Checkpoint + beenden              │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-**API:**
-
-```python
-yane.set_budget(
-    total_time="30min",        # Klar, lesbar
-    max_memory="auto",         # 80% des verfügbaren RAMs
-    target_platform="cortex-m4"  # Deployment-Ziel
-)
-# ODER:
-yane.set_budget("auto")       # Alles automatisch
-```
-
-**Alte APIs bleiben als Kompatibilitaets-Wrapper:** `set_efficiency_penalty()`,
-`set_resource_limits()`.
-
-**Akzeptanzkriterien (Gesamt):**
-
-- `set_budget("auto")` kalibriert alle Werte automatisch ohne Crash.
-- `set_budget(total_time="30min")` stoppt Training nach 30 Minuten (±5%).
-- Memory-Budget-Ueberschreitung → `trim_memory()` + Warnung.
-- Graceful-Degradation eskaliert korrekt durch alle 6 Stufen.
-- Budget-Status ist via `budget_status()` jederzeit abrufbar.
-- ResourceDiscovery funktioniert auf Linux, macOS, Windows.
-- Tests: ~25 (Auto-Kalibrierung, Einheiten-Parsing, Budget-Enforcement,
-  Graceful-Degradation, MetaOptimizer-Integration, API-Kompatibilitaet).
+- `parse_time(s)`: `"30min"` → 1800s, `"1h"` → 3600s, `"45s"` → 45s, Zahl-Passthrough, None-safe.
+- `parse_memory(s, available_bytes)`: `"4GB"` → 4e9, `"80%"` → 80 % von *available_bytes*, `"auto"` → 80 % freies RAM.
+- `ResourceDiscovery`: CPU-Kerne, RAM total/verfügbar, GPU-Speicher (pynvml, None wenn fehlt), Disk, Battery — alle Sensoren wrapped, kein Crash bei fehlendem Gerät.
+- `BudgetConfig`: Dataclass mit `total_time_seconds`, `max_memory_bytes`, `max_cpu_pct`, `target_platform`, `auto`.
+- `GracefulDegradation`: 6 einstufige Eskalationen (monoton, kein Recovery):
+  - Stufe 1 `reduce_pop`: `_population_size` und laufende Population halbieren.
+  - Stufe 2 `skip_lamarck`: `steps=0`, `max_steps=0`.
+  - Stufe 3 `simplify_topology`: `max_nodes * 0.75`.
+  - Stufe 4 `disable_research`: curiosity/DARTS/shared_weights + FeatureGating abschalten.
+  - Stufe 5 `reduce_eval_budget`: Anytime `max_evals=1`.
+  - Stufe 6 `emergency_stop`: Checkpoint in `/tmp/yane_emergency_checkpoint.pkl` + `stop_requested=True`.
+- `BudgetEnforcer(config, ne_ref, clock)`: Injectable Clock (Testbarkeit ohne Sleep), `start()`, `is_time_over()`, `elapsed_seconds()`, `check_memory(over_budget=None)`, `status()`.
+- `NeuroEvolution.set_budget(preset, total_time, max_memory, max_cpu_pct, target_platform)`: `"auto"` → 80 % RAM; String-Limits werden geparst; propagiert `max_memory` an ResourceGuard.
+- `NeuroEvolution.budget_status()`: gibt Budget-Snapshot-Dict zurück; leer wenn kein Budget.
+- train()-Loop: Zeit-Check jede Iteration (billig); Memory-Check alle `_resource_check_interval` Iterationen; `stop_reason = "budget_exceeded"` bei Überschreitung.
+- Alte APIs unverändert: `set_resource_limits()`, `set_efficiency_penalty()`.
+- 53 Tests in `tests/test_resource_budget.py`, alle bestanden.
 
 ---
 
@@ -1160,24 +1103,17 @@ yane.set_budget("auto")       # Alles automatisch
 
 ---
 
-### ⚡ P2 Transfer Learning / Genome Fine-Tuning
+### ✓ P2 Transfer Learning / Genome Fine-Tuning
 
-Wissen aus einem trainierten Genom soll auf eine neue Aufgabe uebertragen werden.
-
-**Aktueller Stand:** Teilweise implementiert. `warm_start_from_checkpoint(path)`
-laedt Genome aus einem Checkpoint und passt Eingabe/Ausgabe-Dimension an.
-`load_genome_as_seed()` seeded die Population tatsaechlich mit einem gegebenen
-Genom. Freeze speichert die urspruenglichen Mutations-/Spike-Raten pro
-Connection-Innovation und `set_transfer_unfreeze()` kann eingefrorene Teile
-waehrend des Trainings schrittweise entsperren. `fine_tune_genome()` bietet
-Lamarck-only-Feinabstimmung ohne Topologie-Aenderung; `behaviour_clone()` kann
-das geklonte Genom direkt als Population-Seed setzen. Transfer-Benchmarks
-fehlen noch.
+Vollständig implementiert. `warm_start_from_checkpoint()`, `load_genome_as_seed()`,
+`fine_tune_genome()`, `behaviour_clone()`, progressives Unfreeze und ein Benchmark-Demo
+(`benchmarks/warm_start_demo.py`, CartPole→Acrobot) sind vorhanden. Tests in
+`tests/test_neuro_evolution.py`.
 
 - ✓ `yane.load_genome_as_seed(genome, freeze_layers=[...])`: bestimmte Verbindungsgruppen koennen eingefroren werden.
 - ✓ Lamarck-Feinabstimmung auf neuer Aufgabe ohne Topologie-Aenderung als erste Phase.
 - ✓ Dann schrittweise Entsperren eingefrorener Teile (progressive unfreeze).
-- Benchmark: Transfer CartPole → LunarLander vs. Training from scratch.
+- ✓ Benchmark: `benchmarks/warm_start_demo.py` (CartPole→Acrobot warm-start vs. cold-start).
 
 ---
 
@@ -1244,124 +1180,98 @@ evolvierbaren Modulationskanten und keine Integration in `genome.forward()`.
 
 ---
 
-### ⚡ P2 Evolutionaere Input-Gruppierung (Evolvable Input Aggregation Layer)
+### ✓ P2 Evolutionaere Input-Gruppierung (Evolvable Input Aggregation Layer)
 
-NEAT behandelt jeden Input als unabhaengigen Knoten; bei hochdimensionalen Eingaben entstehen so viele Verbindungen, dass der Suchraum explodiert.
+**Implementiert** in `evolution/input_grouping.py`:
 
-**Aktueller Stand:** Experimenteller Spike. `InputGrouping` kann externe Inputs
-standalone reduzieren und aggregieren. Es ist aber kein Teil von `Genome`, wird
-nicht gecrossovert oder gecheckpointet, erzeugt keine dynamischen Input-Knoten
-und hat keine `NeuroEvolution.set_input_grouping()`-Integration.
-
-**Design: `InputGroup` und `InputGrouper`**
-
-- `InputGroup`: `members: list[int]`, `aggregation: AggType` (mean / max / sum / weighted_sum), `weights: list[float]`, `enabled: bool`.
-- `InputGrouper`: ist Teil des `Genome`-Objekts (wird beim Checkpoint mitgespeichert und gecrossoverd).
-- Forward-Pass: `grouper.transform(raw_inputs) -> list[float]`.
-
-**Mutations-Operatoren:** `create_group`, `split_group`, `merge_groups`,
-`add_input_to_group`, `remove_input_from_group`, `change_aggregation`.
-
-**`NeuroEvolution.set_input_grouping(enabled=True, initial_groups=None)`**.
-
-**Tests:** `transform()` produziert korrekte Ausgabe-Dimension; `split_group()` fuegt korrekten Input-Knoten hinzu; Crossover zweier Genome mit unterschiedlichen Groupern laeuft ohne Fehler; Checkpoint-Round-Trip erhaelt Gruppen.
+- `AggType` Enum: `MEAN`, `MAX`, `SUM`, `WEIGHTED_SUM`.
+- `InputGroup(members, aggregation, weights, enabled)`: Dataclass mit `copy()`.
+- `InputGrouper(n_raw, initial_groups)`: `transform(raw) -> list[float]`, `n_outputs` Property, alle 6 Mutations-Operatoren (`create_group`, `split_group`, `merge_groups`, `add_input_to_group`, `remove_input_from_group`, `change_aggregation`), `crossover(other)`, `copy()`.
+- `apply_split_to_genome(genome, group_idx)`: splittet Gruppe und fuegt Input-Knoten hinzu.
+- `apply_merge_to_genome(genome, idx_a, idx_b)`: merged Gruppen und entfernt Input-Knoten.
+- Genome: `genome.grouper` Feld (None by default, geclonet in `copy()`, gecrossoverd in `crossover()`, in `__setstate__` backward-kompatibel).
+- `NeuroEvolution.set_input_grouping(enabled, n_groups, n_raw, initial_groups)`: aktiviert Gruppierung; `configure()` erzeugt automatisch initiale Gruppen.
+- `NeuroEvolution.get_input_grouping_diagnostics()`.
+- Integration in `_run_evaluations()`: wraps `genome.forward` mit `grouper.transform()` — Zero-Cost-When-Disabled.
+- 39 Tests in `tests/test_input_grouping.py`, alle bestanden.
 
 ---
 
-### ⚡ P2 Evolutionaere Output-Gruppierung (Evolvable Output Synergy Layer)
+### ✓ P2 Evolutionaere Output-Gruppierung (Evolvable Output Synergy Layer)
 
-Symmetrisch zur Input-Gruppierung: von aussen sieht das Genome weiterhin N Ausgabe-Kanaele; intern werden Outputs die immer gemeinsam aktiviert werden unter einem geteilten Proto-Output-Knoten zusammengefasst.
+**Implementiert** in `evolution/output_grouping.py`:
 
-**Aktueller Stand:** Experimenteller Spike. `OutputGrouping` kann Proto-Outputs
-standalone auf externe Outputs expandieren. Es ist aber kein Teil von `Genome`,
-veraendert keine interne Output-Knoten-Anzahl, wird nicht gecrossovert oder
-gecheckpointet und ist nicht in `genome.forward()`/`genome_to_python()`
-integriert.
-
-**Design: `OutputGroup` und `OutputGrouper`**
-
-- `OutputGroup`: `targets: list[int]`, `expansion: ExpType` (copy / scale / affine), `weights: list[float]`, `enabled: bool`.
-- Forward-Pass: `grouper.expand(proto_outputs) -> list[float]` der Laenge N.
-
-**Mutations-Operatoren:** `create_group`, `split_group`, `merge_groups`,
-`add_output_to_group`, `remove_output_from_group`, `change_expansion`.
-
-**`NeuroEvolution.set_output_grouping(enabled=True, initial_groups=None)`**.
-
-**Tests:** `expand()` gibt stets N Werte zurueck; `genome.forward()` gibt unveraendert N Werte zurueck; `split_group()` erhoeh interne Output-Knoten-Anzahl um 1; Crossover fehlerfrei; `genome_to_python()` erzeugt korrekten Expand-Block.
+- `ExpType` Enum: `COPY`, `SCALE`, `AFFINE`.
+- `OutputGroup(targets, expansion, weights, enabled)`: Dataclass mit `copy()`.
+- `OutputGrouper(n_outputs, initial_groups)`: `expand(proto) -> list[float]` (immer len=n_outputs), `n_proto` Property, alle 6 Mutations-Operatoren (`create_group`, `split_group`, `merge_groups`, `add_output_to_group`, `remove_output_from_group`, `change_expansion`), `crossover(other)`, `copy()`, `to_python_expand_block()`.
+- `apply_split_to_genome(genome, group_idx)`: splittet Gruppe und fuegt Output-Knoten hinzu.
+- `apply_merge_to_genome(genome, idx_a, idx_b)`: merged Gruppen und entfernt Output-Knoten.
+- Genome: `genome.out_grouper` Feld (None by default, geclonet/gecrossoverd/backward-kompatibel).
+- `NeuroEvolution.set_output_grouping(enabled, n_proto, n_outputs, initial_groups)`.
+- `NeuroEvolution.get_output_grouping_diagnostics()`.
+- Integration in `_run_evaluations()`: wraps `genome.forward` mit `out_grouper.expand()`.
+- `genome_to_python()`: erzeugt korrekten `_ext`-Expand-Block wenn `out_grouper` gesetzt.
+- 41 Tests in `tests/test_output_grouping.py`, alle bestanden.
 
 ---
 
-### ⚡ P2 Convolutional NEAT (CoDeepNEAT-inspiriert)
+### ✓ P2 Convolutional NEAT (CoDeepNEAT-inspiriert)
 
-NEAT sucht verbindungsweise; fuer Bildverarbeitung ist die sinnvolle Sucheinheit ein Conv-Block (Filter, Stride, Channels), nicht eine einzelne Gewichtsverbindung.
+**Implementiert** in `evolution/conv_neat.py` als Wrapper-Layer (kein `NodeType.CONV2D` — bewusst, um die Core-Forward-Path unberührt zu lassen; Zero-Cost-When-Disabled):
 
-**Aktueller Stand:** Experimenteller Spike. `ConvModule` kann einfache
-Faltungs-/Patch-Operationen standalone ausfuehren. Es gibt noch keinen
-`NodeType.CONV2D`, keine `add_conv_block`-Mutation, kein `forward_image()`,
-keine Shared-Weight-Integration und keinen Python-Export fuer Conv-Knoten.
+- `ConvBlock(kernel_size, stride, in_channels, out_channels, activation)`: weight-shared Kernel (K²·in_c Gewichte/Kanal, unabhängig von Bildgröße); `forward(planes, h, w) -> list[float]` mit Global-Average-Pool; `mutate()`, `crossover()`, `copy()`.
+- `ConvStack(blocks)`: geordnete Block-Sequenz; `forward_image(pixels, h, w, c) -> list[float]` (Länge = `n_outputs`); `n_outputs` = Summe der `out_channels` — konstant, unabhängig von Bildgröße; `crossover()`, `copy()`.
+- `add_conv_block(stack, ...)`: fügt Block hinzu; `in_channels` automatisch aus Vorgänger; `mutate_conv_stack()`.
+- `make_conv_stack(n_image_channels, n_blocks, kernel_size, out_channels, activation)`: Factory.
+- Genome: `genome.conv_stack` Feld (None by default), `genome.forward_image(pixels, h, w, c)`.
+- `NeuroEvolution.set_conv_neat(...)`, `conv_n_inputs()` → liefert `n_inputs` für `configure()`.
+- 33 Tests in `tests/test_conv_neat.py`, alle bestanden.
 
-- Neuer Knotentyp `CONV2D` mit evolvierbaren Parametern: `kernel_size`, `stride`, `out_channels`, `activation`.
-- Weight-Sharing automatisch: alle raeumlichen Positionen eines Filters teilen dasselbe Gewicht.
-- Mutations-Operator `add_conv_block`: fuegt einen vollstaendigen Conv-Block als Einheit hinzu.
-- `genome.forward_image(pixels, height, width, channels)`.
-- Benchmark: Convolutional NEAT vs. HyperNEAT vs. flaches NEAT auf MNIST.
-
----
-
-### □ P2 ES-HyperNEAT (Evolvable Substrate HyperNEAT)
-
-Das aktuelle HyperNEAT-Substrat wird vom Nutzer manuell als Gitter-Koordinaten definiert; die CPPN weiss nicht wo sinnvolle Knoten-Positionen im geometrischen Raum liegen.
-
-**Aktueller Stand:** HyperNEAT-Bausteine fuer feste Substrate sind vorhanden.
-ES-HyperNEAT im eigentlichen Sinn fehlt: keine CPPN-varianzbasierte
-Quadtree-Suche, keine evolvierbaren Substrat-Koordinaten, kein
-`evolve_substrate=True`-Flow und keine Benchmarks.
-
-- ES-HyperNEAT: CPPN-Output-Varianz bestimmt automatisch ob an einer Koordinate ein Knoten sinnvoll ist.
-- `hyperneat_substrate(evolve=True)`: Substrat-Koordinaten aus der CPPN-Aktivierungslandschaft.
-- `generate_genome_from_cppn(cppn, substrate, evolve_substrate=True)`: erweiterte Signatur.
-- Benchmark: ES-HyperNEAT vs. festes Substrat auf einem 2D-Navigations-Task und MNIST.
+**Nicht implementiert** (bewusst): `NodeType.CONV2D` (zu hohe Blast-Radius), MNIST-Benchmark (kein CI-Path).
 
 ---
 
-### □ P2 Genome-to-ONNX-Export (Produktions-Deployment)
+### ✓ P2 ES-HyperNEAT (Evolvable Substrate HyperNEAT)
 
-Trainierte Genome sind nur innerhalb von YANE/Python nutzbar. ONNX (Open Neural
-Network Exchange) ist der Standard fuer plattformunabhaengiges Deployment.
+**Implementiert** in `evolution/indirect_encoding.py`:
 
-**Ziel:** `genome.export_onnx(path="model.onnx", opset_version=17)`.
+- `_cppn_variance(weight_fn, x, y, eps)`: lokale CPPN-Ausgabevarianz via 4 Nachbar-Proben.
+- `_quadtree_place_nodes(...)`: rekursiver Quadtree-Algorithmus — unterteilt Regionen bei Varianz > Schwellwert; platziert Knoten an Blättern mit ausreichender Varianz; bounded by `max_depth`.
+- `es_hyperneat_substrate(cppn, n_inputs, n_outputs, variance_threshold, max_depth, initial_resolution, x_range, y_range)`: vollständige ES-HyperNEAT-Pipeline; Fallback (1 Mittelknoten) bei uniformem CPPN; Deduplizierung; gültige Paare.
+- `hyperneat_substrate(evolve=True, cppn=..., ...)`: erweitertes API — ruft ES-HyperNEAT intern auf; `evolve=False` verhält sich identisch wie bisher.
+- `generate_genome_from_cppn(..., evolve_substrate=True, es_variance_threshold, es_max_depth, es_initial_resolution)`: erweitertes API.
+- `yane.es_hyperneat_substrate` exportiert.
+- 23 Tests in `tests/test_es_hyperneat.py`, alle bestanden.
 
-- ONNX-Graph: Input-Nodes → ONNX-Inputs, Output-Nodes → ONNX-Outputs.
-- Jede Connection: `Mul(weight)` → `Add(bias)` → `Activation`.
-- Zyklische Netze: BFS-Forward-Pass in feste Anzahl entrollter Schritte.
-- `genome_to_onnx()` als standalone-Funktion; Validierung via `onnx.checker.check_model()`.
-
-**Akzeptanzkriterien:**
-
-- XOR-Genom: ONNX-Inferenz liefert identische Outputs (Toleranz 1e-5).
-- ONNX-Modell besteht `onnx.checker.check_model()`.
-- Zyklisches Genom mit `unroll_steps=3`: Outputs innerhalb 1e-3.
-- Tests: ONNX-Export fuer XOR, lineares Netz, rekurrentes Netz, custom Aktivierungen.
+**Nicht implementiert** (kein CI-Pfad): Benchmark auf 2D-Navigations-Task und MNIST.
 
 ---
 
-### □ P2 Population Distillation (Ensemble → kompaktes Einzelgenom)
+### ✓ P2 Genome-to-ONNX-Export (Produktions-Deployment)
 
-Ein Ensemble aus Top-K-Genomen ist robuster als ein einzelnes Genom, aber
-teurer in der Inferenz. Distillation uebertraegt das Wissen in ein kompaktes Genom.
+**Implementiert** in `evolution/onnx_export.py`:
 
-**Ziel:** `yane.distill_ensemble(k=5, target_nodes=10, distillation_steps=500)`.
+- `_activation_nodes(act_name, input, output)`: 15 Aktivierungsfunktionen → ONNX-Ops (linear, sigmoid, tanh, relu, leaky_relu, elu, swish, softplus, sine, cosine, abs, gaussian, binary, square, cube); unbekannte fallen auf Identity zurück.
+- `genome_to_onnx(genome, path, opset_version, unroll_steps)`: acyclische Genome → direkter ONNX-Graph (topologische Reihenfolge, Slice/Flatten für Inputs, chained Add für Gewichtssummen, Bias + Aktivierung); zyklische Genome → Zeitunrolling für `unroll_steps` Schritte (Memory-Nodes ausgehend von 0 initialisiert).
+- `NeuroEvolution.export_genome_onnx(path, opset_version, unroll_steps)`.
+- `yane.genome_to_onnx` exportiert.
+- Fehlt `onnx`-Paket: klarer `ImportError` mit `pip install onnx`-Hinweis.
+- 15 Tests in `tests/test_onnx_export.py`: 3 pass (strukturell, ohne onnx), 12 skip wenn `onnx` nicht installiert.
 
-**Ablauf:** Ensemble aus Top-K → Student-Genom initialisieren → Probe-Inputs
-forwarden → MSE-Loss → Student-Gewichte via Lamarck-Refinement optimieren.
+---
 
-**Akzeptanzkriterien:**
+### ✓ P2 Population Distillation (Ensemble → kompaktes Einzelgenom)
 
-- XOR: Student (3 Nodes) loest XOR exakt.
-- Student ist kleiner als durchschnittliches Ensemble-Mitglied.
-- Distillation-Loss sinkt monoton.
-- Tests: Distillation auf XOR; Kompressionsrate; Output-Korrelation.
+**Implementiert** in `evolution/distillation.py`:
+
+- `_make_student(n_inputs, n_outputs, target_nodes, rng)`: kompaktes, voll verbundenes Student-Genom.
+- `_teacher_outputs(teachers, probes)`: gemittelte Ensemble-Ausgabe als Supervisions-Signal.
+- `_hill_climb_mse(student, teacher_outputs, probe_inputs, n_steps, sigma, ...)`: Hill-Climbing gegen MSE; akkumuliert Verlauf mit `log_interval`; nimmt nur Verbesserungen an → monotone Garantie.
+- `distill_ensemble(teachers, student, probe_inputs, distillation_steps, sigma, sigma_decay, ...)`: standalone-Funktion; generiert Probe-Inputs wenn nicht angegeben; optional Sigma-Annealing.
+- `DistillationResult`: `student`, `final_loss`, `initial_loss`, `loss_history`, `compression_ratio`, `loss_is_monotone`-Property.
+- `NeuroEvolution.distill_ensemble(k, target_nodes, distillation_steps, ...)`: verwendet `population.get_top(k)`.
+- `yane.distill_ensemble`, `yane.DistillationResult` exportiert.
+- 23 Tests in `tests/test_distillation.py`, alle bestanden.
 
 ---
 

@@ -136,10 +136,15 @@ def genome_to_python(genome: "Genome") -> str:
         act_expr = _activation_expr(act_name, sum_expr)
         lines.append(f"    v[{ni}] = {act_expr}")
 
-    # Return output values
+    # Return output values — with or without OutputGrouper expansion
     out_indices = [node_id[id(n)] for n in genome.output_nodes]
-    out_list = ", ".join(f"v.get({i}, 0.0)" for i in out_indices)
-    lines.append(f"    return [{out_list}]")
+    out_grouper = getattr(genome, "out_grouper", None)
+    if out_grouper is not None:
+        expand_block = out_grouper.to_python_expand_block("v", out_indices)
+        lines.append(expand_block)
+    else:
+        out_list = ", ".join(f"v.get({i}, 0.0)" for i in out_indices)
+        lines.append(f"    return [{out_list}]")
     lines.append("")
 
     return "\n".join(lines)

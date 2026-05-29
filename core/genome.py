@@ -149,6 +149,62 @@ class Genome:
         # group_id → list[Connection] — rebuilt lazily by sync_shared_weights().
         self._weight_group_members: dict[str, list] = {}
 
+        # Evolvable Input Aggregation — optional preprocessing layer.
+        # None = disabled (no cost).  Set via NeuroEvolution.set_input_grouping().
+        self.grouper = None  # InputGrouper | None
+
+        # Evolvable Output Synergy — optional postprocessing layer.
+        # None = disabled (no cost).  Set via NeuroEvolution.set_output_grouping().
+        self.out_grouper = None  # OutputGrouper | None
+
+        # Convolutional NEAT — optional image-processing front-end.
+        # None = disabled (no cost).  Set via NeuroEvolution.set_conv_neat().
+        self.conv_stack = None  # ConvStack | None
+
+    # -------------------------------------------------------------------------
+    # Convolutional NEAT
+    # -------------------------------------------------------------------------
+
+    def forward_image(
+        self,
+        pixels: "list[float]",
+        height: int,
+        width: int,
+        channels: int = 1,
+    ) -> "list[float]":
+        """Process a flat image through the conv stack and then the NEAT network.
+
+        Requires ``self.conv_stack`` to be set (via
+        ``NeuroEvolution.set_conv_neat()``).
+
+        Parameters
+        ----------
+        pixels :
+            Flat image data, channel-last ordering: pixel at (r, c, ch) is at
+            index ``r * width * channels + c * channels + ch``.
+        height, width :
+            Spatial dimensions.
+        channels :
+            Number of image channels.
+
+        Returns
+        -------
+        list[float]
+            Same as ``self.forward()``.
+
+        Raises
+        ------
+        RuntimeError
+            When no :class:`~yane.evolution.conv_neat.ConvStack` is attached.
+        """
+        if self.conv_stack is None:
+            raise RuntimeError(
+                "forward_image() requires a ConvStack. "
+                "Call NeuroEvolution.set_conv_neat() first."
+            )
+        flat_features = self.conv_stack.forward_image(pixels, height, width, channels)
+        return self.forward(flat_features)
+
     # -------------------------------------------------------------------------
     # Tick mode
     # -------------------------------------------------------------------------
@@ -963,6 +1019,36 @@ class Genome:
         # Shared weight groups from fitter parent.
         child.weight_groups = dict(self.weight_groups)
         child._weight_group_members = {}
+        # Evolvable input grouper: crossover if both parents have one; inherit self's otherwise.
+        if self.grouper is not None and other.grouper is not None:
+            try:
+                child.grouper = self.grouper.crossover(other.grouper)
+            except Exception:
+                child.grouper = self.grouper.copy()
+        elif self.grouper is not None:
+            child.grouper = self.grouper.copy()
+        else:
+            child.grouper = None
+        # Output grouper crossover.
+        if self.out_grouper is not None and other.out_grouper is not None:
+            try:
+                child.out_grouper = self.out_grouper.crossover(other.out_grouper)
+            except Exception:
+                child.out_grouper = self.out_grouper.copy()
+        elif self.out_grouper is not None:
+            child.out_grouper = self.out_grouper.copy()
+        else:
+            child.out_grouper = None
+        # Conv stack crossover.
+        if self.conv_stack is not None and other.conv_stack is not None:
+            try:
+                child.conv_stack = self.conv_stack.crossover(other.conv_stack)
+            except Exception:
+                child.conv_stack = self.conv_stack.copy()
+        elif self.conv_stack is not None:
+            child.conv_stack = self.conv_stack.copy()
+        else:
+            child.conv_stack = None
         child._invalidate_topology()
         return child
 
@@ -1027,6 +1113,12 @@ class Genome:
         # Shared weights: copy group values; members rebuilt lazily on sync.
         genome.weight_groups = dict(self.weight_groups)
         genome._weight_group_members = {}
+        # Evolvable input grouper: deep-copy so child can mutate independently.
+        genome.grouper = self.grouper.copy() if self.grouper is not None else None
+        # Evolvable output grouper.
+        genome.out_grouper = self.out_grouper.copy() if self.out_grouper is not None else None
+        # Convolutional NEAT stack.
+        genome.conv_stack = self.conv_stack.copy() if self.conv_stack is not None else None
         return genome
 
     # -------------------------------------------------------------------------
@@ -1069,6 +1161,9 @@ class Genome:
         self.__dict__.setdefault('_darts_gates', None)
         self.__dict__.setdefault('weight_groups', {})
         self.__dict__.setdefault('_weight_group_members', {})
+        self.__dict__.setdefault('grouper', None)
+        self.__dict__.setdefault('out_grouper', None)
+        self.__dict__.setdefault('conv_stack', None)
         if 'mutation_gate_source' not in state:
             m = Mutation()
             m.bool_rate = 0.05
