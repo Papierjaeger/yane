@@ -1,0 +1,44 @@
+# YANE Benchmark Suite Configuration
+#
+# Run with:
+#   python -m yane.benchmarks --ci               (CI mode: JSON + exit code)
+#   python -m yane.benchmarks --update-baseline  (save current run as baseline)
+#   python -m yane.benchmarks                    (human-readable report)
+#
+# "example" must match an ExampleConfig.name from gui/examples.py.
+# Omit "example" to use "name" as the example name.
+
+baseline_dir: baseline    # relative to this file's directory
+history_dir:  history     # relative to this file's directory
+
+benchmarks:
+
+  - name: xor
+    example: XOR
+    seeds: [0, 1, 2, 3, 4]
+    max_iterations: 5000
+    timeout_s: 20.0
+
+  - name: regression_2_2
+    example: "Regression 2→2"
+    seeds: [0, 1, 2]
+    max_iterations: 8000
+    timeout_s: 30.0
+
+  - name: regression_3_3
+    example: "Regression 3→3"
+    seeds: [0, 1, 2]
+    max_iterations: 10000
+    timeout_s: 40.0
+
+  - name: multiplication
+    example: Multiplication
+    seeds: [0, 1, 2]
+    max_iterations: 8000
+    timeout_s: 30.0
+
+  - name: cartpole
+    example: CartPole
+    seeds: [0, 1, 2, 3, 4]
+    max_iterations: 5000
+    timeout_s: 30.0
