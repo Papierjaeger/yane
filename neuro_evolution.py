@@ -3449,12 +3449,19 @@ class NeuroEvolution:
             def fitness_fn(g):  # noqa: F821
                 _cr.clear()
                 base = _base_fn(g)
+                # Write task-only score onto the genome being evaluated so that
+                # finalize_fitness_value (called for every Lamarck candidate)
+                # can record the correct raw_fitness regardless of eval order.
+                g._curiosity_task_base = base
                 if _cr:
                     total_err = 0.0
                     for inp, out in _cr:
                         total_err += _mod.error(inp, out)
                         _mod.update(inp, out)
-                    bonus = total_err / len(_cr)
+                    raw_bonus = total_err / len(_cr)
+                    # Cap: bonus ≤ abs(base) so it can't overwhelm a negative task
+                    # score or reward numerically unstable (exploding) outputs.
+                    bonus = min(raw_bonus, max(1.0, abs(base)))
                     return base + _cw * bonus
                 return base
         try:
@@ -3476,6 +3483,9 @@ class NeuroEvolution:
         finally:
             if self._input_transform is not None or _curiosity_active:
                 genome.__dict__.pop("forward", None)
+            # Note: _curiosity_task_base is intentionally NOT removed here.
+            # finalize_fitness_value() reads and removes it so that raw_fitness
+            # records the task-only score even when Lamarck evaluates multiple times.
 
     def _run_with_matrix_forward(
         self, genome: Genome, fitness_fn: Callable[[Genome], float]
@@ -4311,7 +4321,11 @@ class NeuroEvolution:
         tuned.raw_fitness = baseline
         refined = self._lamarck.refine(tuned, fitness_fn, baseline_fitness=baseline, n_steps=n_steps)
         tuned.fitness = self._finalize_fitness(refined, None, tuned)
-        tuned.raw_fitness = tuned.fitness
+        # _finalize_fitness already set tuned.raw_fitness via finalize_fitness_value.
+        # Only override if curiosity is not active (curiosity stores task-only score
+        # in _curiosity_task_base so finalize_fitness_value uses that as raw_fitness).
+        if not hasattr(tuned, '_curiosity_task_base'):
+            tuned.raw_fitness = tuned.fitness
         if load_as_seed:
             self.load_genome_as_seed(tuned, freeze_layers=freeze_layers)
         return tuned
@@ -4746,19 +4760,9 @@ class NeuroEvolution:
         profile = self.profile_problem(evaluator, n_warmup=n_warmup)
         _profiling_ms = (_time.time() - _t_prof) * 1000.0
 
-        # ── 3. Pop-size and iteration budget ────────────────────────────────
+        # ── 3. Pop-size ──────────────────────────────────────────────────────
         pop_size = pick_pop_size(profile)
         self.set_population_size(pop_size)
-
-        if max_time_seconds is not None:
-            # Floor at 1ms so trivially-fast evaluators don't inflate the budget
-            eval_ms_per_genome = max(1.0, _profiling_ms / max(1, n_warmup * 2))
-            budget_ms = max_time_seconds * 1000.0
-            iters = int(budget_ms * 0.9 / eval_ms_per_genome)
-            iters = max(pop_size * 10, min(iters, pop_size * 500))
-        else:
-            iters = pop_size * 500
-        self.set_max_iterations(iters)
 
         if target_fitness is not None:
             self.set_min_fitness(target_fitness)
@@ -4790,6 +4794,24 @@ class NeuroEvolution:
                     pass
         else:
             _applied_params = apply_cold_start_defaults(self, profile)
+
+        # ── Iteration budget (calculated after Lamarck defaults are known) ──
+        # Profiling runs without Lamarck; scale up eval_ms to match training.
+        if max_time_seconds is not None:
+            _lamarck_steps = getattr(self._lamarck, 'n_steps', 0) if self._lamarck else 0
+            try:
+                _ps = self.get_param_space()
+                _lamarck_steps = max(_lamarck_steps, int(_ps.get("lamarck.n_steps", {}).get("current") or 0))
+            except Exception:
+                pass
+            _eval_multiplier = max(1, 1 + _lamarck_steps)
+            eval_ms_per_genome = max(1.0, _profiling_ms / max(1, n_warmup * 2)) * _eval_multiplier
+            budget_ms = max_time_seconds * 1000.0
+            iters = int(budget_ms * 0.9 / eval_ms_per_genome)
+            iters = max(pop_size * 10, min(iters, pop_size * 500))
+        else:
+            iters = pop_size * 500
+        self.set_max_iterations(iters)
 
         # ── 5. MetaOptimizer ────────────────────────────────────────────────
         self.set_meta_optimizer(

@@ -48,7 +48,15 @@ def finalize_fitness_value(
     elif genome is not None:
         genome.objectives = None
 
-    raw_fitness = fitness  # task score before component bonus
+    # raw_fitness = task-only score, before both the curiosity exploration bonus
+    # and any fitness-component bonus.  The curiosity wrapper stores the pure
+    # task score on the genome as _curiosity_task_base so we can recover it here
+    # even after Lamarck has called the wrapped evaluator multiple times.
+    # We delete the sentinel here so it never leaks into checkpoints.
+    if genome is not None and '_curiosity_task_base' in genome.__dict__:
+        raw_fitness = genome.__dict__.pop('_curiosity_task_base')
+    else:
+        raw_fitness = fitness  # task score before component bonus
 
     if genome is not None and config.fitness_component_weights is not None:
         component_score, _ = config.fitness_component_weights.scalarize(genome)

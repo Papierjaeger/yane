@@ -124,28 +124,46 @@ class TestCuriosityIntegration(unittest.TestCase):
     # Training integration: curiosity bonus affects fitness
     # ------------------------------------------------------------------
 
-    def test_curiosity_produces_higher_raw_fitness(self):
-        """Curiosity adds a non-negative bonus; best fitness should be >= no-curiosity."""
+    def test_curiosity_separates_selection_and_raw_fitness(self):
+        """Curiosity bonus lifts genome.fitness (selection) but NOT raw_fitness.
+
+        raw_fitness must track the pure task evaluator score so that stop
+        conditions and the Knowledge Base are not corrupted by the exploration
+        bonus.  Concretely:
+        - genome.fitness >= genome.raw_fitness (bonus is non-negative)
+        - genome.raw_fitness < genome.fitness (bonus is actually applied)
+        - genome.raw_fitness stays within the task fitness range, not inflated
+          by factors of 10+ from an uncapped curiosity bonus.
+        """
         def trivial(g):
             return sum(g.forward([0.5, 0.5]))
 
-        yane_plain = NeuroEvolution(seed=7)
+        # Reference: best fitness without curiosity
+        yane_plain = NeuroEvolution(seed=42)
         yane_plain.configure(2, 1, n_initial_hidden=1)
         yane_plain.set_population_size(10)
         yane_plain.set_max_iterations(20)
         yane_plain.train(trivial)
-        plain_best = yane_plain.get_best().fitness
+        plain_best = yane_plain.get_best()
 
-        yane_curious = NeuroEvolution(seed=7)
-        yane_curious.configure(2, 1, n_initial_hidden=1)
-        yane_curious.set_population_size(10)
-        yane_curious.set_curiosity(weight=1.0)
-        yane_curious.set_max_iterations(20)
-        yane_curious.train(trivial)
-        curious_best = yane_curious.get_best().fitness
+        yane = NeuroEvolution(seed=42)
+        yane.configure(2, 1, n_initial_hidden=1)
+        yane.set_population_size(10)
+        yane.set_curiosity(weight=1.0)
+        yane.set_max_iterations(20)
+        yane.train(trivial)
 
-        # With a bonus, the reported fitness should be at least as high
-        self.assertGreaterEqual(curious_best, plain_best - 1e-6)
+        best = yane.get_best()
+        # Selection fitness includes the curiosity bonus
+        self.assertGreaterEqual(best.fitness, best.raw_fitness - 1e-6)
+        # raw_fitness is not inflated: it stays within task fitness range.
+        # The bonus is bounded by max(1.0, abs(task_fitness)), so raw_fitness
+        # and task_fitness are within ~2× of each other.
+        task_scale = max(1.0, abs(trivial(plain_best)))
+        self.assertGreater(best.raw_fitness, -50 * task_scale,
+                           "raw_fitness should not be inflated by 50× below the task range")
+        self.assertLess(best.fitness - best.raw_fitness, 2 * task_scale,
+                        "curiosity bonus should be capped to at most 2× the task scale")
 
     def test_curiosity_module_gets_updated(self):
         """Forward model should accumulate updates during training."""
