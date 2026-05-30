@@ -17,11 +17,7 @@ from yane.gui.worker import TrainingWorker, EpisodeRunner, AutoSetupWorker
 from yane.gui.examples import load_examples
 from yane.gui._helpers import _label, _divider, CollapsibleGroup
 from yane.gui.remote_config import RemoteEvaluationConfig
-from yane.gui.research_features import (
-    ResearchFeatureConfig,
-    apply_research_features,
-    configure_cppn_substrate_population,
-)
+from yane.gui.research_features import ResearchFeatureConfig
 from yane.gui.training_sections import inline_row
 from yane.util.presets import list_presets, load_preset, save_preset
 
@@ -159,179 +155,6 @@ class TrainingTab(QWidget):
             "— = kein Zielwert (Training läuft bis du Stop drückst).\n"
             "Beispiel: CartPole gilt als gelöst ab Fitness 500.")
 
-        # --- Advanced settings -------------------------------------------------
-        self.chk_fitness_shaping = QCheckBox("aktiv")
-        self.chk_fitness_shaping.setChecked(False)
-        self.chk_fitness_shaping.setToolTip(
-            "Rank-basierte Fitness-Transformation (Fitness-Shaping).\n"
-            "Ersetzt shared_fitness durch lineare Ränge vor der Selektion.\n"
-            "Macht Selektion robust gegen Fitness-Ausreißer und Skalierungsunterschiede.\n"
-            "Empfohlen bei Aufgaben mit sehr unterschiedlichen Fitness-Größenordnungen.")
-
-        self.dspin_interspecies = QDoubleSpinBox()
-        self.dspin_interspecies.setRange(0.0, 0.2)
-        self.dspin_interspecies.setSingleStep(0.01)
-        self.dspin_interspecies.setValue(0.0)
-        self.dspin_interspecies.setDecimals(2)
-        self.dspin_interspecies.setSpecialValueText("—")
-        self.dspin_interspecies.setToolTip(
-            "Anteil der Crossover-Events, bei denen der zweite Elternteil\n"
-            "aus einer anderen Species gewählt wird (Interspecies Crossover).\n"
-            "0.0 = nur innerhalb der eigenen Species (Standard)\n"
-            "0.05 = 5 % aller Crossovers sind species-übergreifend\n"
-            "Hilft, lokale Optima aufzubrechen und Innovationen zu kombinieren.")
-
-        self.combo_interspecies_mode = QComboBox()
-        self.combo_interspecies_mode.addItems(["Fix", "Adaptiv"])
-        self.combo_interspecies_mode.setToolTip(
-            "Interspecies-Crossover-Zeitplan.\n"
-            "Fix nutzt die eingestellte Rate direkt.\n"
-            "Adaptiv erhöht die Live-Rate bei globaler oder Species-Stagnation.")
-        self.dspin_interspecies_max = QDoubleSpinBox()
-        self.dspin_interspecies_max.setRange(0.0, 0.5)
-        self.dspin_interspecies_max.setSingleStep(0.01)
-        self.dspin_interspecies_max.setValue(0.2)
-        self.dspin_interspecies_max.setDecimals(2)
-        self.dspin_interspecies_max.setToolTip(
-            "Maximale adaptive Interspecies-Crossover-Rate bei starker Stagnation.")
-
-        self.dspin_convergence_spread = QDoubleSpinBox()
-        self.dspin_convergence_spread.setRange(0.0, 1000.0)
-        self.dspin_convergence_spread.setSingleStep(0.1)
-        self.dspin_convergence_spread.setValue(0.0)
-        self.dspin_convergence_spread.setDecimals(4)
-        self.dspin_convergence_spread.setSpecialValueText("—")
-        self.dspin_convergence_spread.setToolTip(
-            "Konvergenz-Stop: Fitness-IQR-Schwelle.\n"
-            "Training stoppt, wenn der Interquartilsabstand (IQR) der Fitness\n"
-            "in der Population unter diesen Wert fällt UND die Population voll stagniert.\n"
-            "0.0 = deaktiviert.\n"
-            "0.01 = typisch für normalisierte Fitness, 1.0 für rohe Werte.")
-
-        self.dspin_convergence_stagnation = QDoubleSpinBox()
-        self.dspin_convergence_stagnation.setRange(0.1, 10.0)
-        self.dspin_convergence_stagnation.setSingleStep(0.1)
-        self.dspin_convergence_stagnation.setValue(1.0)
-        self.dspin_convergence_stagnation.setDecimals(1)
-        self.dspin_convergence_stagnation.setToolTip(
-            "Konvergenz-Stop: Mindest-Stagnation (Faktor).\n"
-            "1.0 = volle Stagnation nötig bevor Konvergenz geprüft wird.\n"
-            "0.5 = halbe Stagnation reicht (aggressiver).")
-
-        self.dspin_early_stop = QDoubleSpinBox()
-        self.dspin_early_stop.setRange(0.0, 10.0)
-        self.dspin_early_stop.setSingleStep(0.1)
-        self.dspin_early_stop.setValue(0.0)
-        self.dspin_early_stop.setDecimals(2)
-        self.dspin_early_stop.setSpecialValueText("—")
-        self.dspin_early_stop.setToolTip(
-            "Early-Stopping-Faktor für Generator-basierte Fitnessfunktionen.\n"
-            "Bricht die Evaluierung eines Genoms ab, wenn die extrapolierte\n"
-            "Fitness unter best - abs(best) * factor fällt.\n"
-            "0.0 = deaktiviert. 1.0 = großzügig (Standard wenn aktiv).\n"
-            "Nur relevant wenn die Fitnessfunktion yield verwendet.")
-
-        self.spin_efficiency_max_ms = QDoubleSpinBox()
-        self.spin_efficiency_max_ms.setRange(0.0, 10000.0)
-        self.spin_efficiency_max_ms.setSingleStep(10.0)
-        self.spin_efficiency_max_ms.setValue(0.0)
-        self.spin_efficiency_max_ms.setDecimals(1)
-        self.spin_efficiency_max_ms.setSpecialValueText("—")
-        self.spin_efficiency_max_ms.setToolTip(
-            "Effizienzstrafe: Referenzzeit in ms.\n"
-            "Genome, die schneller als diese Zeit evaluieren, bekommen\n"
-            "einen Bonus bei der Elternauswahl. Langsamere werden bestraft.")
-
-        self.dspin_efficiency_penalty = QDoubleSpinBox()
-        self.dspin_efficiency_penalty.setRange(0.0, 1.0)
-        self.dspin_efficiency_penalty.setSingleStep(0.001)
-        self.dspin_efficiency_penalty.setValue(0.0)
-        self.dspin_efficiency_penalty.setDecimals(4)
-        self.dspin_efficiency_penalty.setSpecialValueText("—")
-        self.dspin_efficiency_penalty.setToolTip(
-            "Effizienzstrafe: Strafe pro ms über der Referenzzeit.\n"
-            "0.0 = deaktiviert.\n"
-            "0.001 = moderat, 0.01 = strikt.")
-
-        self.spin_elite_global = QSpinBox()
-        self.spin_elite_global.setRange(0, 50)
-        self.spin_elite_global.setValue(1)
-        self.spin_elite_global.setToolTip(
-            "Globale Elite: Anzahl der Top-Genome, die nie aus der\n"
-            "Population entfernt werden (Elitismus). Default 1.\n"
-            "Höhere Werte bewahren mehr gute Lösungen, reduzieren aber Diversität.")
-
-        self.spin_elite_species = QSpinBox()
-        self.spin_elite_species.setRange(0, 10)
-        self.spin_elite_species.setValue(1)
-        self.spin_elite_species.setToolTip(
-            "Species-Elite: Anzahl der Top-Genome pro Species,\n"
-            "die nie entfernt werden. Schützt strukturelle Innovationen\n"
-            "auch in kleinen Species. Default 1.")
-
-        self.chk_multi_objective = QCheckBox("aktiv")
-        self.chk_multi_objective.setChecked(False)
-        self.chk_multi_objective.setToolTip(
-            "Multi-Objective Training für GUI-Beispiele.\n"
-            "Die Fitnessfunktion wird als Vektor (raw_fitness, complexity) bewertet.\n"
-            "Selektion nutzt Pareto-Rang + Crowding-Distance; Logs/Stop nutzen\n"
-            "raw_fitness - complexity_weight × complexity.")
-
-        self.dspin_mo_complexity = QDoubleSpinBox()
-        self.dspin_mo_complexity.setRange(0.0, 10.0)
-        self.dspin_mo_complexity.setSingleStep(0.001)
-        self.dspin_mo_complexity.setDecimals(4)
-        self.dspin_mo_complexity.setValue(0.01)
-        self.dspin_mo_complexity.setToolTip(
-            "Gewicht für das zweite Objective 'Komplexität'.\n"
-            "Die GUI nutzt connection_count als minimiertes Objective.\n"
-            "0.01 bedeutet: Skalarfitness = raw_fitness - 0.01 × connections.")
-
-        self.chk_quality_diversity = QCheckBox("aktiv")
-        self.chk_quality_diversity.setChecked(False)
-        self.chk_quality_diversity.setToolTip(
-            "Quality Diversity / MAP-Elites aktivieren.\n"
-            "Das Archiv speichert das beste Genom pro Descriptor-Zelle und nutzt\n"
-            "Archiv-Eliten bei Stagnation als zusätzliche Diversity-Injektion.")
-
-        self.combo_qd_descriptor = QComboBox()
-        self.combo_qd_descriptor.addItems(["Topology", "Behavior"])
-        self.combo_qd_descriptor.setToolTip(
-            "Descriptor für MAP-Elites:\n"
-            "Topology: (hidden_nodes, connections)\n"
-            "Behavior: Outputs auf festen Probeinputs")
-
-        self.chk_matrix_forward = QCheckBox("aktiv")
-        self.chk_matrix_forward.setChecked(False)
-        self.chk_matrix_forward.setToolTip(
-            "Matrix-Forward aktivieren.\n"
-            "Kompatible azyklische Feedforward-Genome nutzen automatisch den\n"
-            "NumPy-Matrixpfad; inkompatible Genome fallen auf den normalen Forward zurück.")
-
-        self.chk_fitness_components = QCheckBox("aktiv")
-        self.chk_fitness_components.setChecked(False)
-        self.chk_fitness_components.setToolTip(
-            "Optionale Descriptor-/Fitness-Komponenten zur Task-Fitness addieren.\n"
-            "Die GUI nutzt kleine Topologie- und Verhaltensterme; im adaptiven Modus\n"
-            "werden ihre Gewichte bei Stagnation automatisch verschoben.")
-
-        self.combo_fitness_component_mode = QComboBox()
-        self.combo_fitness_component_mode.addItems(["Fix", "Adaptiv"])
-        self.combo_fitness_component_mode.setToolTip(
-            "Fix hält Komponenten-Gewichte konstant.\n"
-            "Adaptiv zeichnet Gewichtshistorie auf und passt Gewichte bei Stagnation an.")
-
-        self.chk_cppn_substrate = QCheckBox("aktiv")
-        self.chk_cppn_substrate.setChecked(False)
-        self.chk_cppn_substrate.setToolTip(
-            "Initialisiert die Population mit einem CPPN-generierten HyperNEAT-Substrat.\n"
-            "Danach trainiert das erzeugte Netz als normales YANE-Genome weiter.")
-
-        self.spin_cppn_hidden = QSpinBox()
-        self.spin_cppn_hidden.setRange(0, 64)
-        self.spin_cppn_hidden.setValue(2)
-        self.spin_cppn_hidden.setToolTip("Anzahl Hidden-Nodes in der CPPN-Substratschicht.")
-
         self.chk_remote_eval = QCheckBox("aktiv")
         self.chk_remote_eval.setChecked(False)
         self.chk_remote_eval.setToolTip(
@@ -432,57 +255,8 @@ class TrainingTab(QWidget):
             "— = unbegrenzt (läuft bis Stop oder Target-Fitness).")
         cfg_form.addRow("Max iterations:", self.spin_max_iter)
 
-        self.spin_max_eval = QSpinBox()
-        self.spin_max_eval.setRange(0, 10_000_000)
-        self.spin_max_eval.setValue(0)
-        self.spin_max_eval.setSpecialValueText("—")
-        self.spin_max_eval.setSingleStep(10000)
-        self.spin_max_eval.setToolTip(
-            "Maximale Fitness-Evaluations-Aufrufe.\n"
-            "— = unbegrenzt.\n"
-            "Zählt tatsächliche Fitness-Funktionsaufrufe, nicht nur Iterationen.")
-        cfg_form.addRow("Max evaluations:", self.spin_max_eval)
-
-        self.combo_log_format = QComboBox()
-        self.combo_log_format.addItems(["csv", "jsonlines", "both"])
-        self.combo_log_format.setToolTip(
-            "Log-Format für Trainingsläufe.\n"
-            "csv: Standard-CSV (Default).\n"
-            "jsonlines: JSON pro Heartbeat (komplettes Diagnostics-Dict).\n"
-            "both: CSV + JSONL gleichzeitig.")
-        cfg_form.addRow("Log format:", self.combo_log_format)
-
         # --- Advanced settings group (collapsed by default) ---
         advance_grp = CollapsibleGroup("Advanced", collapsed=True)
-        advance_grp.addRow("Fitness shaping:",   self.chk_fitness_shaping)
-        advance_grp.addRow(
-            "Multi-objective:",
-            inline_row(self.chk_multi_objective, QLabel("complexity ×"), self.dspin_mo_complexity),
-        )
-        advance_grp.addRow(
-            "Quality diversity:",
-            inline_row(self.chk_quality_diversity, self.combo_qd_descriptor),
-        )
-        advance_grp.addRow(
-            "Fitness components:",
-            inline_row(self.chk_fitness_components, self.combo_fitness_component_mode),
-        )
-        advance_grp.addRow(
-            "CPPN substrate init:",
-            inline_row(self.chk_cppn_substrate, QLabel("hidden"), self.spin_cppn_hidden),
-        )
-        advance_grp.addRow("Matrix forward:", self.chk_matrix_forward)
-
-        # ── New feature controls ────────────────────────────────────────────
-        self.chk_weight_inheritance = QCheckBox("aktiv")
-        self.chk_weight_inheritance.setToolTip(
-            "Fitness-gewichtetes Blending beim Crossover (blend_alpha=0.7).")
-        advance_grp.addRow("Weight inheritance:", self.chk_weight_inheritance)
-
-        self.combo_codec = QComboBox()
-        self.combo_codec.addItems(["pickle", "json"])
-        self.combo_codec.setToolTip("Checkpoint-Serialisierungsformat.")
-        advance_grp.addRow("Checkpoint codec:", self.combo_codec)
 
         # ── Checkpoint policy ───────────────────────────────────────────────
         self.chk_auto_checkpoint = QCheckBox("aktiv")
@@ -512,34 +286,6 @@ class TrainingTab(QWidget):
             ),
         )
 
-        # ── Adaptive population ─────────────────────────────────────────────
-        self.chk_adaptive_pop = QCheckBox("aktiv")
-        self.chk_adaptive_pop.setChecked(False)
-        self.chk_adaptive_pop.setToolTip(
-            "Populationsgröße dynamisch anpassen.\n"
-            "Wächst bei Entdeckungsphase, schrumpft bei Konvergenz.")
-        self.spin_adaptive_pop_min = QSpinBox()
-        self.spin_adaptive_pop_min.setRange(2, 500)
-        self.spin_adaptive_pop_min.setValue(20)
-        self.spin_adaptive_pop_min.setEnabled(False)
-        self.spin_adaptive_pop_max = QSpinBox()
-        self.spin_adaptive_pop_max.setRange(10, 2000)
-        self.spin_adaptive_pop_max.setValue(200)
-        self.spin_adaptive_pop_max.setEnabled(False)
-        self.chk_adaptive_pop.toggled.connect(
-            lambda on: (
-                self.spin_adaptive_pop_min.setEnabled(on),
-                self.spin_adaptive_pop_max.setEnabled(on),
-            )
-        )
-        advance_grp.addRow(
-            "Adaptive pop:",
-            inline_row(
-                self.chk_adaptive_pop, QLabel("min"), self.spin_adaptive_pop_min,
-                QLabel("max"), self.spin_adaptive_pop_max,
-            ),
-        )
-
         advance_grp.addRow(
             "Remote eval:",
             inline_row(self.chk_remote_eval, self.edit_remote_urls, stretch_last=True),
@@ -555,41 +301,6 @@ class TrainingTab(QWidget):
                 self.spin_remote_batch,
             ),
         )
-        interspecies_row = QWidget()
-        interspecies_lay = QHBoxLayout(interspecies_row)
-        interspecies_lay.setContentsMargins(0, 0, 0, 0)
-        interspecies_lay.setSpacing(4)
-        interspecies_lay.addWidget(self.combo_interspecies_mode)
-        interspecies_lay.addWidget(self.dspin_interspecies)
-        interspecies_lay.addWidget(QLabel("max"))
-        interspecies_lay.addWidget(self.dspin_interspecies_max)
-        advance_grp.addRow("Interspecies crossover:", interspecies_row)
-        converge_row = QWidget()
-        converge_lay = QHBoxLayout(converge_row)
-        converge_lay.setContentsMargins(0, 0, 0, 0)
-        converge_lay.setSpacing(4)
-        converge_lay.addWidget(self.dspin_convergence_spread)
-        converge_lay.addWidget(QLabel("×"))
-        converge_lay.addWidget(self.dspin_convergence_stagnation)
-        advance_grp.addRow("Convergence stop (eps × stag):", converge_row)
-        advance_grp.addRow("Early stop factor:",  self.dspin_early_stop)
-        eff_row = QWidget()
-        eff_lay = QHBoxLayout(eff_row)
-        eff_lay.setContentsMargins(0, 0, 0, 0)
-        eff_lay.setSpacing(4)
-        eff_lay.addWidget(self.spin_efficiency_max_ms)
-        eff_lay.addWidget(QLabel("ms ×"))
-        eff_lay.addWidget(self.dspin_efficiency_penalty)
-        advance_grp.addRow("Efficiency penalty:", eff_row)
-        elite_row = QWidget()
-        elite_lay = QHBoxLayout(elite_row)
-        elite_lay.setContentsMargins(0, 0, 0, 0)
-        elite_lay.setSpacing(4)
-        elite_lay.addWidget(self.spin_elite_global)
-        elite_lay.addWidget(QLabel("global /"))
-        elite_lay.addWidget(self.spin_elite_species)
-        elite_lay.addWidget(QLabel("per species"))
-        advance_grp.addRow("Elitism:", elite_row)
         layout.addWidget(cfg)
         layout.addWidget(advance_grp)
 
@@ -772,7 +483,6 @@ class TrainingTab(QWidget):
             return
         self.spin_inputs.setValue(ex.n_inputs)
         self.spin_outputs.setValue(ex.n_outputs)
-        self.chk_fitness_shaping.setChecked(ex.default_fitness_shaping)
         self.dspin_target.setValue(ex.target_fitness)
         self.desc_label.setText(ex.description)
         # Default memory based on example type; user can override before training.
@@ -833,26 +543,6 @@ class TrainingTab(QWidget):
 
     def _apply_config_dict(self, cfg: dict) -> None:
         """Apply a GUI config dict to widgets; used by presets and example defaults."""
-        if "fitness_shaping" in cfg:
-            self.chk_fitness_shaping.setChecked(bool(cfg["fitness_shaping"]))
-        if "multi_objective" in cfg:
-            self.chk_multi_objective.setChecked(bool(cfg["multi_objective"]))
-        if "multi_objective_complexity_weight" in cfg:
-            self.dspin_mo_complexity.setValue(float(cfg["multi_objective_complexity_weight"]))
-        if "quality_diversity" in cfg:
-            self.chk_quality_diversity.setChecked(bool(cfg["quality_diversity"]))
-        if "quality_diversity_descriptor" in cfg:
-            self.combo_qd_descriptor.setCurrentText(str(cfg["quality_diversity_descriptor"]))
-        if "fitness_components" in cfg:
-            self.chk_fitness_components.setChecked(bool(cfg["fitness_components"]))
-        if "fitness_component_mode" in cfg:
-            self.combo_fitness_component_mode.setCurrentText(str(cfg["fitness_component_mode"]))
-        if "matrix_forward" in cfg:
-            self.chk_matrix_forward.setChecked(bool(cfg["matrix_forward"]))
-        if "cppn_substrate" in cfg:
-            self.chk_cppn_substrate.setChecked(bool(cfg["cppn_substrate"]))
-        if "cppn_hidden" in cfg:
-            self.spin_cppn_hidden.setValue(int(cfg["cppn_hidden"]))
         if "remote_eval" in cfg:
             self.chk_remote_eval.setChecked(bool(cfg["remote_eval"]))
         if "remote_urls" in cfg:
@@ -863,20 +553,6 @@ class TrainingTab(QWidget):
             self.spin_remote_retries.setValue(int(cfg["remote_retries"]))
         if "remote_batch_size" in cfg:
             self.spin_remote_batch.setValue(int(cfg["remote_batch_size"]))
-        if "convergence_spread" in cfg:
-            self.dspin_convergence_spread.setValue(float(cfg["convergence_spread"]))
-        if "convergence_stagnation" in cfg:
-            self.dspin_convergence_stagnation.setValue(float(cfg["convergence_stagnation"]))
-        if "early_stop_factor" in cfg:
-            self.dspin_early_stop.setValue(float(cfg["early_stop_factor"]))
-        if "efficiency_max_ms" in cfg:
-            self.spin_efficiency_max_ms.setValue(float(cfg["efficiency_max_ms"]))
-        if "efficiency_penalty" in cfg:
-            self.dspin_efficiency_penalty.setValue(float(cfg["efficiency_penalty"]))
-        if "elite_global" in cfg:
-            self.spin_elite_global.setValue(int(cfg["elite_global"]))
-        if "elite_species" in cfg:
-            self.spin_elite_species.setValue(int(cfg["elite_species"]))
         if "normalize" in cfg and self.chk_normalize.isVisible():
             self.chk_normalize.setChecked(bool(cfg["normalize"]))
         if "memory" in cfg:
@@ -892,28 +568,11 @@ class TrainingTab(QWidget):
 
     def _current_preset_config(self) -> dict:
         return {
-            "fitness_shaping": self.chk_fitness_shaping.isChecked(),
-            "multi_objective": self.chk_multi_objective.isChecked(),
-            "multi_objective_complexity_weight": self.dspin_mo_complexity.value(),
-            "quality_diversity": self.chk_quality_diversity.isChecked(),
-            "quality_diversity_descriptor": self.combo_qd_descriptor.currentText(),
-            "fitness_components": self.chk_fitness_components.isChecked(),
-            "fitness_component_mode": self.combo_fitness_component_mode.currentText(),
-            "matrix_forward": self.chk_matrix_forward.isChecked(),
-            "cppn_substrate": self.chk_cppn_substrate.isChecked(),
-            "cppn_hidden": self.spin_cppn_hidden.value(),
             "remote_eval": self.chk_remote_eval.isChecked(),
             "remote_urls": self.edit_remote_urls.text(),
             "remote_timeout_s": self.dspin_remote_timeout.value(),
             "remote_retries": self.spin_remote_retries.value(),
             "remote_batch_size": self.spin_remote_batch.value(),
-            "convergence_spread": self.dspin_convergence_spread.value(),
-            "convergence_stagnation": self.dspin_convergence_stagnation.value(),
-            "early_stop_factor": self.dspin_early_stop.value(),
-            "efficiency_max_ms": self.spin_efficiency_max_ms.value(),
-            "efficiency_penalty": self.dspin_efficiency_penalty.value(),
-            "elite_global": self.spin_elite_global.value(),
-            "elite_species": self.spin_elite_species.value(),
             "normalize": self.chk_normalize.isChecked(),
             "memory": self.chk_memory.isChecked(),
             "curriculum": self.chk_curriculum.isChecked(),
@@ -952,11 +611,6 @@ class TrainingTab(QWidget):
             allow_memory=self.chk_memory.isChecked(),
             output_sanitize=self._yane._output_sanitize,
             output_fallback=self._yane._output_fallback,
-            cppn_substrate=self.chk_cppn_substrate.isChecked(),
-            cppn_hidden=self.spin_cppn_hidden.value(),
-            matrix_forward=self.chk_matrix_forward.isChecked(),
-            fitness_components=self.chk_fitness_components.isChecked(),
-            fitness_component_mode=self.combo_fitness_component_mode.currentText(),
         )
 
     def _configure_yane_core(self, ex) -> ResearchFeatureConfig:
@@ -972,48 +626,9 @@ class TrainingTab(QWidget):
             n_initial_hidden=ex.n_initial_hidden,
             stateful=self.chk_memory.isChecked(),
         )
-        research_cfg = self._current_research_feature_config()
-        if research_cfg.cppn_substrate:
-            configure_cppn_substrate_population(self._yane, research_cfg)
-        return research_cfg
+        return self._current_research_feature_config()
 
     def _apply_evolution_options(self, research_cfg: ResearchFeatureConfig) -> None:
-        if self.chk_fitness_shaping.isChecked():
-            self._yane.set_fitness_shaping(True)
-        if self.combo_interspecies_mode.currentText() == "Adaptiv":
-            self._yane.set_adaptive_interspecies_crossover(
-                min_rate=self.dspin_interspecies.value(),
-                max_rate=self.dspin_interspecies_max.value(),
-            )
-        else:
-            self._yane.set_interspecies_crossover(self.dspin_interspecies.value())
-
-        conv_eps = self.dspin_convergence_spread.value()
-        if conv_eps > 0.0:
-            self._yane.set_convergence_stop(conv_eps, self.dspin_convergence_stagnation.value())
-        early_stop_factor = self.dspin_early_stop.value()
-        if early_stop_factor > 0.0:
-            self._yane.set_early_stopping(early_stop_factor)
-        eff_max = self.spin_efficiency_max_ms.value()
-        eff_pen = self.dspin_efficiency_penalty.value()
-        if eff_max > 0.0 and eff_pen > 0.0:
-            self._yane.set_efficiency_penalty(eff_max, eff_pen)
-        self._yane.set_elitism(self.spin_elite_global.value(), self.spin_elite_species.value())
-        apply_research_features(self._yane, research_cfg)
-        self._yane.set_weight_inheritance(enabled=self.chk_weight_inheritance.isChecked())
-        self._yane.set_checkpoint_codec(self.combo_codec.currentText())
-
-        # Seed / Stopping / Logging
-        n_iter = self.spin_max_iter.value()
-        if n_iter > 0:
-            self._yane.set_max_iterations(n_iter)
-        n_eval_max = self.spin_max_eval.value()
-        if n_eval_max > 0:
-            self._yane.set_max_evaluations(n_eval_max)
-        log_fmt = self.combo_log_format.currentText()
-        if log_fmt != "csv":
-            self._yane.set_log_format(log_fmt)
-
         # Checkpoint policy
         if self.chk_auto_checkpoint.isChecked():
             self._yane.set_checkpoint_policy(
@@ -1023,13 +638,9 @@ class TrainingTab(QWidget):
                 enabled=True,
             )
 
-        # Adaptive population
-        if self.chk_adaptive_pop.isChecked():
-            self._yane.set_adaptive_population(
-                min_size=self.spin_adaptive_pop_min.value(),
-                max_size=self.spin_adaptive_pop_max.value(),
-            )
-
+        n_iter = self.spin_max_iter.value()
+        if n_iter > 0:
+            self._yane.set_max_iterations(n_iter)
         self._yane.set_resource_limits(max_process_gb=self.dspin_mem.value())
         target = self.dspin_target.value()
         if target > -1e9:
@@ -1061,59 +672,10 @@ class TrainingTab(QWidget):
         enabled = self._get_enabled_eval_components()
         if enabled is not None:
             make_eval_fn = functools.partial(make_eval_fn, enabled_components=enabled)
-
-        if not self.chk_multi_objective.isChecked():
-            return make_eval_fn
-
-        weight = self.dspin_mo_complexity.value()
-        self._yane.set_multi_objective(
-            enabled=True,
-            weights=(1.0, -weight),
-            maximize=(True, False),
-        )
-        base_make_eval_fn = make_eval_fn
-
-        def _make_mo_eval(render_cb=None, _base=base_make_eval_fn):
-            base_eval = _base(render_cb)
-
-            def _eval(genome):
-                raw = base_eval(genome)
-                return (raw, float(genome.connection_count))
-
-            return _eval
-
-        return _make_mo_eval
+        return make_eval_fn
 
     def _configure_quality_diversity(self) -> None:
-        if not self.chk_quality_diversity.isChecked():
-            return
-        if self.combo_qd_descriptor.currentText() == "Behavior":
-            from yane.evolution.quality_diversity import descriptor_from_outputs
-            import random
-            rng = random.Random(42)
-            probes = [
-                [rng.uniform(-1.0, 1.0) for _ in range(self.spin_inputs.value())]
-                for _ in range(2)
-            ]
-            bins = tuple(8 for _ in range(max(1, self.spin_outputs.value() * len(probes))))
-            ranges = tuple((-1.0, 1.0) for _ in bins)
-            self._yane.set_quality_diversity(
-                descriptor_from_outputs(probes),
-                bins=bins,
-                ranges=ranges,
-                max_cells=500,
-            )
-            return
-
-        self._yane.set_quality_diversity(
-            descriptor_fn=lambda g: (
-                float(max(0, len(g.nodes) - len(g.input_nodes) - len(g.output_nodes))),
-                float(g.connection_count),
-            ),
-            bins=(12, 16),
-            ranges=((0.0, 100.0), (0.0, 200.0)),
-            max_cells=500,
-        )
+        pass
 
     def _configure_curriculum(self, ex) -> None:
         if ex.make_curriculum is None or not self.chk_curriculum.isChecked():

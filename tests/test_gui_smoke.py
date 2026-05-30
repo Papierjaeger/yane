@@ -37,15 +37,10 @@ class TestGUISmoke(unittest.TestCase):
         from yane.gui.tabs.training_tab import TrainingTab
 
         tab = TrainingTab()
-        self.assertGreaterEqual(tab.combo_interspecies_mode.findText("Adaptiv"), 0)
-        self.assertTrue(hasattr(tab, "chk_multi_objective"))
-        self.assertTrue(hasattr(tab, "chk_quality_diversity"))
         self.assertTrue(hasattr(tab, "preset_combo"))
-        self.assertTrue(hasattr(tab, "chk_matrix_forward"))
-        self.assertTrue(hasattr(tab, "chk_fitness_components"))
-        self.assertTrue(hasattr(tab, "chk_cppn_substrate"))
         self.assertTrue(hasattr(tab, "chk_remote_eval"))
         self.assertTrue(hasattr(tab, "edit_remote_urls"))
+        self.assertTrue(hasattr(tab, "chk_auto_checkpoint"))
         tab.close()
 
     def test_training_tab_builds_remote_evaluation_config(self):
@@ -90,21 +85,7 @@ class TestGUISmoke(unittest.TestCase):
 
         tab = TrainingTab()
         self.assertEqual(tab._current_example().name, "XOR")
-        self.assertTrue(tab.chk_matrix_forward.isChecked())
-
-        reg33_idx = next(
-            idx for idx, ex in tab._combo_index_map.items()
-            if ex.name == "Regression 3→3"
-        )
-        tab.example_combo.setCurrentIndex(reg33_idx)
-        self.assertTrue(tab.chk_quality_diversity.isChecked())
-        self.assertTrue(tab.chk_fitness_components.isChecked())
-        self.assertTrue(tab.chk_cppn_substrate.isChecked())
-
-        xor_idx = next(idx for idx, ex in tab._combo_index_map.items() if ex.name == "XOR")
-        tab.example_combo.setCurrentIndex(xor_idx)
-        self.assertFalse(tab.chk_quality_diversity.isChecked())
-        self.assertFalse(tab.chk_fitness_components.isChecked())
+        self.assertTrue(tab.chk_memory.isChecked() is False)
         tab.close()
 
     def test_training_worker_remote_bootstraps_first_genome(self):
