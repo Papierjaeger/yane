@@ -380,16 +380,67 @@ class MetaOptimizer:
     Called via ``tick()`` once per generation inside ``NeuroEvolution.train()``.
     """
 
-    # Categorical params and their candidate sets
+    # Fallback hardcoded params used when no registry is provided
     _CAT_PARAMS: dict[str, list] = {
         "lamarck.mode": ["hill_climbing", "nes", "sa", "cma_es"],
     }
-    # Continuous params and their (lo, hi, is_integer) domains
     _CONT_PARAMS: dict[str, tuple] = {
         "anytime.promotion_frac": (0.1, 0.9, False),
         "lamarck.sigma": (0.1, 5.0, False),
         "lamarck.n_steps": (1, 20, True),
     }
+
+    # Params to exclude from automatic registry-based tuning.
+    #
+    # Rule 1 — ALL *.enabled boolean toggles are excluded.
+    #   Feature on/off decisions belong to FeatureGating, which tests each
+    #   feature in a controlled window and has proper enable/disable callbacks.
+    #   Toggling e.g. attention.enabled via set_param() mid-training changes
+    #   the genome's effective input dimensionality and breaks novelty vectors.
+    #
+    # Rule 2 — Init-stage params are excluded (require a full reconfigure).
+    #
+    # Rule 3 — Infrastructure params managed by other systems are excluded.
+    _EXCLUDE: frozenset = frozenset({
+        # ── All feature enabled/disabled flags (FeatureGating manages these) ──
+        "anytime.enabled",
+        "attention.enabled",
+        "augmentation.enabled",
+        "conv_neat.enabled",
+        "crossover.enabled",
+        "crossover.weight_inheritance_enabled",
+        "curiosity.enabled",
+        "darts.enabled",
+        "diversity_injection.enabled",
+        "hybrid.enabled",
+        "input_grouping.enabled",
+        "island.enabled",
+        "lamarck.enabled",
+        "lamarck.momentum_enabled",
+        "matrix_forward.enabled",
+        "neuromodulation.enabled",
+        "novelty.enabled",
+        "online_tuning.enabled",
+        "output_grouping.enabled",
+        "phylogeny.enabled",
+        "pop.adaptive_enabled",
+        "probabilistic.enabled",
+        "probabilistic.inference_mode",
+        "pruning.enabled",
+        "recovery.enabled",
+        "recovery.escalate",
+        "shared_weights.enabled",
+        "speciation.enabled",
+        "stdp.enabled",
+        "surrogate.enabled",
+        # ── Init-stage: require reconfigure() ──────────────────────────────────
+        "conv_neat.n_blocks",
+        "island.n_islands",
+        "island.migrate_interval",
+        "island.migrate_count",
+        # ── Infrastructure: managed by other systems ────────────────────────────
+        "safety.min_safe_frac",
+    })
 
     def __init__(
         self,
@@ -400,7 +451,19 @@ class MetaOptimizer:
         phase_min_gens: int = _PHASE_MIN_GENS,
         ucb1_c: float = 2.0,
         seed: int | None = None,
+        param_registry: Any = None,
     ) -> None:
+        """Create a MetaOptimizer.
+
+        Parameters
+        ----------
+        param_registry:
+            Optional ``ParamRegistry`` instance.  When provided, *all*
+            registered parameters (excluding ``_EXCLUDE``) are added to the
+            tuning pool automatically — categoricals as UCB1 bandits, booleans
+            as 2-arm bandits, integers/continuous as GP optimisers.  Falls back
+            to the hardcoded ``_CAT_PARAMS``/``_CONT_PARAMS`` when ``None``.
+        """
         self.tune_interval = max(1, int(tune_interval))
         self.max_overhead_pct = max(0.5, float(max_overhead_pct))
 
@@ -409,14 +472,23 @@ class MetaOptimizer:
             plateau_patience=plateau_patience,
             phase_min_gens=phase_min_gens,
         )
-        self._cat: dict[str, _CatBandit] = {
-            name: _CatBandit(name, cands, c=ucb1_c)
-            for name, cands in self._CAT_PARAMS.items()
-        }
-        self._cont: dict[str, _ContOptimizer] = {
-            name: _ContOptimizer(name, lo, hi, is_int)
-            for name, (lo, hi, is_int) in self._CONT_PARAMS.items()
-        }
+
+        if param_registry is not None:
+            cat_params, cont_params = self._params_from_registry(
+                param_registry, ucb1_c
+            )
+        else:
+            cat_params = {
+                name: _CatBandit(name, cands, c=ucb1_c)
+                for name, cands in self._CAT_PARAMS.items()
+            }
+            cont_params = {
+                name: _ContOptimizer(name, lo, hi, is_int)
+                for name, (lo, hi, is_int) in self._CONT_PARAMS.items()
+            }
+
+        self._cat: dict[str, _CatBandit] = cat_params
+        self._cont: dict[str, _ContOptimizer] = cont_params
 
         self._generation: int = 0
         self._last_best: float = -math.inf
@@ -426,6 +498,50 @@ class MetaOptimizer:
         self._n_ticks: int = 0
         self._n_skipped: int = 0
         self._param_change_log: list[dict] = []
+
+    # ------------------------------------------------------------------
+    # Registry-based param discovery
+    # ------------------------------------------------------------------
+
+    def _params_from_registry(
+        self,
+        registry: Any,
+        ucb1_c: float,
+    ) -> tuple[dict, dict]:
+        """Build ``_cat`` and ``_cont`` dicts from a ``ParamRegistry``.
+
+        All registered parameters are included except those in ``_EXCLUDE``.
+        Boolean params become 2-arm categorical bandits (True/False).
+        """
+        cat: dict[str, _CatBandit] = {}
+        cont: dict[str, _ContOptimizer] = {}
+
+        space = registry.get_param_space()
+        for name, spec in space.items():
+            # Skip explicitly excluded params AND all *.enabled / *.escalate
+            # boolean feature-toggle flags — FeatureGating manages those.
+            if name in self._EXCLUDE or name.endswith(".enabled") or name.endswith(".escalate"):
+                continue
+            ptype = spec.get("type", "")
+            domain = spec.get("domain")
+
+            if ptype == "categorical":
+                candidates = list(domain) if domain else []
+                if len(candidates) >= 2:
+                    cat[name] = _CatBandit(name, candidates, c=ucb1_c)
+
+            elif ptype == "boolean":
+                cat[name] = _CatBandit(name, [True, False], c=ucb1_c)
+
+            elif ptype in ("continuous", "integer") and domain is not None:
+                try:
+                    lo, hi = float(domain[0]), float(domain[1])
+                    is_int = ptype == "integer"
+                    cont[name] = _ContOptimizer(name, lo, hi, is_int)
+                except (TypeError, IndexError, ValueError):
+                    pass
+
+        return cat, cont
 
     # ------------------------------------------------------------------
     # Main entry point

@@ -316,7 +316,13 @@ class FeatureGate:
 # ------------------------------------------------------------------
 
 def _register_known_features(fg: FeatureGate, ne: Any) -> None:
-    """Register all known YANE research features into *fg*."""
+    """Register all known YANE research features into *fg*.
+
+    Only runtime-togglable features are included.  Init-stage features
+    (input_grouping, output_grouping, conv_neat) must be set before
+    ``configure()`` and cannot be safely toggled mid-training.
+    """
+    # ── Original 5 ────────────────────────────────────────────────────────────
     fg.register(
         "curiosity",
         enable_fn=lambda _ne: _ne.set_curiosity(enabled=True),
@@ -341,4 +347,74 @@ def _register_known_features(fg: FeatureGate, ne: Any) -> None:
         "diversity_injection",
         enable_fn=lambda _ne: _ne.set_diversity_injection(enabled=True),
         disable_fn=lambda _ne: _ne.set_diversity_injection(enabled=False),
+    )
+
+    # ── Neural architecture (runtime-safe: all wrap forward/eval, no topology change) ──
+    fg.register(
+        "attention",
+        enable_fn=lambda _ne: _ne.set_attention(enabled=True),
+        disable_fn=lambda _ne: _ne.set_attention(enabled=False),
+    )
+    fg.register(
+        "ltc",
+        enable_fn=lambda _ne: _ne.set_ltc(enabled=True),
+        disable_fn=lambda _ne: _ne.set_ltc(enabled=False),
+    )
+    fg.register(
+        "neuromodulation",
+        enable_fn=lambda _ne: _ne.set_neuromodulation(enabled=True),
+        disable_fn=lambda _ne: _ne.set_neuromodulation(enabled=False),
+    )
+    fg.register(
+        "stdp",
+        enable_fn=lambda _ne: _ne.set_stdp(enabled=True),
+        disable_fn=lambda _ne: _ne.set_stdp(enabled=False),
+    )
+    fg.register(
+        "probabilistic",
+        enable_fn=lambda _ne: _ne.set_probabilistic(enabled=True),
+        disable_fn=lambda _ne: _ne.set_probabilistic(enabled=False),
+    )
+
+    # ── Learning mechanisms ────────────────────────────────────────────────────
+    fg.register(
+        "augmentation",
+        enable_fn=lambda _ne: _ne.set_evolutionary_augmentation(enabled=True),
+        disable_fn=lambda _ne: _ne.set_evolutionary_augmentation(enabled=False),
+    )
+
+    # ── Evaluation ─────────────────────────────────────────────────────────────
+    fg.register(
+        "anytime_eval",
+        enable_fn=lambda _ne: _ne.set_anytime_eval(enabled=True),
+        disable_fn=lambda _ne: _ne.set_anytime_eval(enabled=False),
+    )
+    fg.register(
+        "adaptive_recovery",
+        enable_fn=lambda _ne: _ne.set_adaptive_recovery(enabled=True),
+        disable_fn=lambda _ne: _ne.set_adaptive_recovery(enabled=False),
+    )
+    fg.register(
+        "pruning",
+        enable_fn=lambda _ne: _ne.set_post_training_pruning(enabled=True),
+        disable_fn=lambda _ne: _ne.set_post_training_pruning(enabled=False),
+    )
+
+    # ── Deployment ─────────────────────────────────────────────────────────────
+    fg.register(
+        "surrogate",
+        enable_fn=lambda _ne: _ne.set_param("surrogate.enabled", True),
+        disable_fn=lambda _ne: _ne.set_param("surrogate.enabled", False),
+    )
+    fg.register(
+        "online_tuning",
+        enable_fn=lambda _ne: _ne.set_online_tuning(enabled=True),
+        disable_fn=lambda _ne: _ne.set_online_tuning(enabled=False),
+    )
+
+    # ── Analysis ───────────────────────────────────────────────────────────────
+    fg.register(
+        "phylogeny",
+        enable_fn=lambda _ne: _ne.enable_phylogeny(),
+        disable_fn=lambda _ne: _ne.disable_phylogeny(),
     )

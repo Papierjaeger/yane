@@ -6860,6 +6860,9 @@ class NeuroEvolution:
         self._meta_optimizer_enabled = bool(enabled)
         if enabled:
             from yane.evolution.meta_optimizer import MetaOptimizer
+            # Pass the full ParamRegistry so the MetaOptimizer tunes ALL
+            # registered parameters, not just the hardcoded subset.
+            reg = self._ensure_param_registry() if self.is_configured else None
             self._meta_optimizer_obj = MetaOptimizer(
                 tune_interval=tune_interval,
                 max_overhead_pct=max_overhead_pct,
@@ -6867,6 +6870,7 @@ class NeuroEvolution:
                 phase_min_gens=phase_min_gens,
                 ucb1_c=ucb1_c,
                 seed=self._seed,
+                param_registry=reg,
             )
         else:
             self._meta_optimizer_obj = None
