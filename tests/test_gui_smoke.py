@@ -37,8 +37,6 @@ class TestGUISmoke(unittest.TestCase):
         from yane.gui.tabs.training_tab import TrainingTab
 
         tab = TrainingTab()
-        self.assertGreaterEqual(tab.combo_lamarck_schedule.findText("Adaptiv"), 0)
-        self.assertGreaterEqual(tab.combo_lamarck_optimizer.findText("CMA-ES"), 0)
         self.assertGreaterEqual(tab.combo_interspecies_mode.findText("Adaptiv"), 0)
         self.assertTrue(hasattr(tab, "chk_multi_objective"))
         self.assertTrue(hasattr(tab, "chk_quality_diversity"))
@@ -82,41 +80,17 @@ class TestGUISmoke(unittest.TestCase):
             "matrix_forward",
             "cppn_substrate",
             "remote_eval",
-            "novelty",
-            "speciation",
-            "crossover",
-            "diversity_injection",
-            "lamarck_schedule",
-            "lamarck_optimizer",
-            "lamarck_steps",
-        }
-        required_adaptive = {
-            "adaptive_controller",
-            "operator_scheduler",
-            "interspecies_mode",
-            "interspecies_min_rate",
-            "interspecies_max_rate",
-            "lamarck_schedule",
-            "lamarck_optimizer",
-            "lamarck_budget",
-            "meta_adaptive",
-            "module_library",
-            "module_insert_rate",
         }
 
         for ex in load_examples():
             self.assertTrue(required_config <= set(ex.default_config), ex.name)
-            self.assertTrue(required_adaptive <= set(ex.default_adaptive_policies), ex.name)
 
     def test_example_defaults_are_applied_to_new_feature_controls(self):
         from yane.gui.tabs.training_tab import TrainingTab
 
         tab = TrainingTab()
         self.assertEqual(tab._current_example().name, "XOR")
-        self.assertEqual(tab.spin_workers.value(), 1)
         self.assertTrue(tab.chk_matrix_forward.isChecked())
-        self.assertEqual(tab.combo_lamarck_schedule.currentText(), "Explizit")
-        self.assertEqual(tab.spin_lamarck.value(), 2)
 
         reg33_idx = next(
             idx for idx, ex in tab._combo_index_map.items()
@@ -126,17 +100,11 @@ class TestGUISmoke(unittest.TestCase):
         self.assertTrue(tab.chk_quality_diversity.isChecked())
         self.assertTrue(tab.chk_fitness_components.isChecked())
         self.assertTrue(tab.chk_cppn_substrate.isChecked())
-        self.assertTrue(tab.chk_adaptive_ctrl.isChecked())
-        self.assertTrue(tab.chk_operator_scheduler.isChecked())
-        self.assertTrue(tab.chk_module_library.isChecked())
-        self.assertEqual(tab.combo_interspecies_mode.currentText(), "Adaptiv")
 
         xor_idx = next(idx for idx, ex in tab._combo_index_map.items() if ex.name == "XOR")
         tab.example_combo.setCurrentIndex(xor_idx)
         self.assertFalse(tab.chk_quality_diversity.isChecked())
         self.assertFalse(tab.chk_fitness_components.isChecked())
-        self.assertFalse(tab.chk_adaptive_ctrl.isChecked())
-        self.assertFalse(tab.chk_module_library.isChecked())
         tab.close()
 
     def test_training_worker_remote_bootstraps_first_genome(self):
@@ -320,146 +288,12 @@ class TestGUISmoke(unittest.TestCase):
             window.close()
 
 
-class TestGUIAdaptiveSection(unittest.TestCase):
-    """Stability tests for the Adaptive Control section added in the major update."""
+class TestGUICrashState(unittest.TestCase):
+    """Residual crash-state test that does not depend on removed adaptive widgets."""
 
     @classmethod
     def setUpClass(cls):
         cls.app = _app()
-
-    def _make_tab(self):
-        from yane.gui.tabs.training_tab import TrainingTab
-        tab = TrainingTab()
-        tab.resize(1200, 900)
-        tab.show()
-        self.app.processEvents()
-        return tab
-
-    # --- widget existence ---------------------------------------------------
-
-    def test_adaptive_control_widgets_exist(self):
-        tab = self._make_tab()
-        for attr in (
-            "lbl_interspecies_live",
-            "lbl_interspecies_trigger",
-            "lbl_interspecies_success",
-            "chk_adaptive_ctrl",
-            "chk_operator_scheduler",
-            "spin_lamarck_budget",
-            "lbl_lamarck_budget_used",
-            "combo_adaptive_preset",
-            "lbl_plateau_ratio",
-            "lbl_diversity_score",
-            "chk_meta_adaptive",
-            "chk_module_library",
-            "dspin_module_insert_rate",
-        ):
-            self.assertTrue(hasattr(tab, attr), f"TrainingTab missing attribute: {attr}")
-        tab.close()
-
-    # --- _update_adaptive_labels with various dict shapes -------------------
-
-    def test_update_adaptive_labels_empty_dict_does_not_crash(self):
-        tab = self._make_tab()
-        tab._update_adaptive_labels({})   # must not raise
-        self.app.processEvents()
-        tab.close()
-
-    def test_update_adaptive_labels_full_dict(self):
-        tab = self._make_tab()
-        mem = {
-            "interspecies_crossover_current": 0.07,
-            "interspecies_crossover_last_reason": "adaptive:global_plateau",
-            "interspecies_n_offspring": 20,
-            "interspecies_n_improved": 10,
-            "lamarck_budget_used": 30,
-            "lamarck_budget_per_gen": 100,
-            "plateau_ratio": 0.5,
-            "adaptive_controller": {
-                "signals": {
-                    "plateau_ratio": 0.42,
-                    "diversity_score": 0.31,
-                },
-            },
-        }
-        tab._update_adaptive_labels(mem)
-        self.app.processEvents()
-        self.assertEqual(tab.lbl_interspecies_live.text(), "0.070")
-        self.assertIn("plateau", tab.lbl_interspecies_trigger.text())
-        self.assertIn("50.0%", tab.lbl_interspecies_success.text())
-        self.assertIn("30/100", tab.lbl_lamarck_budget_used.text())
-        self.assertEqual(tab.lbl_plateau_ratio.text(), "0.42")
-        self.assertEqual(tab.lbl_diversity_score.text(), "0.31")
-        tab.close()
-
-    def test_update_adaptive_labels_no_interspecies_offspring(self):
-        tab = self._make_tab()
-        mem = {
-            "interspecies_n_offspring": 0,
-            "interspecies_n_improved": 0,
-        }
-        tab._update_adaptive_labels(mem)
-        self.app.processEvents()
-        self.assertEqual(tab.lbl_interspecies_success.text(), "—")
-        tab.close()
-
-    def test_update_adaptive_labels_unlimited_budget(self):
-        tab = self._make_tab()
-        tab._update_adaptive_labels({"lamarck_budget_per_gen": None, "lamarck_budget_used": 5})
-        self.app.processEvents()
-        self.assertIn("unbegrenzt", tab.lbl_lamarck_budget_used.text())
-        tab.close()
-
-    def test_update_adaptive_labels_budget_zero_treated_as_unlimited(self):
-        tab = self._make_tab()
-        tab._update_adaptive_labels({"lamarck_budget_per_gen": 0, "lamarck_budget_used": 3})
-        self.app.processEvents()
-        self.assertIn("unbegrenzt", tab.lbl_lamarck_budget_used.text())
-        tab.close()
-
-    # --- preset combo interaction -------------------------------------------
-
-    def test_preset_konservativ_disables_adaptive_ctrl(self):
-        tab = self._make_tab()
-        # Start with adaptive enabled, then switch to Konservativ
-        tab.chk_adaptive_ctrl.setChecked(True)
-        tab.chk_operator_scheduler.setChecked(True)
-        idx = tab.combo_adaptive_preset.findText("Konservativ")
-        self.assertGreaterEqual(idx, 0)
-        tab.combo_adaptive_preset.setCurrentIndex(idx)
-        self.app.processEvents()
-        self.assertFalse(tab.chk_adaptive_ctrl.isChecked())
-        self.assertFalse(tab.chk_operator_scheduler.isChecked())
-        tab.close()
-
-    def test_preset_balanciert_enables_adaptive_ctrl(self):
-        tab = self._make_tab()
-        idx = tab.combo_adaptive_preset.findText("Balanciert")
-        self.assertGreaterEqual(idx, 0)
-        tab.combo_adaptive_preset.setCurrentIndex(idx)
-        self.app.processEvents()
-        self.assertTrue(tab.chk_adaptive_ctrl.isChecked())
-        tab.close()
-
-    def test_preset_analysefreundlich_sets_budget(self):
-        tab = self._make_tab()
-        idx = tab.combo_adaptive_preset.findText("Analysefreundlich")
-        self.assertGreaterEqual(idx, 0)
-        tab.combo_adaptive_preset.setCurrentIndex(idx)
-        self.app.processEvents()
-        self.assertGreater(tab.spin_lamarck_budget.value(), 0)
-        tab.close()
-
-    def test_preset_aggressiv_enables_scheduler(self):
-        tab = self._make_tab()
-        idx = tab.combo_adaptive_preset.findText("Aggressiv")
-        self.assertGreaterEqual(idx, 0)
-        tab.combo_adaptive_preset.setCurrentIndex(idx)
-        self.app.processEvents()
-        self.assertTrue(tab.chk_operator_scheduler.isChecked())
-        tab.close()
-
-    # --- crash-state snapshot format ----------------------------------------
 
     def test_crash_state_dict_keys_present_in_mem(self):
         """All keys used in the crash-state snapshot must exist in population_memory_info()."""
@@ -478,48 +312,6 @@ class TestGUIAdaptiveSection(unittest.TestCase):
         ]
         for key in crash_keys:
             self.assertIn(key, mem, f"crash-state key missing from mem: {key}")
-
-    # --- reproducibility: adaptive widget state survives show/hide ----------
-
-    def test_adaptive_labels_update_after_widget_hidden_and_shown(self):
-        tab = self._make_tab()
-        tab.lbl_plateau_ratio.hide()
-        tab.lbl_plateau_ratio.show()
-        tab._update_adaptive_labels({"plateau_ratio": 0.77})
-        self.app.processEvents()
-        self.assertEqual(tab.lbl_plateau_ratio.text(), "0.77")
-        tab.close()
-
-    # --- preset file adaptive_policies applied to widgets -------------------
-
-    def test_builtin_adaptive_preset_applies_to_widgets(self):
-        """Loading an adaptive profile preset via the main preset combo applies adaptive_policies."""
-        from yane.util.presets import PRESET_DIR, load_preset
-        from yane.gui.tabs.training_tab import TrainingTab
-
-        preset = load_preset("adaptive_analysefreundlich", preset_dir=PRESET_DIR)
-        tab = self._make_tab()
-        # Simulate loading via _apply_adaptive_policies directly
-        tab._apply_adaptive_policies(preset.adaptive_policies)
-        self.app.processEvents()
-        self.assertTrue(tab.chk_adaptive_ctrl.isChecked())
-        self.assertTrue(tab.chk_operator_scheduler.isChecked())
-        self.assertGreater(tab.spin_lamarck_budget.value(), 0)
-        self.assertEqual(tab.combo_interspecies_mode.currentText(), "Adaptiv")
-        tab.close()
-
-    def test_konservativ_preset_applies_disables_features(self):
-        from yane.util.presets import PRESET_DIR, load_preset
-
-        preset = load_preset("adaptive_konservativ", preset_dir=PRESET_DIR)
-        tab = self._make_tab()
-        tab.chk_adaptive_ctrl.setChecked(True)
-        tab.chk_operator_scheduler.setChecked(True)
-        tab._apply_adaptive_policies(preset.adaptive_policies)
-        self.app.processEvents()
-        self.assertFalse(tab.chk_adaptive_ctrl.isChecked())
-        self.assertFalse(tab.chk_operator_scheduler.isChecked())
-        tab.close()
 
 
 class TestVisualizationWidgets(unittest.TestCase):
@@ -846,19 +638,6 @@ class TestFeaturesTabSmoke(unittest.TestCase):
         tab.apply_to_ne(ne)
         self.assertTrue(ne._attention_enabled)
         tab.close()
-
-    def test_main_window_has_features_tab(self):
-        """MainWindow now contains a FeaturesTab."""
-        from yane.gui.window import MainWindow
-        win = MainWindow()
-        win.show()
-        self.app.processEvents()
-        # Check the features tab exists
-        self.assertIsNotNone(win._features_tab)
-        tab_texts = [win._tabs.tabText(i) for i in range(win._tabs.count())]
-        self.assertTrue(any("Feature" in t for t in tab_texts))
-        win.close()
-
 
 if __name__ == "__main__":
     unittest.main()

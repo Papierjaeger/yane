@@ -433,6 +433,31 @@ class MetaOptimizer:
         "speciation.enabled",
         "stdp.enabled",
         "surrogate.enabled",
+        # ── Eval-cost multipliers: can blow the time budget ──────────────────────
+        # These params increase the number of fitness evaluations per genome.
+        # The profiler estimates eval_ms_per_genome WITHOUT these active; if
+        # MetaOptimizer sets anytime.max_evals=50, each genome costs 50× more.
+        "anytime.max_evals",
+        "anytime.min_evals",
+        "anytime.promotion_frac",  # only meaningful when anytime is active
+        # ── Lamarck quantity params: managed by the Lamarck adaptive system ──────
+        # lamarck.n_steps directly controls how many fitness evaluations each
+        # genome costs. Tuning it mid-run blows the time budget (the profiler
+        # estimated budget for the initial n_steps; a 5× increase means the
+        # run takes 5× longer than expected). Lamarck adaptive mode already
+        # self-tunes this. MetaOptimizer only controls lamarck.mode (which
+        # optimizer to use — that has no cost impact).
+        "lamarck.n_steps",
+        "lamarck.sigma",
+        # ── Population size: disruptive to change mid-training ─────────────────
+        # Changing pop.size mid-run requires re-building the population and
+        # massively changes the per-generation time budget, making short runs
+        # much worse.  The profiler already picks a sensible size via
+        # pick_pop_size(); the MetaOptimizer should respect that choice.
+        "pop.size",
+        "pop.adaptive_min",
+        "pop.adaptive_max",
+        "pop.adaptive_schedule",
         # ── Init-stage: require reconfigure() ──────────────────────────────────
         "conv_neat.n_blocks",
         "island.n_islands",
@@ -537,7 +562,21 @@ class MetaOptimizer:
                 try:
                     lo, hi = float(domain[0]), float(domain[1])
                     is_int = ptype == "integer"
-                    cont[name] = _ContOptimizer(name, lo, hi, is_int)
+                    opt = _ContOptimizer(name, lo, hi, is_int)
+                    # Seed the GP with the current value as a warm prior.
+                    # Using reward=0.1 (small positive) creates a local maximum
+                    # at the configured value, so EI suggests nearby values
+                    # rather than jumping to unexplored domain extremes.
+                    current = spec.get("current")
+                    if current is not None:
+                        try:
+                            cv = float(current)
+                            if lo <= cv <= hi:
+                                opt._gp.observe(cv, 0.1)
+                                opt._last_val = cv
+                        except (TypeError, ValueError):
+                            pass
+                    cont[name] = opt
                 except (TypeError, IndexError, ValueError):
                     pass
 

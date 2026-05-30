@@ -6938,6 +6938,7 @@ class NeuroEvolution:
         impact_threshold: float = 0.0,
         degradation_patience: int = 30,
         reactivation_delay: int = 100,
+        include_heavyweight: bool = False,
     ) -> None:
         """Automatically select and gate research features via UCB1 + Successive Halving.
 
@@ -6974,7 +6975,7 @@ class NeuroEvolution:
             degradation_patience=degradation_patience,
             reactivation_delay=reactivation_delay,
         )
-        _register_known_features(fg, self)
+        _register_known_features(fg, self, include_heavyweight=include_heavyweight)
         self._feature_gate = fg
 
     def get_feature_gating_diagnostics(self) -> dict:
@@ -7117,12 +7118,25 @@ class NeuroEvolution:
         )
 
         # ── 6. Feature Gating ───────────────────────────────────────────────
+        # Scale conservatism with expected training length: for short runs
+        # (few total generations) test features rarely and briefly so they
+        # don't disturb a near-converged population.
+        _expected_gens = max(10, iters // max(1, pop_size))
+        _test_interval = max(50, _expected_gens // 6)   # ≥50, at most 1/6 of budget
+        _test_duration = max(20, _expected_gens // 15)  # ≥20 gens per test
+        _degradation_patience = max(60, _expected_gens // 4)
+        # Heavyweight features (STDP, attention, neuromodulation, LTC, augmentation)
+        # add per-sample computation that can multiply eval time by 10-100×.
+        # Only enable them automatically for temporal/RL tasks where they are
+        # likely beneficial; for regression/classification keep them disabled.
+        _is_temporal = getattr(profile, "task_type", "") in ("rl_discrete", "rl_continuous")
         self.set_auto_features(
             enabled=True,
             max_concurrent=2,
-            test_interval=20,
-            test_duration=10,
-            degradation_patience=40,
+            test_interval=_test_interval,
+            test_duration=_test_duration,
+            degradation_patience=_degradation_patience,
+            include_heavyweight=_is_temporal,
         )
 
         # ── 7. Train ────────────────────────────────────────────────────────

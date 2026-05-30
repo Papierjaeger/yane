@@ -315,12 +315,21 @@ class FeatureGate:
 # Default feature registration for NeuroEvolution
 # ------------------------------------------------------------------
 
-def _register_known_features(fg: FeatureGate, ne: Any) -> None:
-    """Register all known YANE research features into *fg*.
+def _register_known_features(fg: FeatureGate, ne: Any, *, include_heavyweight: bool = False) -> None:
+    """Register runtime-togglable research features into *fg*.
 
-    Only runtime-togglable features are included.  Init-stage features
-    (input_grouping, output_grouping, conv_neat) must be set before
-    ``configure()`` and cannot be safely toggled mid-training.
+    Parameters
+    ----------
+    include_heavyweight:
+        When ``False`` (default), only lightweight features are registered —
+        those with negligible per-evaluation overhead.  Heavyweight features
+        (attention, STDP, neuromodulation, LTC, probabilistic, augmentation)
+        add per-sample computation and can multiply eval time by 10-100× on
+        large datasets.  Set ``True`` only when the problem is known to be
+        compatible (e.g. temporal tasks where STDP is useful).
+
+    Init-stage features (input_grouping, output_grouping, conv_neat) are
+    never included; they require a full reconfigure().
     """
     # ── Original 5 ────────────────────────────────────────────────────────────
     fg.register(
@@ -349,39 +358,43 @@ def _register_known_features(fg: FeatureGate, ne: Any) -> None:
         disable_fn=lambda _ne: _ne.set_diversity_injection(enabled=False),
     )
 
-    # ── Neural architecture (runtime-safe: all wrap forward/eval, no topology change) ──
-    fg.register(
-        "attention",
-        enable_fn=lambda _ne: _ne.set_attention(enabled=True),
-        disable_fn=lambda _ne: _ne.set_attention(enabled=False),
-    )
-    fg.register(
-        "ltc",
-        enable_fn=lambda _ne: _ne.set_ltc(enabled=True),
-        disable_fn=lambda _ne: _ne.set_ltc(enabled=False),
-    )
-    fg.register(
-        "neuromodulation",
-        enable_fn=lambda _ne: _ne.set_neuromodulation(enabled=True),
-        disable_fn=lambda _ne: _ne.set_neuromodulation(enabled=False),
-    )
-    fg.register(
-        "stdp",
-        enable_fn=lambda _ne: _ne.set_stdp(enabled=True),
-        disable_fn=lambda _ne: _ne.set_stdp(enabled=False),
-    )
-    fg.register(
-        "probabilistic",
-        enable_fn=lambda _ne: _ne.set_probabilistic(enabled=True),
-        disable_fn=lambda _ne: _ne.set_probabilistic(enabled=False),
-    )
-
-    # ── Learning mechanisms ────────────────────────────────────────────────────
-    fg.register(
-        "augmentation",
-        enable_fn=lambda _ne: _ne.set_evolutionary_augmentation(enabled=True),
-        disable_fn=lambda _ne: _ne.set_evolutionary_augmentation(enabled=False),
-    )
+    # ── Heavyweight features (opt-in; can multiply per-eval cost significantly) ──
+    # STDP/Neuromodulation: update weights after every forward pass × every sample.
+    # Attention: adds matrix multiply of (num_heads × head_dim × n_inputs) per eval.
+    # LTC: runs ODE step after each forward call.
+    # Augmentation: runs augmentation pipeline per eval.
+    # On large datasets (300+ samples) these can cause 10-100× eval slowdown.
+    if include_heavyweight:
+        fg.register(
+            "attention",
+            enable_fn=lambda _ne: _ne.set_attention(enabled=True),
+            disable_fn=lambda _ne: _ne.set_attention(enabled=False),
+        )
+        fg.register(
+            "ltc",
+            enable_fn=lambda _ne: _ne.set_ltc(enabled=True),
+            disable_fn=lambda _ne: _ne.set_ltc(enabled=False),
+        )
+        fg.register(
+            "neuromodulation",
+            enable_fn=lambda _ne: _ne.set_neuromodulation(enabled=True),
+            disable_fn=lambda _ne: _ne.set_neuromodulation(enabled=False),
+        )
+        fg.register(
+            "stdp",
+            enable_fn=lambda _ne: _ne.set_stdp(enabled=True),
+            disable_fn=lambda _ne: _ne.set_stdp(enabled=False),
+        )
+        fg.register(
+            "probabilistic",
+            enable_fn=lambda _ne: _ne.set_probabilistic(enabled=True),
+            disable_fn=lambda _ne: _ne.set_probabilistic(enabled=False),
+        )
+        fg.register(
+            "augmentation",
+            enable_fn=lambda _ne: _ne.set_evolutionary_augmentation(enabled=True),
+            disable_fn=lambda _ne: _ne.set_evolutionary_augmentation(enabled=False),
+        )
 
     # ── Evaluation ─────────────────────────────────────────────────────────────
     fg.register(

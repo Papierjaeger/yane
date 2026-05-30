@@ -82,9 +82,8 @@ class TrainingTab(QWidget):
     ne_ready = Signal(object)               # NeuroEvolution instance → aux_tabs
     render_frame = Signal(object)           # numpy array, emitted from worker thread
 
-    def __init__(self, parent=None, features_tab=None) -> None:
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._features_tab = features_tab  # FeaturesTab | None
         self._examples = load_examples()
         self._worker: TrainingWorker | None = None
         self._auto_worker: AutoSetupWorker | None = None
@@ -97,6 +96,7 @@ class TrainingTab(QWidget):
         self._run_id = 0
         self._start_time: float = 0.0
         self._last_heavy_update: float = 0.0  # throttle for slow widgets
+        self._auto_pop_size: int = 100  # set by AutoSetupWorker after profiling
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -139,9 +139,6 @@ class TrainingTab(QWidget):
 
         self.spin_inputs  = QSpinBox(); self.spin_inputs.setRange(1, 1024)
         self.spin_outputs = QSpinBox(); self.spin_outputs.setRange(1, 256)
-        self.spin_nodes   = QSpinBox(); self.spin_nodes.setRange(0, 500); self.spin_nodes.setSpecialValueText("unlimited")
-        self.spin_conns   = QSpinBox(); self.spin_conns.setRange(0, 5000); self.spin_conns.setSpecialValueText("unlimited")
-        self.spin_pop     = QSpinBox(); self.spin_pop.setRange(2, 1000); self.spin_pop.setValue(100)
         self.dspin_mem    = QDoubleSpinBox(); self.dspin_mem.setRange(0.1, 32.0); self.dspin_mem.setSingleStep(0.5); self.dspin_mem.setValue(2.0); self.dspin_mem.setSuffix(" GB")
         self.dspin_target = QDoubleSpinBox(); self.dspin_target.setRange(-1e9, 1e9); self.dspin_target.setSingleStep(0.1); self.dspin_target.setDecimals(4); self.dspin_target.setSpecialValueText("—")
 
@@ -153,19 +150,6 @@ class TrainingTab(QWidget):
             "Anzahl der Output-Neuronen.\n"
             "Muss der Anzahl der Aktionen/Ausgaben entsprechen.\n"
             "Beispiel: CartPole hat 2 Aktionen (links/rechts) → Outputs = 2")
-        self.spin_nodes.setToolTip(
-            "Maximale Gesamtzahl an Nodes pro Netz (Input + Hidden + Output).\n"
-            "Begrenzt die Netzgröße — kleinere Netze sind schneller aber weniger ausdrucksstark.\n"
-            "0 = unbegrenzt (Netz wächst so groß wie nötig).")
-        self.spin_conns.setToolTip(
-            "Maximale Anzahl an Verbindungen (Synapsen) pro Netz.\n"
-            "Begrenzt die Komplexität — weniger Verbindungen = schnellere Forward-Passes.\n"
-            "0 = unbegrenzt.")
-        self.spin_pop.setToolTip(
-            "Anzahl der Genomes in der Population.\n"
-            "Mehr Genomes = mehr Diversität und robustere Exploration,\n"
-            "aber langsamere Iterationen (jedes Genome muss einmal evaluiert werden).\n"
-            "Typisch: 50–200 für einfache Tasks, 200–500 für komplexe.")
         self.dspin_mem.setToolTip(
             "Maximaler RAM-Verbrauch dieses Prozesses in GB.\n"
             "Bei Überschreitung wird die Population auf die Hälfte geschrumpft\n"
@@ -183,39 +167,6 @@ class TrainingTab(QWidget):
             "Ersetzt shared_fitness durch lineare Ränge vor der Selektion.\n"
             "Macht Selektion robust gegen Fitness-Ausreißer und Skalierungsunterschiede.\n"
             "Empfohlen bei Aufgaben mit sehr unterschiedlichen Fitness-Größenordnungen.")
-
-        # --- Ablation checkboxes (all default ON) ---
-        self.chk_novelty = QCheckBox("aktiv")
-        self.chk_novelty.setChecked(True)
-        self.chk_novelty.setToolTip(
-            "Novelty Search (Ablation).\n"
-            "Wenn aktiv: novel Genome bekommen einen Selektionsbonus (0.1–0.5).\n"
-            "Wenn deaktiviert: rein fitness-basierte Selektion, kein Neuheitsbonus.\n"
-            "Deaktivieren um den Beitrag von Novelty Search zu messen.")
-
-        self.chk_speciation = QCheckBox("aktiv")
-        self.chk_speciation.setChecked(True)
-        self.chk_speciation.setToolTip(
-            "Speciation (Ablation).\n"
-            "Wenn aktiv: NEAT-artige Species-Einteilung, Fitness-Sharing, Species-Budget.\n"
-            "Wenn deaktiviert: alle Genome in einer einzigen Species, kein Nischen-Schutz.\n"
-            "Deaktivieren um den Beitrag von Speciation zu messen.")
-
-        self.chk_crossover = QCheckBox("aktiv")
-        self.chk_crossover.setChecked(True)
-        self.chk_crossover.setToolTip(
-            "Crossover (Ablation).\n"
-            "Wenn aktiv: Offspring kann durch Crossover zweier Eltern entstehen.\n"
-            "Wenn deaktiviert: alle Offspring entstehen durch Mutation eines Elternteils.\n"
-            "Deaktivieren um den Beitrag von sexueller Reproduktion zu messen.")
-
-        self.chk_diversity_injection = QCheckBox("aktiv")
-        self.chk_diversity_injection.setChecked(True)
-        self.chk_diversity_injection.setToolTip(
-            "Diversity Injection (Ablation).\n"
-            "Wenn aktiv: bei Stagnation werden frische oder strukturell diverse Genome injiziert.\n"
-            "Wenn deaktiviert: kein automatischer Stagnations-Escape.\n"
-            "Deaktivieren um den Beitrag der Diversitätsinjektion zu messen.")
 
         self.dspin_interspecies = QDoubleSpinBox()
         self.dspin_interspecies.setRange(0.0, 0.2)
@@ -318,74 +269,6 @@ class TrainingTab(QWidget):
             "die nie entfernt werden. Schützt strukturelle Innovationen\n"
             "auch in kleinen Species. Default 1.")
 
-        self.combo_lamarck_schedule = QComboBox()
-        self.combo_lamarck_schedule.addItems(["Adaptiv", "Explizit", "Aus"])
-        self.combo_lamarck_schedule.setToolTip(
-            "Lamarck-Zeitplan.\n"
-            "Adaptiv läuft nur bei Stagnation und nur für starke Genome.\n"
-            "Explizit läuft mit fester Schrittzahl vor jeder Evaluation.\n"
-            "Aus deaktiviert Lamarck vollständig.")
-
-        self.combo_lamarck_optimizer = QComboBox()
-        self.combo_lamarck_optimizer.addItems(["Hill-Climbing", "NES", "SA", "CMA-ES"])
-        self.combo_lamarck_optimizer.setToolTip(
-            "Lokaler Optimierer für Lamarck.\n"
-            "Der Optimierer ist unabhängig vom Zeitplan, also auch NES, SA und CMA-ES\n"
-            "können adaptiv bei Stagnation laufen.")
-
-        self.spin_lamarck = QSpinBox()
-        self.spin_lamarck.setRange(1, 20)
-        self.spin_lamarck.setValue(5)
-        self.spin_lamarck.setEnabled(False)
-        self.spin_lamarck.setToolTip(
-            "Anzahl Verfeinerungsschritte pro Genome (für alle Explizit-Modi).\n\n"
-            "Hill-Climbing: 1 Eval pro Schritt.\n"
-            "NES: 2k+1 Evals für k Schritte (antithetische Paare + Gradient-Step).\n"
-            "SA: 1 Eval pro Schritt mit Temperatur-basierter Akzeptanz.\n\n"
-            "CMA-ES: mehrere Kandidaten pro Schritt mit Kovarianz-Update.\n\n"
-            "Schrittgröße = lamarck_sigma des Genoms.\n"
-            "3–5 = empfohlen für Regression / Supervised Learning.")
-
-        self.combo_lamarck_schedule.currentIndexChanged.connect(self._on_lamarck_mode_changed)
-
-        self.spin_multi_eval = QSpinBox()
-        self.spin_multi_eval.setRange(1, 50)
-        self.spin_multi_eval.setValue(1)
-        self.spin_multi_eval.setSpecialValueText("—")
-        self.spin_multi_eval.setToolTip(
-            "Mehrfachbewertung: Anzahl Evaluierungen pro Genome.\n\n"
-            "Bei stochastischen Umgebungen ist eine einzelne Episode oft zu verrauscht.\n"
-            "Mit n > 1 wird jedes Genome n-mal bewertet und die Ergebnisse aggregiert.\n\n"
-            "1 = deaktiviert (Standard)\n"
-            "3–10 = gut für rauschige Gym-Umgebungen\n\n"
-            "Kosten: n-facher Zeitaufwand pro Genome!")
-
-        self.combo_aggregation = QComboBox()
-        self.combo_aggregation.addItems(["mean", "median", "min"])
-        self.combo_aggregation.setToolTip(
-            "Aggregationsmethode für Mehrfachbewertung:\n\n"
-            "mean   — Mittelwert (Standard, empfohlen)\n"
-            "median — Median; robust gegen einzelne Ausreißer-Episoden\n"
-            "min    — Worst-Case; konservativste Wahl, selektiert auf Robustheit")
-        self.combo_aggregation.setEnabled(False)
-
-        self.dspin_sigma_penalty = QDoubleSpinBox()
-        self.dspin_sigma_penalty.setRange(0.0, 10.0)
-        self.dspin_sigma_penalty.setSingleStep(0.1)
-        self.dspin_sigma_penalty.setValue(0.0)
-        self.dspin_sigma_penalty.setDecimals(2)
-        self.dspin_sigma_penalty.setSpecialValueText("—")
-        self.dspin_sigma_penalty.setToolTip(
-            "Varianz-Strafe bei Mehrfachbewertung.\n\n"
-            "Endwert = aggregate(fitness) − sigma_penalty × std(fitness)\n\n"
-            "0   = keine Strafe (Standard)\n"
-            "0.5 = mäßige Strafe für inkonsistente Genome\n"
-            "1.0 = starke Strafe; ein Genome mit std=2 verliert 2 Fitnesspunkte\n\n"
-            "Nützlich wenn robuste Policies gewünscht sind, nicht nur gute Mittelwerte.")
-        self.dspin_sigma_penalty.setEnabled(False)
-
-        self.spin_multi_eval.valueChanged.connect(self._on_multi_eval_changed)
-
         self.chk_multi_objective = QCheckBox("aktiv")
         self.chk_multi_objective.setChecked(False)
         self.chk_multi_objective.setToolTip(
@@ -479,40 +362,6 @@ class TrainingTab(QWidget):
             "Remote-Batchgröße. Auto nutzt 2 Jobs pro Worker-URL."
         )
 
-        import multiprocessing as _mp
-        _ncpu = _mp.cpu_count()
-        self.spin_workers = QSpinBox()
-        self.spin_workers.setRange(0, _ncpu)
-        self.spin_workers.setValue(0)
-        self.spin_workers.setSpecialValueText("Auto")
-        self.spin_workers.setToolTip(
-            f"Anzahl paralleler Prozesse für die Fitness-Berechnung.\n\n"
-            f"Auto (0): Misst die Evaluierungsgeschwindigkeit und wählt\n"
-            f"   automatisch die optimale Worker-Anzahl:\n"
-            f"   - Zu schnell (<0.5ms/Genome): sequenziell\n"
-            f"   - Mittel (1-10ms/Genome): 2–8 Worker\n"
-            f"   - Langsam (>10ms/Genome): alle {_ncpu} CPU-Kerne\n\n"
-            f"1: Immer sequenziell (kein MP-Overhead).\n"
-            f"2–{_ncpu}: Feste Worker-Anzahl.\n\n"
-            f"MP lohnt sich nur für langsame Fitness-Funktionen\n"
-            f"(Gym mit langen Episoden, MNIST, eigene komplexe Funktionen).\n"
-            f"Für XOR/Regression ist 'Auto' immer optimal.\n\n"
-            f"Dein System hat {_ncpu} CPU-Kerne.")
-
-        self.spin_species = QSpinBox()
-        self.spin_species.setRange(2, 50)
-        self.spin_species.setValue(5)
-        self.spin_species.setToolTip(
-            "Zielanzahl der Arten (Species) in der Population.\n"
-            "Der Kompatibilitätsschwellwert wird automatisch angepasst,\n"
-            "um diese Anzahl zu erreichen.\n\n"
-            "Mehr Arten = mehr Strukturnischen geschützt.\n"
-            "Hilfreich für XOR-ähnliche Aufgaben (Regression, binäre Mappings):\n"
-            "  5   → Standard (gut für Gym-Environments)\n"
-            "  10–20 → besser für diskrete Mappings (XOR, Regression)\n\n"
-            "Benchmark: species=20 löst Regression 2→2 in 3/5 Seeds bei 60k it,\n"
-            "           species=5  löst sie in 0/5 Seeds bei gleicher Laufzeit.")
-
         self.chk_normalize = QCheckBox("aktiv")
         self.chk_normalize.setChecked(True)
         self.chk_normalize.setVisible(False)   # shown only for examples that support it
@@ -553,27 +402,6 @@ class TrainingTab(QWidget):
 
         cfg_form.addRow("Inputs:",         self.spin_inputs)
         cfg_form.addRow("Outputs:",        self.spin_outputs)
-        cfg_form.addRow("Max nodes:",      self.spin_nodes)
-        cfg_form.addRow("Max connections:", self.spin_conns)
-        cfg_form.addRow("Population:",     self.spin_pop)
-        self.lbl_workers_active = _label("", "mutRate")
-        self.lbl_workers_active.setToolTip(
-            "Tatsächlich genutzte Worker-Anzahl während des Trainings.\n"
-            "Wird beim Start automatisch bestimmt (Auto-Modus)\n"
-            "oder entspricht dem manuell gewählten Wert.")
-        cfg_form.addRow("Workers:", inline_row(self.spin_workers, self.lbl_workers_active))
-        cfg_form.addRow("Target species:", self.spin_species)
-        cfg_form.addRow(
-            "Lamarck:",
-            inline_row(
-                self.combo_lamarck_schedule,
-                self.combo_lamarck_optimizer,
-                self.spin_lamarck,
-            ),
-        )
-        cfg_form.addRow("Multi-eval:",     self.spin_multi_eval)
-        cfg_form.addRow("Aggregation:",   self.combo_aggregation)
-        cfg_form.addRow("Sigma penalty:", self.dspin_sigma_penalty)
         cfg_form.addRow("Normalization:", self.chk_normalize)
         cfg_form.addRow("Memory:",        self.chk_memory)
         cfg_form.addRow("Curriculum:",    self.chk_curriculum)
@@ -651,50 +479,10 @@ class TrainingTab(QWidget):
             "Fitness-gewichtetes Blending beim Crossover (blend_alpha=0.7).")
         advance_grp.addRow("Weight inheritance:", self.chk_weight_inheritance)
 
-        self.chk_online_tuning = QCheckBox("aktiv")
-        self.chk_online_tuning.setToolTip(
-            "UCB1-Bandit-Tuning von mutation_rate und lamarck_steps während des Trainings.")
-        advance_grp.addRow("Online tuning:", self.chk_online_tuning)
-
         self.combo_codec = QComboBox()
         self.combo_codec.addItems(["pickle", "json"])
         self.combo_codec.setToolTip("Checkpoint-Serialisierungsformat.")
         advance_grp.addRow("Checkpoint codec:", self.combo_codec)
-
-        # ── Island model ────────────────────────────────────────────────────
-        self.chk_island_model = QCheckBox("aktiv")
-        self.chk_island_model.setChecked(False)
-        self.chk_island_model.setToolTip(
-            "Multi-Population Island Model aktivieren.\n"
-            "Jede Insel hat eine eigene Population; regelmäßig migrieren die\n"
-            "besten Genome zwischen Inseln.")
-        self.spin_n_islands = QSpinBox()
-        self.spin_n_islands.setRange(2, 50)
-        self.spin_n_islands.setValue(4)
-        self.spin_n_islands.setEnabled(False)
-        self.spin_migrate_interval = QSpinBox()
-        self.spin_migrate_interval.setRange(1, 100)
-        self.spin_migrate_interval.setValue(5)
-        self.spin_migrate_interval.setEnabled(False)
-        self.spin_migrate_count = QSpinBox()
-        self.spin_migrate_count.setRange(1, 20)
-        self.spin_migrate_count.setValue(3)
-        self.spin_migrate_count.setEnabled(False)
-        self.chk_island_model.toggled.connect(
-            lambda on: (
-                self.spin_n_islands.setEnabled(on),
-                self.spin_migrate_interval.setEnabled(on),
-                self.spin_migrate_count.setEnabled(on),
-            )
-        )
-        advance_grp.addRow(
-            "Island model:",
-            inline_row(
-                self.chk_island_model, QLabel("islands"), self.spin_n_islands,
-                QLabel("migrate every"), self.spin_migrate_interval,
-                QLabel("count"), self.spin_migrate_count,
-            ),
-        )
 
         # ── Checkpoint policy ───────────────────────────────────────────────
         self.chk_auto_checkpoint = QCheckBox("aktiv")
@@ -767,20 +555,6 @@ class TrainingTab(QWidget):
                 self.spin_remote_batch,
             ),
         )
-        ablation_row = QWidget()
-        ablation_lay = QHBoxLayout(ablation_row)
-        ablation_lay.setContentsMargins(0, 0, 0, 0)
-        ablation_lay.setSpacing(8)
-        for chk, lbl in (
-            (self.chk_novelty,            "Novelty"),
-            (self.chk_speciation,         "Speciation"),
-            (self.chk_crossover,          "Crossover"),
-            (self.chk_diversity_injection, "Diversity inj."),
-        ):
-            chk.setText(lbl)
-            ablation_lay.addWidget(chk)
-        ablation_lay.addStretch()
-        advance_grp.addRow("Ablation (off = disable):", ablation_row)
         interspecies_row = QWidget()
         interspecies_lay = QHBoxLayout(interspecies_row)
         interspecies_lay.setContentsMargins(0, 0, 0, 0)
@@ -819,164 +593,19 @@ class TrainingTab(QWidget):
         layout.addWidget(cfg)
         layout.addWidget(advance_grp)
 
-        # --- Adaptive Control Section ---
-        adaptive_grp = CollapsibleGroup("Adaptive Control", collapsed=True)
-
-        # Interspecies Crossover live display
-        self.lbl_interspecies_live = _label("—", "mutRate")
-        self.lbl_interspecies_live.setToolTip(
-            "Live-Rate des adaptiven Interspecies-Crossovers.\n"
-            "Steigt bei Stagnation, niedrigem Novelty oder Species-Isolation.\n"
-            "Sinkt wenn Crossover-Offspring schlechter abschneiden als die Eltern.")
-
-        self.lbl_interspecies_trigger = _label("—", "sectionTitle")
-        self.lbl_interspecies_trigger.setWordWrap(True)
-        self.lbl_interspecies_trigger.setToolTip("Letzter Grund für die adaptive Rate-Anpassung.")
-
-        interspecies_live_row = QWidget()
-        interspecies_live_lay = QHBoxLayout(interspecies_live_row)
-        interspecies_live_lay.setContentsMargins(0, 0, 0, 0)
-        interspecies_live_lay.setSpacing(6)
-        interspecies_live_lay.addWidget(self.lbl_interspecies_live)
-        interspecies_live_lay.addWidget(QLabel("→"))
-        interspecies_live_lay.addWidget(self.lbl_interspecies_trigger, stretch=1)
-        adaptive_grp.addRow("Interspecies rate:", interspecies_live_row)
-
-        # Interspecies success diagnostics
-        self.lbl_interspecies_success = _label("—", "mutRate")
-        self.lbl_interspecies_success.setToolTip(
-            "Erfolgsrate Interspecies-Crossover: Anteil der Offspring, die besser\n"
-            "als ihre Eltern sind. Niedrig = Protection wird aktiv (Rate wird gesenkt).")
-        adaptive_grp.addRow("Cross-species success:", self.lbl_interspecies_success)
-
-        # Adaptive Controller
-        self.chk_adaptive_ctrl = QCheckBox("aktiv")
-        self.chk_adaptive_ctrl.setChecked(False)
-        self.chk_adaptive_ctrl.setToolTip(
-            "Aktiviert den zentralen Adaptive Control Layer.\n"
-            "Tick pro Generation: Interspecies-Crossover, QD-Druck, Pruning und\n"
-            "Lamarck-Budget werden anhand von Plateau, Diversität und Novelty gesteuert.")
-        adaptive_grp.addRow("Adaptive Control Layer:", self.chk_adaptive_ctrl)
-
-        # Operator Scheduler
-        self.chk_operator_scheduler = QCheckBox("aktiv")
-        self.chk_operator_scheduler.setChecked(False)
-        self.chk_operator_scheduler.setToolTip(
-            "Aktiviert den adaptiven Operator-Scheduler.\n"
-            "Mutationsgewichte (Add-Node, Remove, Rewire usw.) werden anhand\n"
-            "von Erfolgsraten pro Operator und Species automatisch dosiert.\n"
-            "Pruning-Druck steigt bei Komplexitäts-Wachstum + Stagnation.")
-        adaptive_grp.addRow("Operator Scheduler:", self.chk_operator_scheduler)
-
-        self.chk_meta_adaptive = QCheckBox("aktiv")
-        self.chk_meta_adaptive.setChecked(False)
-        self.chk_meta_adaptive.setToolTip(
-            "Evolviert Policy-Gene für Operator-Exploration, Lamarck-Budget\n"
-            "und Interspecies-Rate global und pro Species.")
-        adaptive_grp.addRow("Meta-adaptive policies:", self.chk_meta_adaptive)
-
-        self.chk_module_library = QCheckBox("aktiv")
-        self.chk_module_library.setChecked(False)
-        self.chk_module_library.setToolTip(
-            "Speichert gute Hidden-Module in einer Bibliothek und fügt sie\n"
-            "mit einer kleinen Mutationsrate in Offspring ein.")
-        self.dspin_module_insert_rate = QDoubleSpinBox()
-        self.dspin_module_insert_rate.setRange(0.0, 1.0)
-        self.dspin_module_insert_rate.setSingleStep(0.01)
-        self.dspin_module_insert_rate.setDecimals(3)
-        self.dspin_module_insert_rate.setValue(0.02)
-        module_row = QWidget()
-        module_lay = QHBoxLayout(module_row)
-        module_lay.setContentsMargins(0, 0, 0, 0)
-        module_lay.setSpacing(4)
-        module_lay.addWidget(self.chk_module_library)
-        module_lay.addWidget(QLabel("insert"))
-        module_lay.addWidget(self.dspin_module_insert_rate)
-        adaptive_grp.addRow("Module library:", module_row)
-
-        # Lamarck budget
-        self.spin_lamarck_budget = QSpinBox()
-        self.spin_lamarck_budget.setRange(0, 10000)
-        self.spin_lamarck_budget.setValue(0)
-        self.spin_lamarck_budget.setSpecialValueText("—")
-        self.spin_lamarck_budget.setToolTip(
-            "Maximale Lamarck-Evaluierungen pro Generation.\n"
-            "0 = unbegrenzt (Standard).\n"
-            "z.B. 50 = nach 50 Lamarck-Schritten werden weitere Genome\n"
-            "in dieser Generation nicht verfeinert.\n"
-            "Verhindert, dass Lamarck das gesamte Evaluierungsbudget verbraucht.")
-        self.lbl_lamarck_budget_used = _label("—", "mutRate")
-        self.lbl_lamarck_budget_used.setToolTip("Verwendete Lamarck-Schritte in der aktuellen Generation.")
-        lamarck_budget_row = QWidget()
-        lamarck_budget_lay = QHBoxLayout(lamarck_budget_row)
-        lamarck_budget_lay.setContentsMargins(0, 0, 0, 0)
-        lamarck_budget_lay.setSpacing(4)
-        lamarck_budget_lay.addWidget(self.spin_lamarck_budget)
-        lamarck_budget_lay.addWidget(QLabel("benutzt:"))
-        lamarck_budget_lay.addWidget(self.lbl_lamarck_budget_used)
-        adaptive_grp.addRow("Lamarck budget/gen:", lamarck_budget_row)
-
-        # Adaptive Presets
-        self.combo_adaptive_preset = QComboBox()
-        self.combo_adaptive_preset.addItems([
-            "Kein Preset",
-            "Konservativ",
-            "Balanciert",
-            "Aggressiv",
-            "Analysefreundlich",
-        ])
-        self.combo_adaptive_preset.setToolTip(
-            "Adaptive Profile:\n\n"
-            "Konservativ: Interspecies-Crossover fix, kein Operator-Scheduler.\n"
-            "  Gut für stabile, langsame Tasks.\n\n"
-            "Balanciert: Adaptiver Interspecies-Crossover (0.01–0.15),\n"
-            "  Operator-Scheduler aktiv, moderate Pruning-Pressung.\n\n"
-            "Aggressiv: Breite Interspecies-Rate (0.02–0.30),\n"
-            "  starker Operator-Scheduler, hoher QD-Druck bei Plateau.\n\n"
-            "Analysefreundlich: Alle adaptiven Features aktiv,\n"
-            "  aber konservative Grenzen für reproduzierbare Läufe.")
-        self.combo_adaptive_preset.currentIndexChanged.connect(self._on_adaptive_preset_changed)
-        adaptive_grp.addRow("Adaptives Profil:", self.combo_adaptive_preset)
-
-        # Adaptive signals display
-        self.lbl_plateau_ratio = _label("—", "mutRate")
-        self.lbl_plateau_ratio.setToolTip("Plateau-Ratio: Stagnation_count / Stagnation_threshold. 1.0 = volle Stagnation.")
-        self.lbl_diversity_score = _label("—", "mutRate")
-        self.lbl_diversity_score.setToolTip("Diversity-Score: Durchschnittliche Novelty der Population.")
-        signals_row = QWidget()
-        signals_lay = QHBoxLayout(signals_row)
-        signals_lay.setContentsMargins(0, 0, 0, 0)
-        signals_lay.setSpacing(6)
-        signals_lay.addWidget(QLabel("Plateau:"))
-        signals_lay.addWidget(self.lbl_plateau_ratio)
-        signals_lay.addWidget(QLabel("  Diversity:"))
-        signals_lay.addWidget(self.lbl_diversity_score)
-        signals_lay.addStretch()
-        adaptive_grp.addRow("Adaptive Signale:", signals_row)
-
-        layout.addWidget(adaptive_grp)
-
         # --- Controls ---
         ctrl = QWidget()
         ctrl_row = QHBoxLayout(ctrl)
         ctrl_row.setContentsMargins(0, 0, 0, 0)
-        self.btn_start = QPushButton("▶  Start"); self.btn_start.setObjectName("startBtn")
+        self.btn_auto_train = QPushButton("▶  Start"); self.btn_auto_train.setObjectName("startBtn")
         self.btn_pause = QPushButton("⏸  Pause"); self.btn_pause.setObjectName("pauseBtn")
         self.btn_stop  = QPushButton("■  Stop");  self.btn_stop.setObjectName("stopBtn")
         self.btn_pause.setEnabled(False)
         self.btn_stop.setEnabled(False)
         self.status_lbl = QLabel("Idle")
-        self.btn_start.clicked.connect(self.start_training)
+        self.btn_auto_train.clicked.connect(self.start_training)
         self.btn_pause.clicked.connect(self._toggle_pause)
         self.btn_stop.clicked.connect(self.stop_training)
-        self.btn_auto_train = QPushButton("⚡ Auto-Train")
-        self.btn_auto_train.setObjectName("autoTrainBtn")
-        self.btn_auto_train.setToolTip(
-            "Startet Zero-Config-Training:\n"
-            "Profile problem → Knowledge-Base lookup → MetaOptimizer + FeatureGating → Train.\n"
-            "Kein manuelles Konfigurieren nötig."
-        )
-        self.btn_auto_train.clicked.connect(self.start_auto_train)
         self.btn_render = QPushButton("Render: Off")
         self.btn_render.setCheckable(True)
         self.btn_render.setVisible(False)
@@ -985,10 +614,9 @@ class TrainingTab(QWidget):
         self.btn_run_best.setVisible(False)
         self.btn_run_best.setEnabled(False)
         self.btn_run_best.clicked.connect(self._run_best_episode)
-        ctrl_row.addWidget(self.btn_start)
+        ctrl_row.addWidget(self.btn_auto_train)
         ctrl_row.addWidget(self.btn_pause)
         ctrl_row.addWidget(self.btn_stop)
-        ctrl_row.addWidget(self.btn_auto_train)
         ctrl_row.addWidget(self.btn_render)
         ctrl_row.addWidget(self.btn_run_best)
         ctrl_row.addWidget(self.status_lbl)
@@ -1144,21 +772,7 @@ class TrainingTab(QWidget):
             return
         self.spin_inputs.setValue(ex.n_inputs)
         self.spin_outputs.setValue(ex.n_outputs)
-        self.spin_nodes.setValue(ex.max_nodes)
-        self.spin_conns.setValue(ex.max_connections)
-        self.spin_pop.setValue(ex.default_population)
-        self.spin_species.setValue(ex.default_target_species)
         self.chk_fitness_shaping.setChecked(ex.default_fitness_shaping)
-        if ex.default_lamarck_steps > 0:
-            self.combo_lamarck_schedule.setCurrentText("Explizit")
-            self.combo_lamarck_optimizer.setCurrentText("Hill-Climbing")
-            self.spin_lamarck.setValue(ex.default_lamarck_steps)
-            self.spin_lamarck.setEnabled(True)
-        else:
-            self.combo_lamarck_schedule.setCurrentText("Adaptiv")
-            self.combo_lamarck_optimizer.setCurrentText("Hill-Climbing")
-            self.spin_lamarck.setEnabled(False)
-            self.spin_lamarck.setValue(5)
         self.dspin_target.setValue(ex.target_fitness)
         self.desc_label.setText(ex.description)
         # Default memory based on example type; user can override before training.
@@ -1178,8 +792,6 @@ class TrainingTab(QWidget):
             self._render_group.setVisible(False)
         # Rebuild evaluator component checkboxes
         self._rebuild_eval_component_checkboxes(ex)
-        self.combo_adaptive_preset.setCurrentText("Kein Preset")
-        self._apply_adaptive_policies(ex.default_adaptive_policies)
         self._apply_config_dict(ex.default_config)
         self._best_genome = None
         self.btn_run_best.setEnabled(False)
@@ -1219,23 +831,8 @@ class TrainingTab(QWidget):
             return None  # all enabled = default behaviour
         return enabled if enabled else None
 
-    def _on_lamarck_mode_changed(self, index: int) -> None:
-        self.spin_lamarck.setEnabled(self.combo_lamarck_schedule.currentText() == "Explizit")
-
     def _apply_config_dict(self, cfg: dict) -> None:
         """Apply a GUI config dict to widgets; used by presets and example defaults."""
-        if "population_size" in cfg:
-            self.spin_pop.setValue(int(cfg["population_size"]))
-        if "target_species" in cfg:
-            self.spin_species.setValue(int(cfg["target_species"]))
-        if "n_workers" in cfg:
-            self.spin_workers.setValue(int(cfg["n_workers"]))
-        if "multi_eval" in cfg:
-            self.spin_multi_eval.setValue(int(cfg["multi_eval"]))
-        if "aggregation" in cfg:
-            self.combo_aggregation.setCurrentText(str(cfg["aggregation"]))
-        if "sigma_penalty" in cfg:
-            self.dspin_sigma_penalty.setValue(float(cfg["sigma_penalty"]))
         if "fitness_shaping" in cfg:
             self.chk_fitness_shaping.setChecked(bool(cfg["fitness_shaping"]))
         if "multi_objective" in cfg:
@@ -1266,14 +863,6 @@ class TrainingTab(QWidget):
             self.spin_remote_retries.setValue(int(cfg["remote_retries"]))
         if "remote_batch_size" in cfg:
             self.spin_remote_batch.setValue(int(cfg["remote_batch_size"]))
-        if "novelty" in cfg:
-            self.chk_novelty.setChecked(bool(cfg["novelty"]))
-        if "speciation" in cfg:
-            self.chk_speciation.setChecked(bool(cfg["speciation"]))
-        if "crossover" in cfg:
-            self.chk_crossover.setChecked(bool(cfg["crossover"]))
-        if "diversity_injection" in cfg:
-            self.chk_diversity_injection.setChecked(bool(cfg["diversity_injection"]))
         if "convergence_spread" in cfg:
             self.dspin_convergence_spread.setValue(float(cfg["convergence_spread"]))
         if "convergence_stagnation" in cfg:
@@ -1294,31 +883,15 @@ class TrainingTab(QWidget):
             self.chk_memory.setChecked(bool(cfg["memory"]))
         if "curriculum" in cfg and self.chk_curriculum.isVisible():
             self.chk_curriculum.setChecked(bool(cfg["curriculum"]))
-        if "lamarck_schedule" in cfg:
-            self.combo_lamarck_schedule.setCurrentText(str(cfg["lamarck_schedule"]))
-        if "lamarck_optimizer" in cfg:
-            self.combo_lamarck_optimizer.setCurrentText(str(cfg["lamarck_optimizer"]))
-        if "lamarck_steps" in cfg:
-            self.spin_lamarck.setValue(int(cfg["lamarck_steps"]))
-        self._on_lamarck_mode_changed(self.combo_lamarck_schedule.currentIndex())
-        self._on_multi_eval_changed(self.spin_multi_eval.value())
 
     def _on_preset_changed(self, index: int) -> None:
         preset = self._preset_by_index.get(index)
         if preset is None:
             return
         self._apply_config_dict(preset.config)
-        if preset.adaptive_policies:
-            self._apply_adaptive_policies(preset.adaptive_policies)
 
     def _current_preset_config(self) -> dict:
         return {
-            "population_size": self.spin_pop.value(),
-            "target_species": self.spin_species.value(),
-            "n_workers": self.spin_workers.value(),
-            "multi_eval": self.spin_multi_eval.value(),
-            "aggregation": self.combo_aggregation.currentText(),
-            "sigma_penalty": self.dspin_sigma_penalty.value(),
             "fitness_shaping": self.chk_fitness_shaping.isChecked(),
             "multi_objective": self.chk_multi_objective.isChecked(),
             "multi_objective_complexity_weight": self.dspin_mo_complexity.value(),
@@ -1334,10 +907,6 @@ class TrainingTab(QWidget):
             "remote_timeout_s": self.dspin_remote_timeout.value(),
             "remote_retries": self.spin_remote_retries.value(),
             "remote_batch_size": self.spin_remote_batch.value(),
-            "novelty": self.chk_novelty.isChecked(),
-            "speciation": self.chk_speciation.isChecked(),
-            "crossover": self.chk_crossover.isChecked(),
-            "diversity_injection": self.chk_diversity_injection.isChecked(),
             "convergence_spread": self.dspin_convergence_spread.value(),
             "convergence_stagnation": self.dspin_convergence_stagnation.value(),
             "early_stop_factor": self.dspin_early_stop.value(),
@@ -1348,50 +917,7 @@ class TrainingTab(QWidget):
             "normalize": self.chk_normalize.isChecked(),
             "memory": self.chk_memory.isChecked(),
             "curriculum": self.chk_curriculum.isChecked(),
-            "lamarck_schedule": self.combo_lamarck_schedule.currentText(),
-            "lamarck_optimizer": self.combo_lamarck_optimizer.currentText(),
-            "lamarck_steps": self.spin_lamarck.value(),
         }
-
-    def _current_adaptive_policies(self) -> dict:
-        return {
-            "adaptive_controller": self.chk_adaptive_ctrl.isChecked(),
-            "operator_scheduler": self.chk_operator_scheduler.isChecked(),
-            "interspecies_mode": self.combo_interspecies_mode.currentText(),
-            "interspecies_min_rate": self.dspin_interspecies.value(),
-            "interspecies_max_rate": self.dspin_interspecies_max.value(),
-            "lamarck_schedule": self.combo_lamarck_schedule.currentText(),
-            "lamarck_optimizer": self.combo_lamarck_optimizer.currentText(),
-            "lamarck_budget": self.spin_lamarck_budget.value(),
-            "meta_adaptive": self.chk_meta_adaptive.isChecked(),
-            "module_library": self.chk_module_library.isChecked(),
-            "module_insert_rate": self.dspin_module_insert_rate.value(),
-        }
-
-    def _apply_adaptive_policies(self, ap: dict) -> None:
-        """Apply an adaptive_policies dict to the adaptive control widgets."""
-        if "adaptive_controller" in ap:
-            self.chk_adaptive_ctrl.setChecked(bool(ap["adaptive_controller"]))
-        if "operator_scheduler" in ap:
-            self.chk_operator_scheduler.setChecked(bool(ap["operator_scheduler"]))
-        if "interspecies_mode" in ap:
-            self.combo_interspecies_mode.setCurrentText(str(ap["interspecies_mode"]))
-        if "interspecies_min_rate" in ap:
-            self.dspin_interspecies.setValue(float(ap["interspecies_min_rate"]))
-        if "interspecies_max_rate" in ap:
-            self.dspin_interspecies_max.setValue(float(ap["interspecies_max_rate"]))
-        if "lamarck_schedule" in ap:
-            self.combo_lamarck_schedule.setCurrentText(str(ap["lamarck_schedule"]))
-        if "lamarck_optimizer" in ap:
-            self.combo_lamarck_optimizer.setCurrentText(str(ap["lamarck_optimizer"]))
-        if "lamarck_budget" in ap:
-            self.spin_lamarck_budget.setValue(int(ap["lamarck_budget"]))
-        if "meta_adaptive" in ap:
-            self.chk_meta_adaptive.setChecked(bool(ap["meta_adaptive"]))
-        if "module_library" in ap:
-            self.chk_module_library.setChecked(bool(ap["module_library"]))
-        if "module_insert_rate" in ap:
-            self.dspin_module_insert_rate.setValue(float(ap["module_insert_rate"]))
 
     def _save_current_preset(self) -> None:
         name, ok = QInputDialog.getText(self, "Save preset", "Preset name:")
@@ -1401,7 +927,6 @@ class TrainingTab(QWidget):
             name.strip(),
             self._current_preset_config(),
             "Saved from GUI",
-            adaptive_policies=self._current_adaptive_policies(),
         )
         preset = load_preset(path)
         idx = self.preset_combo.count()
@@ -1409,41 +934,6 @@ class TrainingTab(QWidget):
         self.preset_combo.addItem(preset.name, preset)
         self.preset_combo.setCurrentIndex(idx)
         self.status_lbl.setText(f"Preset saved: {path.name}")
-
-    def _on_adaptive_preset_changed(self, index: int) -> None:
-        preset_name = self.combo_adaptive_preset.currentText()
-        if preset_name == "Konservativ":
-            self.combo_interspecies_mode.setCurrentText("Fix")
-            self.dspin_interspecies.setValue(0.05)
-            self.chk_adaptive_ctrl.setChecked(False)
-            self.chk_operator_scheduler.setChecked(False)
-            self.spin_lamarck_budget.setValue(0)
-        elif preset_name == "Balanciert":
-            self.combo_interspecies_mode.setCurrentText("Adaptiv")
-            self.dspin_interspecies.setValue(0.01)
-            self.dspin_interspecies_max.setValue(0.15)
-            self.chk_adaptive_ctrl.setChecked(True)
-            self.chk_operator_scheduler.setChecked(True)
-            self.spin_lamarck_budget.setValue(0)
-        elif preset_name == "Aggressiv":
-            self.combo_interspecies_mode.setCurrentText("Adaptiv")
-            self.dspin_interspecies.setValue(0.02)
-            self.dspin_interspecies_max.setValue(0.30)
-            self.chk_adaptive_ctrl.setChecked(True)
-            self.chk_operator_scheduler.setChecked(True)
-            self.spin_lamarck_budget.setValue(0)
-        elif preset_name == "Analysefreundlich":
-            self.combo_interspecies_mode.setCurrentText("Adaptiv")
-            self.dspin_interspecies.setValue(0.01)
-            self.dspin_interspecies_max.setValue(0.20)
-            self.chk_adaptive_ctrl.setChecked(True)
-            self.chk_operator_scheduler.setChecked(True)
-            self.spin_lamarck_budget.setValue(100)
-
-    def _on_multi_eval_changed(self, value: int) -> None:
-        enabled = value > 1
-        self.combo_aggregation.setEnabled(enabled)
-        self.dspin_sigma_penalty.setEnabled(enabled)
 
     def _on_render_toggled(self, checked: bool) -> None:
         self.btn_render.setText("Render: On" if checked else "Render: Off")
@@ -1455,10 +945,10 @@ class TrainingTab(QWidget):
         return ResearchFeatureConfig(
             n_inputs=self.spin_inputs.value(),
             n_outputs=self.spin_outputs.value(),
-            max_nodes=self.spin_nodes.value() or None,
-            max_connections=self.spin_conns.value() or None,
-            population_size=self.spin_pop.value(),
-            target_species=self.spin_species.value(),
+            max_nodes=None,
+            max_connections=None,
+            population_size=self._auto_pop_size,
+            target_species=5,
             allow_memory=self.chk_memory.isChecked(),
             output_sanitize=self._yane._output_sanitize,
             output_fallback=self._yane._output_fallback,
@@ -1467,9 +957,6 @@ class TrainingTab(QWidget):
             matrix_forward=self.chk_matrix_forward.isChecked(),
             fitness_components=self.chk_fitness_components.isChecked(),
             fitness_component_mode=self.combo_fitness_component_mode.currentText(),
-            meta_adaptive=self.chk_meta_adaptive.isChecked(),
-            module_library=self.chk_module_library.isChecked(),
-            module_insert_rate=self.dspin_module_insert_rate.value(),
         )
 
     def _configure_yane_core(self, ex) -> ResearchFeatureConfig:
@@ -1482,14 +969,9 @@ class TrainingTab(QWidget):
         self._yane.configure(
             n_inputs=self.spin_inputs.value(),
             n_outputs=self.spin_outputs.value(),
-            max_nodes=self.spin_nodes.value() or None,
-            max_connections=self.spin_conns.value() or None,
             n_initial_hidden=ex.n_initial_hidden,
             stateful=self.chk_memory.isChecked(),
         )
-        self._yane.set_population_size(self.spin_pop.value())
-        self._yane.set_n_workers(self.spin_workers.value())
-        self._yane.set_target_species(self.spin_species.value())
         research_cfg = self._current_research_feature_config()
         if research_cfg.cppn_substrate:
             configure_cppn_substrate_population(self._yane, research_cfg)
@@ -1498,10 +980,6 @@ class TrainingTab(QWidget):
     def _apply_evolution_options(self, research_cfg: ResearchFeatureConfig) -> None:
         if self.chk_fitness_shaping.isChecked():
             self._yane.set_fitness_shaping(True)
-        self._yane.set_novelty_search(self.chk_novelty.isChecked())
-        self._yane.set_speciation(self.chk_speciation.isChecked())
-        self._yane.set_crossover(self.chk_crossover.isChecked())
-        self._yane.set_diversity_injection(self.chk_diversity_injection.isChecked())
         if self.combo_interspecies_mode.currentText() == "Adaptiv":
             self._yane.set_adaptive_interspecies_crossover(
                 min_rate=self.dspin_interspecies.value(),
@@ -1521,13 +999,8 @@ class TrainingTab(QWidget):
         if eff_max > 0.0 and eff_pen > 0.0:
             self._yane.set_efficiency_penalty(eff_max, eff_pen)
         self._yane.set_elitism(self.spin_elite_global.value(), self.spin_elite_species.value())
-        self._apply_lamarck_options()
-        self._yane.set_adaptive_control(self.chk_adaptive_ctrl.isChecked())
-        self._yane.set_operator_scheduler(self.chk_operator_scheduler.isChecked())
         apply_research_features(self._yane, research_cfg)
-        # New feature controls
         self._yane.set_weight_inheritance(enabled=self.chk_weight_inheritance.isChecked())
-        self._yane.set_online_tuning(enabled=self.chk_online_tuning.isChecked())
         self._yane.set_checkpoint_codec(self.combo_codec.currentText())
 
         # Seed / Stopping / Logging
@@ -1540,14 +1013,6 @@ class TrainingTab(QWidget):
         log_fmt = self.combo_log_format.currentText()
         if log_fmt != "csv":
             self._yane.set_log_format(log_fmt)
-
-        # Island model
-        if self.chk_island_model.isChecked():
-            self._yane.set_island_model(
-                n_islands=self.spin_n_islands.value(),
-                migration_interval=self.spin_migrate_interval.value(),
-                migration_count=self.spin_migrate_count.value(),
-            )
 
         # Checkpoint policy
         if self.chk_auto_checkpoint.isChecked():
@@ -1565,42 +1030,10 @@ class TrainingTab(QWidget):
                 max_size=self.spin_adaptive_pop_max.value(),
             )
 
-        n_eval = self.spin_multi_eval.value()
-        if n_eval > 1:
-            self._yane.set_multi_eval(
-                n=n_eval,
-                aggregation=self.combo_aggregation.currentText(),
-                sigma_penalty=self.dspin_sigma_penalty.value(),
-            )
         self._yane.set_resource_limits(max_process_gb=self.dspin_mem.value())
         target = self.dspin_target.value()
         if target > -1e9:
             self._yane.set_min_fitness(target)
-
-        # Apply Layer-3 research features from the Features tab
-        if self._features_tab is not None:
-            try:
-                self._features_tab.apply_to_ne(self._yane)
-            except Exception:
-                pass  # research features are non-critical; never break training start
-
-    def _apply_lamarck_options(self) -> None:
-        optimizer_map = {
-            "Hill-Climbing": "hill_climbing",
-            "NES": "nes",
-            "SA": "sa",
-            "CMA-ES": "cma_es",
-        }
-        optimizer = optimizer_map[self.combo_lamarck_optimizer.currentText()]
-        schedule = self.combo_lamarck_schedule.currentText()
-        if schedule == "Explizit":
-            self._yane.set_lamarck(n_steps=self.spin_lamarck.value(), mode=optimizer)
-        elif schedule == "Adaptiv":
-            self._yane.set_lamarck_adaptive(mode=optimizer)
-        elif schedule == "Aus":
-            self._yane.set_lamarck_adaptive(max_steps=0)
-        budget = self.spin_lamarck_budget.value()
-        self._yane.set_lamarck_budget(budget if budget > 0 else None)
 
     def _render_callback_for_example(self, ex):
         if ex.supports_render and self.btn_render.isChecked():
@@ -1678,8 +1111,7 @@ class TrainingTab(QWidget):
                 float(g.connection_count),
             ),
             bins=(12, 16),
-            ranges=((0.0, float(max(1, self.spin_nodes.value() or 100))),
-                    (0.0, float(max(1, self.spin_conns.value() or 200)))),
+            ranges=((0.0, 100.0), (0.0, 200.0)),
             max_cells=500,
         )
 
@@ -1711,78 +1143,13 @@ class TrainingTab(QWidget):
             preset = self._preset_by_index[self.preset_combo.currentIndex()]
             _wj(log_dir / "preset.json", preset.to_json())
         _li(
-            "GUI training started  example=%s  pop_size=%d  target=%s",
+            "GUI training started  example=%s  target=%s",
             ex.name,
-            self.spin_pop.value(),
             self.dspin_target.value() if self.dspin_target.value() > -1e9 else "none",
         )
         self._log_csv_path = log_dir / "fitness_history.csv"
         self._log_csv_header = "generation,iteration,best_fitness,mean_fitness,median_fitness,iqr_fitness,species_count,stagnation_count,nodes,connections,validation_fitness"
-        self._log_csv_interval = max(1, self.spin_pop.value() // 10)
-
-    def start_training(self) -> None:
-        ex = self._current_example()
-        if ex is None:
-            return
-
-        try:
-            research_cfg = self._configure_yane_core(ex)
-            self._apply_evolution_options(research_cfg)
-            render_cb = self._render_callback_for_example(ex)
-            make_eval_fn = self._make_eval_factory(ex)
-            remote_cfg = self._current_remote_config()
-            self._configure_quality_diversity()
-            self._configure_curriculum(ex)
-            self._setup_gui_run_logging(ex)
-        except Exception as e:
-            QMessageBox.critical(self, "Setup Error", str(e))
-            return
-
-        # Guard: don't start while the previous worker is still winding down
-        if self._worker and self._worker.isRunning():
-            return
-
-        self._had_error = False
-        self._last_ram_color = ""
-
-        # No parent — let Qt manage lifetime via deleteLater to avoid segfault
-        # when Python GC and Qt internal refcount race each other.
-        self._run_id += 1
-        run_id = self._run_id
-        worker = TrainingWorker(
-            self._yane,
-            make_eval_fn,
-            render_cb=render_cb,
-            remote_config=remote_cfg,
-        )
-        worker.finished.connect(worker.deleteLater)
-        worker.iteration_done.connect(self._on_iteration)
-        worker.error_occurred.connect(self._on_error)
-        worker.info_message.connect(self.status_lbl.setText)
-        worker.workers_resolved.connect(self._on_workers_resolved)
-        worker.finished.connect(lambda: self._on_finished(run_id))
-        if self._episode_runner and self._episode_runner.isRunning():
-            self._episode_runner.stop()
-            self._episode_runner = None
-        worker.start(QThread.Priority.LowPriority)
-        self._worker = worker
-        self.training_started.emit()
-        if self._yane is not None:
-            self.ne_ready.emit(self._yane)
-        self.btn_save_ckpt.setEnabled(True)
-        self.btn_run_best.setEnabled(False)
-        self._render_widget.clear_frame()
-        self._score_lbl.setVisible(False)
-
-        self.chart.clear()
-        self.species_chart.clear()
-        self._start_time = _time.perf_counter()
-        self._last_heavy_update = 0.0
-        self.lbl_workers_active.setText("")   # cleared until workers_resolved fires
-        self.btn_start.setEnabled(False)
-        self.btn_pause.setEnabled(True)
-        self.btn_stop.setEnabled(True)
-        self.status_lbl.setText("Training…")
+        self._log_csv_interval = max(1, self._auto_pop_size // 10)
 
     def _toggle_pause(self) -> None:
         if self._worker is None:
@@ -1812,7 +1179,7 @@ class TrainingTab(QWidget):
             self._reset_training_buttons()
             self.status_lbl.setText("Stopped")
 
-    def start_auto_train(self) -> None:
+    def start_training(self) -> None:
         """Start zero-config training: profile → KB → MetaOptimizer → FeatureGating → Train."""
         ex = self._current_example()
         if ex is None:
@@ -1839,7 +1206,6 @@ class TrainingTab(QWidget):
         self._last_ram_color = ""
         self._auto_profile_info = None
 
-        self.btn_start.setEnabled(False)
         self.btn_auto_train.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.status_lbl.setText("Profiling problem…")
@@ -1847,7 +1213,6 @@ class TrainingTab(QWidget):
         self.species_chart.clear()
         self._start_time = _time.perf_counter()
         self._last_heavy_update = 0.0
-        self.lbl_workers_active.setText("")
         self._render_widget.clear_frame()
         self._score_lbl.setVisible(False)
 
@@ -1870,6 +1235,7 @@ class TrainingTab(QWidget):
     def _on_auto_setup_done(self, info: dict, make_eval_fn, remote_cfg, run_id: int) -> None:
         self._auto_worker = None
         self._auto_profile_info = info
+        self._auto_pop_size = info.get("pop_size", self._auto_pop_size)
 
         task = info.get("task_type", "?")
         diff = info.get("difficulty", "?")
@@ -1900,17 +1266,14 @@ class TrainingTab(QWidget):
         QMessageBox.critical(self, "Auto-Train Setup Error", msg)
 
     def _on_workers_resolved(self, n: int) -> None:
-        if n <= 1:
-            self.lbl_workers_active.setText("→ sequential")
-        else:
-            self.lbl_workers_active.setText(f"→ {n} processes")
+        pass
 
     def _on_iteration(self, iteration: int, fitness: float, best_genome, mem: dict) -> None:
         elapsed = _time.perf_counter() - self._start_time
         iter_s = iteration / elapsed if elapsed > 0 else 0.0
         mins, secs = divmod(int(elapsed), 60)
         elapsed_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
-        generation = mem.get("generation", iteration // max(1, self.spin_pop.value()))
+        generation = mem.get("generation", iteration // max(1, self._auto_pop_size))
         self.lbl_iter.setText(str(generation))
         self.lbl_evals.setText(str(iteration))
         self.lbl_fitness.setText(f"{fitness:.4f}   /   {best_genome.fitness:.4f}")
@@ -1993,7 +1356,6 @@ class TrainingTab(QWidget):
         self.genome_updated.emit(best_genome, mem, do_heavy)
         self._update_ram_bar()
         self.btn_run_best.setEnabled(self.btn_run_best.isVisible())
-        self._update_adaptive_labels(mem)
 
     def _run_best_episode(self) -> None:
         if self._episode_runner and self._episode_runner.isRunning():
@@ -2122,7 +1484,6 @@ class TrainingTab(QWidget):
         )
 
     def _reset_training_buttons(self) -> None:
-        self.btn_start.setEnabled(True)
         self.btn_auto_train.setEnabled(True)
         self.btn_pause.setEnabled(False)
         self.btn_pause.setText("⏸  Pause")
@@ -2239,46 +1600,6 @@ class TrainingTab(QWidget):
         btns.rejected.connect(dlg.accept)
         lay.addWidget(btns)
         dlg.exec()
-
-    def _update_adaptive_labels(self, mem: dict) -> None:
-        """Update live display of adaptive control diagnostics."""
-        try:
-            # Interspecies crossover
-            current_rate = mem.get("interspecies_crossover_current", None)
-            if current_rate is not None:
-                self.lbl_interspecies_live.setText(f"{current_rate:.3f}")
-            reason = mem.get("interspecies_crossover_last_reason", "—")
-            self.lbl_interspecies_trigger.setText(reason)
-
-            # Cross-species success
-            n_offspring = mem.get("interspecies_n_offspring", 0)
-            n_improved = mem.get("interspecies_n_improved", 0)
-            if n_offspring > 0:
-                rate = n_improved / n_offspring
-                self.lbl_interspecies_success.setText(
-                    f"{rate:.1%}  ({n_improved}/{n_offspring})"
-                )
-            else:
-                self.lbl_interspecies_success.setText("—")
-
-            # Lamarck budget
-            budget_used = mem.get("lamarck_budget_used", 0)
-            budget_limit = mem.get("lamarck_budget_per_gen", None)
-            if budget_limit is not None and budget_limit > 0:
-                self.lbl_lamarck_budget_used.setText(f"{budget_used}/{budget_limit}")
-            else:
-                self.lbl_lamarck_budget_used.setText(f"{budget_used} (unbegrenzt)")
-
-            # Adaptive signals from AdaptiveController
-            ctrl = mem.get("adaptive_controller", {})
-            signals = ctrl.get("signals", {}) if ctrl else {}
-            plateau = signals.get("plateau_ratio", mem.get("plateau_ratio", 0.0))
-            diversity = signals.get("diversity_score", 0.0)
-            self.lbl_plateau_ratio.setText(f"{plateau:.2f}")
-            self.lbl_diversity_score.setText(f"{diversity:.2f}")
-        except Exception as _e:
-            from yane.util.logger import log_warning
-            log_warning("_update_adaptive_labels failed: %s", _e)
 
     def _update_ram_bar(self) -> None:
         from yane.util.resource_guard import ResourceGuard
