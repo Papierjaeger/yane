@@ -214,11 +214,18 @@ class KnowledgeBase:
         top = ranked[:k]
         top_distances = [d for d, _ in top]
 
+        # Filter params of the best entry by cross-neighbour agreement so that
+        # params with high variance across similar runs (i.e. context-specific
+        # details like recovery.cooldown) are not blindly applied.
+        _filtered = _param_agreement(top)
+
         result: list[dict] = []
-        for dist, entry in top:
+        for i, (dist, entry) in enumerate(top):
             conf = _confidence(dist, top_distances)
             result.append({
-                "params": dict(entry.final_params),
+                # Best suggestion gets filtered params; lower-ranked entries
+                # keep their raw params (used for diagnostics / fallback only).
+                "params": _filtered if i == 0 else dict(entry.final_params),
                 "expected_fitness": entry.final_fitness,
                 "confidence": round(conf, 4),
                 "distance": round(dist, 6),
@@ -405,6 +412,56 @@ def _confidence(
 
     return min(1.0, 0.7 * dist_score + 0.3 * agreement)
 
+
+
+def _param_agreement(
+    top_entries: "list[tuple[float, KBEntry]]",
+    min_agreement: float = 0.5,
+) -> dict:
+    """Return filtered params from the best entry, keeping only those where
+    the top-k neighbours substantially agree on the value.
+
+    For **categorical / boolean** params: agreement = fraction of neighbours
+    that have exactly the same value as the best entry.
+
+    For **numeric** params: agreement = 1 − CV (coefficient of variation,
+    std/|mean|), capped to [0, 1].  High CV = neighbours disagree on the
+    magnitude → exclude the param.
+
+    Returns the full best-entry dict unchanged when fewer than 3 neighbours
+    are available (variance estimate is unreliable with tiny samples).
+    """
+    if not top_entries:
+        return {}
+    best_params = dict(top_entries[0][1].final_params)
+    if len(top_entries) < 3:
+        return best_params  # too few neighbours for meaningful variance
+
+    all_params = [e.final_params for _, e in top_entries]
+    filtered: dict = {}
+
+    for name, best_val in best_params.items():
+        neighbor_vals = [p[name] for p in all_params if name in p]
+        if len(neighbor_vals) < 2:
+            filtered[name] = best_val  # unique to best entry — include it
+            continue
+
+        if isinstance(best_val, (str, bool)):
+            agreement = sum(1 for v in neighbor_vals if v == best_val) / len(neighbor_vals)
+        else:
+            try:
+                floats = [float(v) for v in neighbor_vals]
+                mean = sum(floats) / len(floats)
+                std = (sum((v - mean) ** 2 for v in floats) / len(floats)) ** 0.5
+                cv = std / (abs(mean) + 1e-10)
+                agreement = max(0.0, 1.0 - cv)
+            except (TypeError, ValueError):
+                agreement = 0.0  # non-numeric, non-categorical → skip
+
+        if agreement >= min_agreement:
+            filtered[name] = best_val
+
+    return filtered
 
 
 def _profile_to_dict(profile: "ProblemProfile") -> dict:

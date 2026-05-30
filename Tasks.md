@@ -24,9 +24,7 @@ Roadmap und Implementierungshistorie.
 
 **Problem Profiler: Eval-Zeit messen und direkt für Worker-Auswahl nutzen** ✓ *erledigt*
 
-**Knowledge Base: Parameter-Gewichtung bei Suggestion**
-Aktuell werden alle Parameter eines KB-Eintrags gleichwertig übergeben. Ein schlechter `recovery.cooldown`-Wert aus einem anderen Kontext kann gute `lamarck.mode`-Vorschläge "verwässern". Lösung: nur Parameter mit hoher Konfidenz (Varianz über ähnliche Einträge niedrig) weitergeben.
-- Datei: `evolution/knowledge_base.py` (`suggest()`-Methode)
+**Knowledge Base: Parameter-Gewichtung bei Suggestion** ✓ *erledigt*
 
 **FeatureGating: degrade_fn für weitere Features implementieren**
 Aktuell hat nur `island_model` eine `degrade_fn` (stufenweise Merge). Für Features wie `curiosity`, `stdp`, `neuromodulation` wäre eine sanfte Deaktivierung (z.B. Weight auf 0 reduzieren statt hard-disable) sinnvoll, um Trainingsschocks zu vermeiden.
