@@ -11,6 +11,7 @@ from yane.gui.tabs.inspect_tab import InspectTab
 from yane.gui.tabs.aux_tabs import ServerTab, DebugTab
 from yane.gui.tabs.comparison_tab import ComparisonTab
 from yane.gui.tabs.runs_tab import RunsTab
+from yane.gui.tabs.features_tab import FeaturesTab
 
 # ---------------------------------------------------------------------------
 # Stylesheet
@@ -125,13 +126,15 @@ class MainWindow(QMainWindow):
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
         tabs = self._tabs
-        self._training_tab    = TrainingTab()
+        self._features_tab    = FeaturesTab()
+        self._training_tab    = TrainingTab(features_tab=self._features_tab)
         self._inspect_tab     = InspectTab()
         self._comparison_tab  = ComparisonTab()
         self._runs_tab        = RunsTab()
         self._server_tab      = ServerTab()
         self._debug_tab       = DebugTab()
         tabs.addTab(self._training_tab,   "  Training  ")
+        tabs.addTab(self._features_tab,   "  Features  ")
         tabs.addTab(self._inspect_tab,    "  Inspect  ")
         tabs.addTab(self._comparison_tab, "  Vergleich  ")
         tabs.addTab(self._runs_tab,       "  Runs  ")

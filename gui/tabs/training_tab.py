@@ -82,8 +82,9 @@ class TrainingTab(QWidget):
     ne_ready = Signal(object)               # NeuroEvolution instance → aux_tabs
     render_frame = Signal(object)           # numpy array, emitted from worker thread
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, features_tab=None) -> None:
         super().__init__(parent)
+        self._features_tab = features_tab  # FeaturesTab | None
         self._examples = load_examples()
         self._worker: TrainingWorker | None = None
         self._auto_worker: AutoSetupWorker | None = None
@@ -1575,6 +1576,13 @@ class TrainingTab(QWidget):
         target = self.dspin_target.value()
         if target > -1e9:
             self._yane.set_min_fitness(target)
+
+        # Apply Layer-3 research features from the Features tab
+        if self._features_tab is not None:
+            try:
+                self._features_tab.apply_to_ne(self._yane)
+            except Exception:
+                pass  # research features are non-critical; never break training start
 
     def _apply_lamarck_options(self) -> None:
         optimizer_map = {

@@ -751,5 +751,114 @@ class TestAutoTrainGUI(unittest.TestCase):
         self.assertTrue(yane._feature_gate_enabled)
 
 
+class TestFeaturesTabSmoke(unittest.TestCase):
+    """Smoke tests for the new FeaturesTab."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = _app()
+
+    def test_features_tab_instantiates(self):
+        from yane.gui.tabs.features_tab import FeaturesTab
+        tab = FeaturesTab()
+        tab.resize(900, 700)
+        tab.show()
+        self.app.processEvents()
+        self.assertGreater(tab.width(), 0)
+        tab.close()
+
+    def test_features_tab_has_expected_checkboxes(self):
+        from yane.gui.tabs.features_tab import FeaturesTab
+        tab = FeaturesTab()
+        for attr in (
+            "chk_attention", "chk_ltc", "chk_neuromodulation",
+            "chk_stdp", "chk_probabilistic",
+            "chk_curiosity", "chk_darts", "chk_shared_weights", "chk_augmentation",
+            "chk_anytime", "chk_recovery", "chk_pruning",
+            "chk_input_grouping", "chk_output_grouping",
+            "chk_hardware", "chk_budget", "chk_wandb", "chk_mlflow",
+            "chk_phylogeny",
+        ):
+            self.assertTrue(hasattr(tab, attr), f"Missing widget: {attr}")
+        tab.close()
+
+    def test_features_tab_all_off_by_default(self):
+        """All feature toggles default to off."""
+        from yane.gui.tabs.features_tab import FeaturesTab
+        tab = FeaturesTab()
+        for attr in (
+            "chk_attention", "chk_ltc", "chk_neuromodulation", "chk_stdp",
+            "chk_probabilistic", "chk_curiosity", "chk_darts",
+            "chk_shared_weights", "chk_augmentation", "chk_anytime",
+            "chk_recovery", "chk_pruning", "chk_input_grouping",
+            "chk_output_grouping", "chk_hardware", "chk_budget",
+            "chk_wandb", "chk_mlflow", "chk_phylogeny",
+        ):
+            chk = getattr(tab, attr)
+            self.assertFalse(chk.isChecked(), f"{attr} should default to off")
+        tab.close()
+
+    def test_features_tab_collect_restore_state_roundtrip(self):
+        """collect_state / restore_state roundtrip preserves values."""
+        from yane.gui.tabs.features_tab import FeaturesTab
+        tab = FeaturesTab()
+        # Change a few values
+        tab.chk_attention.setChecked(True)
+        tab.spin_attention_head_dim.setValue(8)
+        tab.chk_curiosity.setChecked(True)
+        tab.dspin_curiosity_weight.setValue(0.7)
+        tab.chk_phylogeny.setChecked(True)
+        tab.spin_phylogeny_max.setValue(500)
+
+        state = tab.collect_state()
+        tab2 = FeaturesTab()
+        tab2.restore_state(state)
+
+        self.assertTrue(tab2.chk_attention.isChecked())
+        self.assertEqual(tab2.spin_attention_head_dim.value(), 8)
+        self.assertTrue(tab2.chk_curiosity.isChecked())
+        self.assertAlmostEqual(tab2.dspin_curiosity_weight.value(), 0.7, places=2)
+        self.assertTrue(tab2.chk_phylogeny.isChecked())
+        self.assertEqual(tab2.spin_phylogeny_max.value(), 500)
+        tab.close()
+        tab2.close()
+
+    def test_features_tab_apply_to_ne_all_off_no_crash(self):
+        """apply_to_ne with all features off does not crash."""
+        from yane import NeuroEvolution
+        from yane.gui.tabs.features_tab import FeaturesTab
+        tab = FeaturesTab()
+        ne = NeuroEvolution(seed=0)
+        ne.configure(2, 1)
+        tab.apply_to_ne(ne)  # should not raise
+        tab.close()
+
+    def test_features_tab_apply_attention_configures_ne(self):
+        """Enabling attention in FeaturesTab configures NeuroEvolution correctly."""
+        from yane import NeuroEvolution
+        from yane.gui.tabs.features_tab import FeaturesTab
+        tab = FeaturesTab()
+        tab.chk_attention.setChecked(True)
+        tab.spin_attention_head_dim.setValue(4)
+        tab.spin_attention_num_heads.setValue(2)
+        ne = NeuroEvolution(seed=0)
+        ne.configure(2, 1)
+        tab.apply_to_ne(ne)
+        self.assertTrue(ne._attention_enabled)
+        tab.close()
+
+    def test_main_window_has_features_tab(self):
+        """MainWindow now contains a FeaturesTab."""
+        from yane.gui.window import MainWindow
+        win = MainWindow()
+        win.show()
+        self.app.processEvents()
+        # Check the features tab exists
+        self.assertIsNotNone(win._features_tab)
+        tab_texts = [win._tabs.tabText(i) for i in range(win._tabs.count())]
+        self.assertTrue(any("Feature" in t for t in tab_texts))
+        win.close()
+
+
 if __name__ == "__main__":
     unittest.main()
