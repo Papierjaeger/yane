@@ -1,10 +1,65 @@
 # Tasks: YANE staerker machen
 
-Roadmap und Implementierungshistorie. Alle Tasks abgeschlossen.
+Roadmap und Implementierungshistorie.
 
 ## Status
 
-**Teststand:** `2345 passed, 23 skipped` — P0, P1, P2 vollständig.
+**Teststand:** `2392 passed, 23 skipped` — P0, P1, P2 vollständig. Automodus-Bugs behoben.
+
+---
+
+## Offene Tasks: Automodus-Verbesserungen
+
+### P0 — Direkte Verbesserungen (hoher Hebel)
+
+**Profiler: noise_level direkt für Multi-Eval nutzen**
+Der Profiler misst `noise_level` bereits. Wenn `noise_level > 0.3`, sollte `auto_train()` automatisch `set_multi_eval(n=3)` setzen, da einzelne Episodes dann zu verrauscht sind. Aktuell wird noise_level nur für `temporal_dependency` genutzt.
+- Datei: `evolution/auto_train.py` (`auto_train()`-Methode, nach Phase 3)
+- Datei: `gui/worker.py` (`AutoSetupWorker.run()`)
+
+**Profiler: reward_sparsity für Feature-Aktivierung verwenden**
+`reward_sparsity` wird gemessen (Anteil Evals mit Fitness ≈ 0), aber nie ausgewertet. Bei hoher Sparsity sollte `curiosity` oder `diversity_injection` direkt in der Cold-Start-Phase aktiviert werden statt auf FeatureGating zu warten.
+- Datei: `evolution/auto_train.py` (`apply_cold_start_defaults()`)
+
+**FeatureGating: max_concurrent von 2 auf 3 erhöhen**
+Mit 2 concurrent Features und 12 lightweight registrierten Features kann ein Feature im schlechtesten Fall erst nach ~6 × test_interval getestet werden. max_concurrent=3 verbessert die Abdeckung ohne wesentlichen Overhead.
+- Datei: `evolution/auto_train.py` (Zeile ~7135: `set_auto_features(max_concurrent=2, ...)`)
+- Datei: `gui/worker.py` (`AutoSetupWorker.run()`: `set_auto_features(max_concurrent=2, ...)`)
+
+**FeatureGating: Task-adaptive test_interval / test_duration**
+Aktuell: `test_interval = max(50, expected_gens // 6)` — gleich für alle Tasks. Besser: RL-Tasks mit langer Episodendauer brauchen längere Fenster (`// 4`), kurze Dataset-Tasks können schneller testen (`// 8`).
+- Datei: `evolution/auto_train.py` (Feature-Gating-Konfiguration in `auto_train()`)
+
+### P1 — Wichtige Erweiterungen
+
+**MetaOptimizer: `anytime.promotion_frac` aus dem Fallback-`_CONT_PARAMS` entfernen**
+Analog zu `lamarck.n_steps`/`lamarck.sigma` (bereits gefixt): `anytime.promotion_frac` ist in `_EXCLUDE` kommentiert, steht aber noch in `_CONT_PARAMS` als Fallback. Sollte entfernt werden, da `anytime.*` ausschließlich von FeatureGating gesteuert werden soll.
+- Datei: `evolution/meta_optimizer.py` (`_CONT_PARAMS`, Zeile ~387)
+
+**Problem Profiler: Eval-Zeit messen und direkt für Worker-Auswahl nutzen**
+Der Profiler evaluiert bereits n_warmup Genomes, misst aber die Eval-Zeit nicht strukturiert. Diese Zeit sollte direkt in `auto_train()` für die automatische Worker-Wahl (`set_n_workers()`) verwendet werden, statt immer auf den TrainingWorker-internen Automodus zu verlassen.
+- Datei: `evolution/problem_profiler.py`, `evolution/auto_train.py`
+
+**Knowledge Base: Parameter-Gewichtung bei Suggestion**
+Aktuell werden alle Parameter eines KB-Eintrags gleichwertig übergeben. Ein schlechter `recovery.cooldown`-Wert aus einem anderen Kontext kann gute `lamarck.mode`-Vorschläge "verwässern". Lösung: nur Parameter mit hoher Konfidenz (Varianz über ähnliche Einträge niedrig) weitergeben.
+- Datei: `evolution/knowledge_base.py` (`suggest()`-Methode)
+
+**FeatureGating: degrade_fn für weitere Features implementieren**
+Aktuell hat nur `island_model` eine `degrade_fn` (stufenweise Merge). Für Features wie `curiosity`, `stdp`, `neuromodulation` wäre eine sanfte Deaktivierung (z.B. Weight auf 0 reduzieren statt hard-disable) sinnvoll, um Trainingsschocks zu vermeiden.
+- Datei: `evolution/feature_gating.py` (`_register_known_features()`)
+
+### P2 — Forschung / Experimentell
+
+**Problem Profiler: Fitness-Landscape-Shape schätzen**
+Aus den warmup-Evaluierungen könnte man grob abschätzen, ob die Fitnesslandschaft unimodal (einfach) oder multimodal (schwer) ist, indem man die Varianz zwischen Random-Genomes analysiert. Multimodale Probleme profitieren mehr von `diversity_injection` und `quality_diversity`.
+
+**Problem Profiler: Echte temporale Autokorrelation messen**
+`temporal_dependency` ist derzeit `min(1.0, noise_level * 2.0)` — ein reiner Proxy. Eine echte Sequenz-Analyse (Autokorrelation über mehrere Steps) würde zuverlässiger RL von stochastischen supervised-Tasks unterscheiden.
+
+**Knowledge Base: Cross-Task Transfer via latente Embeddings**
+Aktuell: k-NN direkt auf 10-D Feature-Vektor. Besser: Ein kleines gelerntes Embedding (z.B. PCA oder Autoencoder auf akkumulierten KB-Einträgen), das strukturelle Ähnlichkeiten zwischen verschiedenen Task-Typen lernt.
+
+---
 
 ## Legende
 

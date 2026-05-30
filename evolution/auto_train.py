@@ -42,18 +42,30 @@ _COLD_START_DEFAULTS: dict[str, dict] = {
     "classification": {
         "lamarck.mode": "hill_climbing",
         "lamarck.n_steps": 3,
+        "anytime.enabled": False,
+        "recovery.enabled": False,
     },
     "regression": {
         "lamarck.mode": "hill_climbing",
-        "lamarck.n_steps": 3,
+        "lamarck.n_steps": 5,
+        "anytime.enabled": False,
+        "recovery.enabled": False,
     },
     "rl_discrete": {
         "lamarck.mode": "hill_climbing",
         "lamarck.n_steps": 5,
+        "anytime.enabled": True,
+        "anytime.promotion_frac": 0.3,
+        "recovery.enabled": True,
+        "recovery.cooldown": 20,
     },
     "rl_continuous": {
         "lamarck.mode": "cma_es",
         "lamarck.n_steps": 5,
+        "anytime.enabled": True,
+        "anytime.promotion_frac": 0.3,
+        "recovery.enabled": True,
+        "recovery.cooldown": 20,
     },
 }
 

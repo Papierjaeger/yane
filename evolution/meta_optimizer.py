@@ -380,14 +380,14 @@ class MetaOptimizer:
     Called via ``tick()`` once per generation inside ``NeuroEvolution.train()``.
     """
 
-    # Fallback hardcoded params used when no registry is provided
+    # Fallback hardcoded params used when no registry is provided.
+    # Must not include params listed in _EXCLUDE — the exclusion reasoning
+    # (eval-cost, budget management) applies regardless of registry presence.
     _CAT_PARAMS: dict[str, list] = {
         "lamarck.mode": ["hill_climbing", "nes", "sa", "cma_es"],
     }
     _CONT_PARAMS: dict[str, tuple] = {
         "anytime.promotion_frac": (0.1, 0.9, False),
-        "lamarck.sigma": (0.1, 5.0, False),
-        "lamarck.n_steps": (1, 20, True),
     }
 
     # Params to exclude from automatic registry-based tuning.
