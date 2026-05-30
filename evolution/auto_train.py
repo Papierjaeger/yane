@@ -88,6 +88,28 @@ def apply_cold_start_defaults(ne: Any, profile: Any) -> dict:
 # Pop-size heuristic
 # ---------------------------------------------------------------------------
 
+def pick_n_workers(eval_ms_per_genome: float, pop_size: int) -> int:
+    """Return the optimal parallel-worker count based on measured eval speed.
+
+    Uses the same cost model as TrainingWorker._optimal_workers:
+      sequential time = pop_size × eval_ms
+      w workers       = pop_size × eval_ms / w  +  overhead_ms
+    MP beats sequential iff seq_time > overhead_ms.
+
+    Returns 1 (sequential) for very fast evaluators where MP overhead
+    would dominate, and up to cpu_count() for slow ones.
+    """
+    import math as _math
+    import multiprocessing as _mp
+    _OVERHEAD_MS = 16.0
+    seq_time = pop_size * eval_ms_per_genome
+    if seq_time <= _OVERHEAD_MS:
+        return 1
+    min_beneficial = max(2, _math.ceil(seq_time / (seq_time - _OVERHEAD_MS)))
+    optimal = max(min_beneficial, int(seq_time / _OVERHEAD_MS))
+    return min(_mp.cpu_count(), optimal)
+
+
 def pick_pop_size(profile: Any) -> int:
     """Return a sensible population size based on the problem profile."""
     difficulty = getattr(profile, "estimated_difficulty", 0.5)

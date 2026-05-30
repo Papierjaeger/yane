@@ -22,9 +22,7 @@ Roadmap und Implementierungshistorie.
 
 ### P1 — Wichtige Erweiterungen
 
-**Problem Profiler: Eval-Zeit messen und direkt für Worker-Auswahl nutzen**
-Der Profiler evaluiert bereits n_warmup Genomes, misst aber die Eval-Zeit nicht strukturiert. Diese Zeit sollte direkt in `auto_train()` für die automatische Worker-Wahl (`set_n_workers()`) verwendet werden, statt immer auf den TrainingWorker-internen Automodus zu verlassen.
-- Datei: `evolution/problem_profiler.py`, `evolution/auto_train.py`
+**Problem Profiler: Eval-Zeit messen und direkt für Worker-Auswahl nutzen** ✓ *erledigt*
 
 **Knowledge Base: Parameter-Gewichtung bei Suggestion**
 Aktuell werden alle Parameter eines KB-Eintrags gleichwertig übergeben. Ein schlechter `recovery.cooldown`-Wert aus einem anderen Kontext kann gute `lamarck.mode`-Vorschläge "verwässern". Lösung: nur Parameter mit hoher Konfidenz (Varianz über ähnliche Einträge niedrig) weitergeben.

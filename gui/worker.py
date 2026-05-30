@@ -615,7 +615,7 @@ class AutoSetupWorker(QThread):
         self._n_warmup = n_warmup
 
     def run(self) -> None:
-        from yane.evolution.auto_train import apply_cold_start_defaults, pick_pop_size
+        from yane.evolution.auto_train import apply_cold_start_defaults, pick_pop_size, pick_n_workers
         try:
             self.status_message.emit("Profiling problem…")
             eval_fn = self._make_eval_fn(None)
@@ -624,6 +624,11 @@ class AutoSetupWorker(QThread):
             pop_size = pick_pop_size(profile)
             self._yane.set_population_size(pop_size)
             self._yane.set_matrix_forward(True)
+            _raw_eval_ms = getattr(profile, "eval_ms_per_genome", 0.0)
+            if _raw_eval_ms > 0.0:
+                _n_workers = pick_n_workers(_raw_eval_ms, pop_size)
+                if _n_workers > 1:
+                    self._yane.set_n_workers(_n_workers)
             _species_for_task = {
                 "classification": 10, "regression": 10,
                 "rl_discrete": 5, "rl_continuous": 5,

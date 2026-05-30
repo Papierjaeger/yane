@@ -76,11 +76,13 @@ class ProblemProfile:
     fitness_min: float
     fitness_max: float
     alternative_types: list[str] = field(default_factory=list)
+    eval_ms_per_genome: float = 0.0
 
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
         self.__dict__.setdefault("alternative_types", [])
         self.__dict__.setdefault("task_type_confidence", 1.0)
+        self.__dict__.setdefault("eval_ms_per_genome", 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -122,12 +124,15 @@ class ProblemProfiler:
         # 1. Generate n_warmup random genomes from the population template.
         genomes = _sample_random_genomes(pop, n_warmup, rng)
 
-        # 2. Evaluate each genome TWICE to measure noise.
+        # 2. Evaluate each genome TWICE to measure noise and eval speed.
+        import time as _time
         fitness_a: list[float] = []
         fitness_b: list[float] = []
+        _t0 = _time.perf_counter()
         for g in genomes:
             fitness_a.append(_safe_eval(evaluator, g))
             fitness_b.append(_safe_eval(evaluator, g))
+        _eval_ms_per_genome = (_time.perf_counter() - _t0) * 1000.0 / max(1, n_warmup * 2)
 
         all_fitness = fitness_a + fitness_b
 
@@ -165,6 +170,7 @@ class ProblemProfiler:
             fitness_min=min(all_fitness),
             fitness_max=max(all_fitness),
             alternative_types=alternatives,
+            eval_ms_per_genome=_eval_ms_per_genome,
         )
 
 

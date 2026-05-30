@@ -7037,6 +7037,7 @@ class NeuroEvolution:
             apply_cold_start_defaults,
             build_report,
             pick_pop_size,
+            pick_n_workers,
         )
 
         t_start = _time.time()
@@ -7080,6 +7081,14 @@ class NeuroEvolution:
             self.set_multi_eval(n=5, aggregation="mean")
         elif _noise > 0.3:
             self.set_multi_eval(n=3, aggregation="mean")
+        # Workers: use profiler's eval-time measurement to pick the optimal
+        # parallelism level immediately — avoids the 50-iteration warm-up
+        # delay that TrainingWorker's auto-mode needs to gather timing data.
+        _raw_eval_ms = getattr(profile, "eval_ms_per_genome", 0.0)
+        if _raw_eval_ms > 0.0:
+            _n_workers = pick_n_workers(_raw_eval_ms, pop_size)
+            if _n_workers > 1:
+                self.set_n_workers(_n_workers)
 
         if target_fitness is not None:
             self.set_min_fitness(target_fitness)
@@ -7113,7 +7122,7 @@ class NeuroEvolution:
             _applied_params = apply_cold_start_defaults(self, profile)
 
         # ── Iteration budget (calculated after Lamarck defaults are known) ──
-        # Profiling runs without Lamarck; scale up eval_ms to match training.
+        # Use profiler's measured eval_ms; scale up for Lamarck overhead.
         if max_time_seconds is not None:
             _lamarck_steps = getattr(self._lamarck, 'n_steps', 0) if self._lamarck else 0
             try:
@@ -7122,7 +7131,9 @@ class NeuroEvolution:
             except Exception:
                 pass
             _eval_multiplier = max(1, 1 + _lamarck_steps)
-            eval_ms_per_genome = max(1.0, _profiling_ms / max(1, n_warmup * 2)) * _eval_multiplier
+            _base_eval_ms = max(1.0, getattr(profile, "eval_ms_per_genome", 0.0) or
+                                _profiling_ms / max(1, n_warmup * 2))
+            eval_ms_per_genome = _base_eval_ms * _eval_multiplier
             budget_ms = max_time_seconds * 1000.0
             iters = int(budget_ms * 0.9 / eval_ms_per_genome)
             iters = max(pop_size * 10, min(iters, pop_size * 500))
