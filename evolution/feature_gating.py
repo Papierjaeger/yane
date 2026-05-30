@@ -418,3 +418,50 @@ def _register_known_features(fg: FeatureGate, ne: Any) -> None:
         enable_fn=lambda _ne: _ne.enable_phylogeny(),
         disable_fn=lambda _ne: _ne.disable_phylogeny(),
     )
+
+    # ── Island Model — graceful degradation via merge_weakest_island() ─────────
+    def _island_enable(ne: Any) -> None:
+        """Start with 4 islands (or 2 if population is very small)."""
+        n = 4 if (ne._population_size or 100) >= 40 else 2
+        try:
+            ne.set_island_model(n_islands=n)
+        except Exception:
+            pass  # e.g. not yet configured — silently skip
+
+    def _island_degrade(ne: Any, level: float) -> None:
+        """At each degradation step, eliminate the weakest island.
+
+        degradation_level 0.2 → merge to N-1 islands
+        degradation_level 0.4 → merge to N-2 islands
+        ...until only 1 island remains, then the disable_fn cleans up.
+        """
+        im = getattr(ne, "_island_model", None)
+        if im is None:
+            return
+        merged = im.merge_weakest_island()
+        if merged and im.n_islands >= 1:
+            # Keep ne._population pointing to the island with the best genome
+            ne._population = max(im.islands, key=lambda p: (
+                p.get_best().fitness if p._evaluated else -float("inf")
+            ))
+            if im.n_islands == 1:
+                # Effectively a single population now — remove the wrapper
+                ne._island_model = None
+
+    def _island_disable(ne: Any) -> None:
+        """Final cleanup: ensure _island_model is gone."""
+        im = getattr(ne, "_island_model", None)
+        if im is not None and im.islands:
+            # Rescue the best genome across all remaining islands
+            best_pop = max(im.islands, key=lambda p: (
+                p.get_best().fitness if p._evaluated else -float("inf")
+            ))
+            ne._population = best_pop
+        ne._island_model = None
+
+    fg.register(
+        "island_model",
+        enable_fn=_island_enable,
+        disable_fn=_island_disable,
+        degrade_fn=_island_degrade,
+    )

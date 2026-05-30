@@ -135,6 +135,59 @@ class IslandModel:
 
         return events
 
+    def _island_best_fitness(self, pop: "Population") -> float:
+        """Best fitness on *pop*, or -inf when unevaluated."""
+        try:
+            return pop.get_best().fitness
+        except RuntimeError:
+            return -float("inf")
+
+    def merge_weakest_island(self, n_survivors: int = 5) -> bool:
+        """Eliminate the weakest island and transfer its best genomes.
+
+        The island with the lowest best-genome fitness is selected as the
+        'loser'.  Its top *n_survivors* genomes are distributed to the
+        remaining islands (round-robin, as unevaluated candidates) so the
+        gene pool is not entirely lost.  The loser island is then removed.
+
+        Parameters
+        ----------
+        n_survivors:
+            Number of genomes to rescue from the dying island before removal.
+
+        Returns
+        -------
+        bool
+            ``True`` if a merge happened (≥2 islands existed), ``False`` if
+            already down to 1 island.
+        """
+        if len(self.islands) <= 1:
+            return False
+
+        # Find weakest island by best-genome fitness
+        sorted_islands = sorted(self.islands, key=self._island_best_fitness)
+        loser = sorted_islands[0]
+        survivors = self.islands[:]
+        survivors.remove(loser)
+
+        # Rescue top genomes from the dying island
+        rescue_pool: list[Genome] = []
+        evaluated = sorted(loser._evaluated, key=lambda g: g.fitness, reverse=True)
+        rescue_pool.extend(g.copy() for g in evaluated[:n_survivors])
+        # Fill from unevaluated if not enough evaluated
+        if len(rescue_pool) < n_survivors:
+            for g in loser._unevaluated[:n_survivors - len(rescue_pool)]:
+                rescue_pool.append(g.copy())
+
+        # Distribute rescued genomes round-robin across surviving islands
+        for i, genome in enumerate(rescue_pool):
+            target = survivors[i % len(survivors)]
+            target._unevaluated.append(genome)
+
+        self.islands = survivors
+        self.n_islands = len(survivors)
+        return True
+
     def get_best_across_all(self) -> Genome | None:
         """Return the single best genome across all islands."""
         best = None
