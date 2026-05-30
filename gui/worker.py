@@ -623,6 +623,14 @@ class AutoSetupWorker(QThread):
 
             pop_size = pick_pop_size(profile)
             self._yane.set_population_size(pop_size)
+            self._yane.set_matrix_forward(True)
+            _species_for_task = {
+                "classification": 10, "regression": 10,
+                "rl_discrete": 5, "rl_continuous": 5,
+            }
+            self._yane.set_target_species(
+                _species_for_task.get(profile.task_type, 5)
+            )
 
             if self._yane._knowledge_base is None:
                 self._yane.set_knowledge_base()
@@ -652,9 +660,14 @@ class AutoSetupWorker(QThread):
                 enabled=True, tune_interval=5,
                 plateau_patience=30, phase_min_gens=10, max_overhead_pct=10.0,
             )
+            # Use the same minimums as auto_train() so GUI and API behave
+            # consistently.  The exact values scale with run length in
+            # auto_train(); here we use the floor values (≥50/≥20/≥60) since
+            # we don't know the final iteration budget at setup time.
             self._yane.set_auto_features(
-                enabled=True, max_concurrent=2, test_interval=20,
-                test_duration=10, degradation_patience=40,
+                enabled=True, max_concurrent=2,
+                test_interval=50, test_duration=20, degradation_patience=60,
+                include_heavyweight=profile.task_type in ("rl_discrete", "rl_continuous"),
             )
 
             self.setup_done.emit({

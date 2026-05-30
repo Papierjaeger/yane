@@ -12,7 +12,7 @@ Roadmap und Implementierungshistorie.
 
 ### P0 — Direkte Verbesserungen (hoher Hebel)
 
-**Profiler: noise_level direkt für Multi-Eval nutzen**
+**Profiler: noise_level direkt für Multi-Eval nutzen** *(neu)*
 Der Profiler misst `noise_level` bereits. Wenn `noise_level > 0.3`, sollte `auto_train()` automatisch `set_multi_eval(n=3)` setzen, da einzelne Episodes dann zu verrauscht sind. Aktuell wird noise_level nur für `temporal_dependency` genutzt.
 - Datei: `evolution/auto_train.py` (`auto_train()`-Methode, nach Phase 3)
 - Datei: `gui/worker.py` (`AutoSetupWorker.run()`)
@@ -32,10 +32,6 @@ Aktuell: `test_interval = max(50, expected_gens // 6)` — gleich für alle Task
 
 ### P1 — Wichtige Erweiterungen
 
-**MetaOptimizer: `anytime.promotion_frac` aus dem Fallback-`_CONT_PARAMS` entfernen**
-Analog zu `lamarck.n_steps`/`lamarck.sigma` (bereits gefixt): `anytime.promotion_frac` ist in `_EXCLUDE` kommentiert, steht aber noch in `_CONT_PARAMS` als Fallback. Sollte entfernt werden, da `anytime.*` ausschließlich von FeatureGating gesteuert werden soll.
-- Datei: `evolution/meta_optimizer.py` (`_CONT_PARAMS`, Zeile ~387)
-
 **Problem Profiler: Eval-Zeit messen und direkt für Worker-Auswahl nutzen**
 Der Profiler evaluiert bereits n_warmup Genomes, misst aber die Eval-Zeit nicht strukturiert. Diese Zeit sollte direkt in `auto_train()` für die automatische Worker-Wahl (`set_n_workers()`) verwendet werden, statt immer auf den TrainingWorker-internen Automodus zu verlassen.
 - Datei: `evolution/problem_profiler.py`, `evolution/auto_train.py`
@@ -48,6 +44,30 @@ Aktuell werden alle Parameter eines KB-Eintrags gleichwertig übergeben. Ein sch
 Aktuell hat nur `island_model` eine `degrade_fn` (stufenweise Merge). Für Features wie `curiosity`, `stdp`, `neuromodulation` wäre eine sanfte Deaktivierung (z.B. Weight auf 0 reduzieren statt hard-disable) sinnvoll, um Trainingsschocks zu vermeiden.
 - Datei: `evolution/feature_gating.py` (`_register_known_features()`)
 
+**AutoSetupWorker und `auto_train()` vereinheitlichen** *(neu)*
+`AutoSetupWorker.run()` und `auto_train()` implementieren dieselbe Setup-Logik doppelt. Lösung: `auto_train()` in eine `auto_configure()`-Phase und eine `train()`-Phase aufteilen, sodass `AutoSetupWorker` nur `auto_configure()` aufruft. Verhindert künftige Drift zwischen GUI- und API-Pfad.
+- Datei: `neuro_evolution.py`, `gui/worker.py`
+
+**`task_type_confidence` für konservativere Defaults nutzen** *(neu)*
+Der Profiler berechnet `task_type_confidence` (Zuverlässigkeit der Task-Klassifikation), aber kein Code verwendet diesen Wert. Wenn `task_type_confidence < 0.6`: weniger task-spezifische Parameter setzen, `target_species` auf Mittelwert (7–8) statt task-spezifisch, FeatureGating konservativer starten.
+- Datei: `evolution/auto_train.py`, `neuro_evolution.py` (`auto_train()`)
+
+**MetaOptimizer-GP mit KB-Werten vorseeden** *(neu)*
+Wenn eine KB-Suggestion angewendet wird, startet MetaOptimizerS GP-Optimizer danach blind. Die KB-Parameterwerte sind gute initiale GP-Beobachtungspunkte (`gp.observe(value, 0.1)` als Warm-Prior). Würde die Explorations-Phase des MetaOptimizers deutlich verkürzen.
+- Datei: `evolution/meta_optimizer.py`, `neuro_evolution.py` (Übergabe der KB-Werte an `set_meta_optimizer()`)
+
+**FeatureGating: Feature-Konflikte registrieren** *(neu)*
+Manche Features schließen sich aus: STDP ist inkompatibel mit matrix_forward (STDP braucht sequentielle Forward-Passes). island_model + adaptive_recovery können sich gegenseitig behindern. Wenn zwei konfliktierende Features gleichzeitig getestet werden, sind die Impact-Messungen beider verzerrt. Lösung: `conflicts_with: frozenset[str]` im `FeatureRecord`, FeatureGating skippt konflikthafte Kombinationen.
+- Datei: `evolution/feature_gating.py`
+
+**Checkpoint-Erkennung für Warm-Restart** *(neu)*
+Wenn für dasselbe Example ein Checkpoint im Log-Verzeichnis existiert, könnte `auto_train()` / `AutoSetupWorker` ihn laden und weitertrainieren statt neu zu starten. Großer praktischer Vorteil für iterative Experimente.
+- Datei: `neuro_evolution.py` (`auto_train()`), `gui/worker.py` (`AutoSetupWorker`)
+
+**KB-Eintrags-Alterung** *(neu)*
+Ältere KB-Einträge verwenden möglicherweise veraltete Hyperparameter-Semantiken. Einträge mit YANE-Version taggen und bei k-NN mit einem Zeit-Abschlag gewichten.
+- Datei: `evolution/knowledge_base.py` (`KBEntry`, `suggest()`)
+
 ### P2 — Forschung / Experimentell
 
 **Problem Profiler: Fitness-Landscape-Shape schätzen**
@@ -58,6 +78,14 @@ Aus den warmup-Evaluierungen könnte man grob abschätzen, ob die Fitnesslandsch
 
 **Knowledge Base: Cross-Task Transfer via latente Embeddings**
 Aktuell: k-NN direkt auf 10-D Feature-Vektor. Besser: Ein kleines gelerntes Embedding (z.B. PCA oder Autoencoder auf akkumulierten KB-Einträgen), das strukturelle Ähnlichkeiten zwischen verschiedenen Task-Typen lernt.
+
+**Live-Status von FeatureGating im GUI** *(neu)*
+Der Auto-Train-Bericht erscheint nur am Ende. Eine Statuszeile wie `"FeatureGating: testet curiosity (Gen 45/65)"` während des Trainings würde Nutzern erklären, warum das Training manchmal kurzzeitig langsamer wird. Die nötigen Daten liegen bereits in `population_memory_info()` vor.
+- Datei: `gui/tabs/training_tab.py` (`_on_iteration()`), `neuro_evolution.py` (FeatureGating-Diagnostics in heartbeat)
+
+**Fitness-Target automatisch schätzen** *(neu)*
+Wenn kein `target_fitness` gesetzt ist, könnte `auto_train()` aus den Profiling-Daten einen Richtwert ableiten (z.B. `max_observed_fitness * 3.0` oder difficulty-basiert). Gibt sauberere Stopp-Bedingungen ohne Nutzer-Input.
+- Datei: `evolution/auto_train.py`
 
 ---
 

@@ -7055,9 +7055,23 @@ class NeuroEvolution:
         profile = self.profile_problem(evaluator, n_warmup=n_warmup)
         _profiling_ms = (_time.time() - _t_prof) * 1000.0
 
-        # ── 3. Pop-size ──────────────────────────────────────────────────────
+        # ── 3. Pop-size + structural defaults ───────────────────────────────
         pop_size = pick_pop_size(profile)
         self.set_population_size(pop_size)
+        # Matrix-forward is a pure speed optimisation (NumPy path for acyclic
+        # feedforward genomes, automatic fallback otherwise) — always safe.
+        self.set_matrix_forward(True)
+        # Target species: classification/regression benefit from more niches
+        # (structural diversity key for discrete mappings); RL is fine at 5.
+        _species_for_task = {
+            "classification": 10,
+            "regression":     10,
+            "rl_discrete":     5,
+            "rl_continuous":   5,
+        }
+        self.set_target_species(_species_for_task.get(
+            getattr(profile, "task_type", ""), 5
+        ))
 
         if target_fitness is not None:
             self.set_min_fitness(target_fitness)

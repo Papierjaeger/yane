@@ -383,12 +383,11 @@ class MetaOptimizer:
     # Fallback hardcoded params used when no registry is provided.
     # Must not include params listed in _EXCLUDE — the exclusion reasoning
     # (eval-cost, budget management) applies regardless of registry presence.
+    # anytime.* are managed by FeatureGating, not MetaOptimizer.
     _CAT_PARAMS: dict[str, list] = {
         "lamarck.mode": ["hill_climbing", "nes", "sa", "cma_es"],
     }
-    _CONT_PARAMS: dict[str, tuple] = {
-        "anytime.promotion_frac": (0.1, 0.9, False),
-    }
+    _CONT_PARAMS: dict[str, tuple] = {}
 
     # Params to exclude from automatic registry-based tuning.
     #
