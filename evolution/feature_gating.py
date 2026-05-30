@@ -367,6 +367,11 @@ def _register_known_features(fg: FeatureGate, ne: Any, *, include_heavyweight: b
         "curiosity",
         enable_fn=lambda _ne: _ne.set_curiosity(enabled=True),
         disable_fn=lambda _ne: _ne.set_curiosity(enabled=False),
+        # Reduce intrinsic-reward weight gradually to avoid a sudden fitness
+        # recalculation shock when the population has adapted to the bonus.
+        degrade_fn=lambda _ne, lvl: _ne.set_curiosity(
+            enabled=True, weight=max(0.05, 0.3 * (1.0 - lvl))
+        ),
     )
     fg.register(
         "darts",
@@ -400,6 +405,11 @@ def _register_known_features(fg: FeatureGate, ne: Any, *, include_heavyweight: b
             "attention",
             enable_fn=lambda _ne: _ne.set_attention(enabled=True),
             disable_fn=lambda _ne: _ne.set_attention(enabled=False),
+            # Step down from 2 heads to 1 head before disabling entirely.
+            degrade_fn=lambda _ne, lvl: _ne.set_attention(
+                enabled=True,
+                num_heads=max(1, int(2 * (1.0 - lvl))),
+            ),
         )
         fg.register(
             "ltc",
@@ -415,6 +425,10 @@ def _register_known_features(fg: FeatureGate, ne: Any, *, include_heavyweight: b
             "stdp",
             enable_fn=lambda _ne: _ne.set_stdp(enabled=True),
             disable_fn=lambda _ne: _ne.set_stdp(enabled=False),
+            # Shrink the Hebbian update step gradually instead of hard-stopping.
+            degrade_fn=lambda _ne, lvl: _ne.set_stdp(
+                enabled=True, hebb_sigma=max(0.005, 0.05 * (1.0 - lvl))
+            ),
         )
         fg.register(
             "probabilistic",
@@ -432,6 +446,11 @@ def _register_known_features(fg: FeatureGate, ne: Any, *, include_heavyweight: b
         "anytime_eval",
         enable_fn=lambda _ne: _ne.set_anytime_eval(enabled=True),
         disable_fn=lambda _ne: _ne.set_anytime_eval(enabled=False),
+        # Reduce promotion_frac so fewer genomes get extra evaluations before
+        # the feature is fully disabled — avoids a sudden evaluation-cost jump.
+        degrade_fn=lambda _ne, lvl: _ne.set_anytime_eval(
+            enabled=True, promotion_frac=max(0.1, 0.3 * (1.0 - lvl))
+        ),
     )
     fg.register(
         "adaptive_recovery",

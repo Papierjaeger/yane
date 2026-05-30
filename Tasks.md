@@ -26,9 +26,7 @@ Roadmap und Implementierungshistorie.
 
 **Knowledge Base: Parameter-Gewichtung bei Suggestion** ✓ *erledigt*
 
-**FeatureGating: degrade_fn für weitere Features implementieren**
-Aktuell hat nur `island_model` eine `degrade_fn` (stufenweise Merge). Für Features wie `curiosity`, `stdp`, `neuromodulation` wäre eine sanfte Deaktivierung (z.B. Weight auf 0 reduzieren statt hard-disable) sinnvoll, um Trainingsschocks zu vermeiden.
-- Datei: `evolution/feature_gating.py` (`_register_known_features()`)
+**FeatureGating: degrade_fn für weitere Features implementieren** ✓ *erledigt*
 
 **AutoSetupWorker und `auto_train()` vereinheitlichen** *(neu)*
 `AutoSetupWorker.run()` und `auto_train()` implementieren dieselbe Setup-Logik doppelt. Lösung: `auto_train()` in eine `auto_configure()`-Phase und eine `train()`-Phase aufteilen, sodass `AutoSetupWorker` nur `auto_configure()` aufruft. Verhindert künftige Drift zwischen GUI- und API-Pfad.
