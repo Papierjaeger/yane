@@ -676,7 +676,7 @@ class InspectTab(QWidget):
         all_hidden = [n for n in self._genome.nodes if n.type.value == "hidden"]
         for node in mem_nodes:
             idx = all_hidden.index(node) if node in all_hidden else -1
-            act = node.activation.value[:3]
+            act = getattr(node.activation, "value", "?")[:3]
             lbl_text = f"H{idx}  {act}  b={node.bias:.2f}"
             val_lbl = _label(f"{node.value:.5f}", "statValue")
             self._memory_form.addRow(lbl_text + ":", val_lbl)

@@ -168,14 +168,15 @@ class MainWindow(QMainWindow):
         if (genome.fitness > self._best_fitness_for_dot
                 and self._tabs.currentWidget() is not self._inspect_tab):
             self._best_fitness_for_dot = genome.fitness
-            self._tabs.setTabText(1, "  Inspect ●  ")
+            idx = self._tabs.indexOf(self._inspect_tab)
+            self._tabs.setTabText(idx, "  Inspect ●  ")
 
     def _reset_best_fitness_for_dot(self) -> None:
         self._best_fitness_for_dot = float('-inf')
 
     def _on_tab_changed(self, index: int) -> None:
         if self._tabs.widget(index) is self._inspect_tab:
-            self._tabs.setTabText(1, "  Inspect  ")
+            self._tabs.setTabText(index, "  Inspect  ")
         elif self._tabs.widget(index) is self._comparison_tab:
             self._comparison_tab.refresh()
         elif self._tabs.widget(index) is self._runs_tab:
