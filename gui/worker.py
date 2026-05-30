@@ -631,6 +631,11 @@ class AutoSetupWorker(QThread):
             self._yane.set_target_species(
                 _species_for_task.get(profile.task_type, 5)
             )
+            _noise = profile.noise_level
+            if _noise > 0.6:
+                self._yane.set_multi_eval(n=5, aggregation="mean")
+            elif _noise > 0.3:
+                self._yane.set_multi_eval(n=3, aggregation="mean")
 
             if self._yane._knowledge_base is None:
                 self._yane.set_knowledge_base()

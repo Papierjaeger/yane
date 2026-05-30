@@ -130,8 +130,13 @@ def build_report(
     temporal = getattr(profile, "temporal_dependency", 0.0) if profile else 0.0
     name_part = f" — {problem_name}" if problem_name else ""
     lines.append(f"Problem{name_part}: {task} ({n_in}→{n_out})")
+    noise_note = ""
+    if noise > 0.6:
+        noise_note = " → multi-eval n=5"
+    elif noise > 0.3:
+        noise_note = " → multi-eval n=3"
     lines.append(
-        f"Difficulty: {diff:.2f} | Noise: {noise:.2f} | Temporal: {temporal:.2f}"
+        f"Difficulty: {diff:.2f} | Noise: {noise:.2f}{noise_note} | Temporal: {temporal:.2f}"
     )
     lines.append("")
 

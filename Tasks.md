@@ -12,10 +12,7 @@ Roadmap und Implementierungshistorie.
 
 ### P0 — Direkte Verbesserungen (hoher Hebel)
 
-**Profiler: noise_level direkt für Multi-Eval nutzen** *(neu)*
-Der Profiler misst `noise_level` bereits. Wenn `noise_level > 0.3`, sollte `auto_train()` automatisch `set_multi_eval(n=3)` setzen, da einzelne Episodes dann zu verrauscht sind. Aktuell wird noise_level nur für `temporal_dependency` genutzt.
-- Datei: `evolution/auto_train.py` (`auto_train()`-Methode, nach Phase 3)
-- Datei: `gui/worker.py` (`AutoSetupWorker.run()`)
+**Profiler: noise_level direkt für Multi-Eval nutzen** ✓ *erledigt*
 
 **Profiler: reward_sparsity für Feature-Aktivierung verwenden**
 `reward_sparsity` wird gemessen (Anteil Evals mit Fitness ≈ 0), aber nie ausgewertet. Bei hoher Sparsity sollte `curiosity` oder `diversity_injection` direkt in der Cold-Start-Phase aktiviert werden statt auf FeatureGating zu warten.

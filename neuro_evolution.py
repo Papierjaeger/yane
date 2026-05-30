@@ -7072,6 +7072,14 @@ class NeuroEvolution:
         self.set_target_species(_species_for_task.get(
             getattr(profile, "task_type", ""), 5
         ))
+        # Multi-eval: activate when noise makes single-episode fitness
+        # unreliable.  n=3 adds 3× cost but yields much cleaner selection
+        # signals; n=5 for very noisy environments (noise_level > 0.6).
+        _noise = getattr(profile, "noise_level", 0.0)
+        if _noise > 0.6:
+            self.set_multi_eval(n=5, aggregation="mean")
+        elif _noise > 0.3:
+            self.set_multi_eval(n=3, aggregation="mean")
 
         if target_fitness is not None:
             self.set_min_fitness(target_fitness)
