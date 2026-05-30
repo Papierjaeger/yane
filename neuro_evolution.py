@@ -198,6 +198,7 @@ class NeuroEvolution:
         self._on_stage_advance: Callable | None = None
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
+        self._phylogeny: "PhylogenyTree | None" = None
         self._normalizer = None
         self._multi_objective_enabled: bool = False
         self._multi_objective_weights: tuple[float, ...] | None = None
@@ -2777,6 +2778,23 @@ class NeuroEvolution:
             _gen_eval_ms += result.elapsed_ms
             iterations += 1
             self._n_evaluations_done += result.n_fitness_calls
+            # Phylogeny recording (zero-cost when disabled)
+            if self._phylogeny is not None and self._phylogeny.is_enabled:
+                _parent_id = (genome._parent_ids[0]
+                              if getattr(genome, "_parent_ids", None) else None)
+                _generation = iterations // max(1, _gen_size)
+                _innov_log = getattr(self._tracker, "_innovation_log", {})
+                _genome_innovations = [
+                    innov for innov, (_, gid) in _innov_log.items()
+                    if gid == genome._genome_id
+                ]
+                self._phylogeny.record(
+                    genome_id=genome._genome_id,
+                    parent_id=_parent_id,
+                    fitness=fitness,
+                    generation=_generation,
+                    innovations=_genome_innovations,
+                )
 
             # --- "new_best" event -------------------------------------------
             if self._population._evaluated:
@@ -6470,51 +6488,185 @@ class NeuroEvolution:
 
     def behaviour_clone(
         self,
-        demonstrations: list[tuple[list[float], list[float]]],
-        n_steps: int = 50,
+        demonstrations: "list[tuple[list[float], list[float]]]",
+        n_steps: int = 200,
+        sigma: float = 0.05,
         *,
         seed_population: bool = False,
-        freeze_layers: list[str] | None = None,
-    ) -> Genome:
-        """Supervised pre-training via weight perturbation on demonstration data.
+        noise_sigma: float = 0.05,
+        freeze_layers: "list[str] | None" = None,
+    ) -> "BehaviourCloneResult":
+        """Supervised pre-training of the best genome on expert demonstrations.
 
-        Uses the best genome and refines its weights via simple hill-climbing:
-        perturbs weights, keeps changes that reduce demonstration error.
+        Uses Lamarckian hill-climbing to minimise MSE between genome outputs
+        and demonstration targets.  Returns a :class:`BehaviourCloneResult`
+        with the cloned genome and metrics; call
+        ``result.seed_population()`` to replace the evolution population.
 
-        Args:
-            demonstrations: List of (inputs, targets) pairs.
-            n_steps: Number of refinement steps.
-            seed_population: If true, load the cloned genome as population seed.
+        Parameters
+        ----------
+        demonstrations:
+            List of ``(inputs, targets)`` pairs.
+        n_steps:
+            Total hill-climbing evaluation steps.
+        sigma:
+            Per-step weight perturbation sigma.
+        seed_population:
+            If ``True``, immediately seed the population with noisy copies
+            of the cloned genome.
+        noise_sigma:
+            Weight noise added to each population copy (diversity).
+        freeze_layers:
+            Connection groups to freeze when seeding.
 
-        Returns:
-            The cloned (fine-tuned) genome.
+        Returns
+        -------
+        BehaviourCloneResult
+
+        Note
+        ----
+        PyTorch/backprop-based cloning and the LunarLander benchmark are
+        deferred (require optional torch dependency).
         """
+        from yane.evolution.behaviour_cloning import behaviour_clone as _bc
+        return _bc(
+            self,
+            demonstrations,
+            n_steps=n_steps,
+            sigma=sigma,
+            seed_population=seed_population,
+            noise_sigma=noise_sigma,
+            freeze_layers=freeze_layers,
+        )
+
+    # -------------------------------------------------------------------------
+    # POET — Paired Open-Ended Trailblazer (Co-Evolution)
+    # -------------------------------------------------------------------------
+
+    def train_poet(
+        self,
+        eval_fn: "Callable",
+        initial_env_params: "list[float]",
+        n_generations: int = 100,
+        archive_size: int = 10,
+        env_bounds: "tuple[float, float] | None" = None,
+        env_mutation_sigma: float = 0.1,
+        lower_bound: float = -float("inf"),
+        upper_bound: "float | None" = None,
+        transfer_interval: int = 5,
+        transfer_k: int = 5,
+        env_children_per_gen: int = 2,
+        seed: "int | None" = None,
+    ) -> "POETResult":
+        """Run POET co-evolution of tasks and agents.
+
+        Uses the current best genome as the initial agent.  The agent is
+        mutated within each POET pair using the configured Lamarck refiner
+        (hill-climbing on the pair's fitness function).
+
+        Parameters
+        ----------
+        eval_fn:
+            ``(agent_genome, env_genome) -> float`` — evaluates the agent.
+        initial_env_params:
+            Parameter vector for the initial environment.
+        n_generations:
+            Number of POET step() iterations.
+        archive_size:
+            Maximum active pairs.
+        env_bounds:
+            ``(min, max)`` clipping bounds for environment parameters.
+        env_mutation_sigma:
+            Sigma for environment genome mutation.
+        lower_bound:
+            Minimum fitness for environment viability (not too hard).
+        upper_bound:
+            Maximum fitness for viability (``None`` = no upper bound).
+        transfer_interval:
+            Generations between agent transfer and environment reproduction.
+        transfer_k:
+            Agents tested per target pair during transfer.
+        env_children_per_gen:
+            Child environments produced per pair per generation.
+        seed:
+            Random seed.
+
+        Returns
+        -------
+        POETResult
+        """
+        from yane.evolution.poet import (
+            EnvironmentCriterion,
+            POETResult,
+            train_poet as _train_poet,
+        )
         self._ensure_configured()
-        best = self._population.get_best().copy()
+        pop = self._population
+        agent = pop.get_best().copy() if pop._evaluated else pop._unevaluated[0].copy()
 
-        def _error(g: Genome) -> float:
-            total = 0.0
-            for inp, tgt in demonstrations:
-                out = g.forward(inp)
-                total += sum((o - t) ** 2 for o, t in zip(out, tgt))
-            return total / len(demonstrations)
+        criterion = EnvironmentCriterion(
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+        )
 
-        current = best
-        best_error = _error(current)
-        for _ in range(n_steps):
-            candidate = current.copy()
-            for src in candidate.nodes:
-                for conn in src.connections:
-                    conn.weight += random.uniform(-0.05, 0.05)
-            err = _error(candidate)
-            if err < best_error:
-                current = candidate
-                best_error = err
-        current.fitness = -best_error
-        current.raw_fitness = -best_error
-        if seed_population:
-            self.load_genome_as_seed(current, freeze_layers=freeze_layers)
-        return current
+        def _mutate_agent(genome: "Genome") -> "Genome":
+            child = genome.copy()
+            child.mutate(self._tracker)
+            return child
+
+        return _train_poet(
+            eval_fn=eval_fn,
+            mutate_agent_fn=_mutate_agent,
+            initial_env_params=initial_env_params,
+            initial_agent=agent,
+            n_generations=n_generations,
+            archive_size=archive_size,
+            env_bounds=env_bounds,
+            env_mutation_sigma=env_mutation_sigma,
+            criterion=criterion,
+            transfer_interval=transfer_interval,
+            transfer_k=transfer_k,
+            env_children_per_gen=env_children_per_gen,
+            seed=seed,
+        )
+
+    # -------------------------------------------------------------------------
+    # Genome Phylogeny (Stammbaum der Innovationen)
+    # -------------------------------------------------------------------------
+
+    def enable_phylogeny(self, max_size: "int | None" = None) -> "PhylogenyTree":
+        """Enable genome phylogeny tracking during training.
+
+        When enabled, every evaluated genome is recorded in a
+        :class:`~yane.evolution.phylogeny.PhylogenyTree` with its fitness,
+        parent, and innovation attribution.  Tracking is disabled by default
+        (zero runtime cost).
+
+        Parameters
+        ----------
+        max_size:
+            Maximum number of nodes to retain (oldest roots pruned when
+            exceeded).  ``None`` = unlimited.
+
+        Returns
+        -------
+        PhylogenyTree
+            The active tree (empty until :meth:`train` is called).
+        """
+        from yane.evolution.phylogeny import PhylogenyTree
+        if self._phylogeny is None:
+            self._phylogeny = PhylogenyTree(max_size=max_size)
+        self._phylogeny.enable()
+        return self._phylogeny
+
+    def disable_phylogeny(self) -> None:
+        """Disable phylogeny recording (existing data retained)."""
+        if self._phylogeny is not None:
+            self._phylogeny.disable()
+
+    def get_phylogeny(self) -> "PhylogenyTree | None":
+        """Return the phylogeny tree, or ``None`` if not enabled."""
+        return self._phylogeny
 
     # -------------------------------------------------------------------------
     # Unified Parameter Registry — Phase 1 of P0 Meta-Adaptive Orchestration

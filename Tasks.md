@@ -5,8 +5,8 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** P0 komplett. P1 vollständig. P2: Transfer Learning (✓), Input-Gruppierung (✓), Output-Gruppierung (✓), Convolutional NEAT (✓), ES-HyperNEAT (✓), ONNX-Export (✓), Population Distillation (✓), Gradient-NEAT-Hybrid (✓), STDP (✓), Neuromodulation (✓), WebAssembly-Export (✓), Attention Heads (✓), LTC Nodes (✓), Temporal Speciation (✓), Self-Play (✓), H-NEAT (✓), GRN-Encoding (✓), Developmental NEAT (✓), Continual Learning (✓), Meta-Learning (✓), Reservoir Computing (✓), Open-Ended/Minimal Criterion (✓), Multi-Agent Cooperation (✓), Bayesian NEAT (✓), Safe NEAT (✓), Sparse NEAT / Lottery Ticket (✓), TFLite/C-Array-Export (✓), Symbolic Regression Export (✓) fertig.
-Teststand: `2253 passed, 23 skipped` (nach Bayesian/Safety/Sparse/TFLite/Symbolic).
+**Aktueller Stand:** P0 komplett. P1 vollständig. P2 komplett: Transfer Learning (✓), Input-Gruppierung (✓), Output-Gruppierung (✓), Convolutional NEAT (✓), ES-HyperNEAT (✓), ONNX-Export (✓), Population Distillation (✓), Gradient-NEAT-Hybrid (✓), STDP (✓), Neuromodulation (✓), WebAssembly-Export (✓), Attention Heads (✓), LTC Nodes (✓), Temporal Speciation (✓), Self-Play (✓), H-NEAT (✓), GRN-Encoding (✓), Developmental NEAT (✓), Continual Learning (✓), Meta-Learning (✓), Reservoir Computing (✓), Open-Ended/Minimal Criterion (✓), Multi-Agent Cooperation (✓), Bayesian NEAT (✓), Safe NEAT (✓), Sparse NEAT / Lottery Ticket (✓), TFLite/C-Array-Export (✓), Symbolic Regression Export (✓), Verhaltensklonierung (✓), Genome-Phylogenie (✓), POET/Co-Evolution (✓) fertig.
+Teststand: `2345 passed, 23 skipped` (alle P2-Tasks abgeschlossen).
 
 > **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
 > Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
@@ -1117,36 +1117,65 @@ Vollständig implementiert. `warm_start_from_checkpoint()`, `load_genome_as_seed
 
 ---
 
-### ⚡ P2 Offene Evolution / Co-Evolution von Aufgabe und Agent (POET-aehnlich)
+### ✓ P2 Offene Evolution / Co-Evolution von Aufgabe und Agent (POET-aehnlich)
 
-**Aktueller Stand:** Experimenteller Spike in `evolution/experimental.py`.
-`CoevolutionPool` und `CoevolutionPair` modellieren einfache Agent-/Environment-
-Paare. Eine vollstaendige POET-aehnliche Integration mit `EnvironmentGenome`,
-Archiv, Survival-Regeln, Transfer zwischen Aufgaben und Trainingsloop fehlt.
+**Implementiert** in `evolution/poet.py`:
+
+- `EnvironmentGenome(params, param_bounds, mutation_sigma)`: evolvierbare Task-Parameter; `mutate()`, `copy()`.
+- `EnvironmentCriterion(lower_bound, upper_bound)`: filtert Umgebungen (zu leicht/zu schwer abgelehnt — Survival-Regel).
+- `POETPair(env, agent, fitness_history)`: aktives Paar mit Fitness-History.
+- `POETArchive(max_size, criterion, transfer_interval, transfer_k, env_children_per_gen)`:
+  - `reproduce_environments(eval_fn)`: Kinder-Umgebungen; nur Criterion-konforme aufnehmen.
+  - `transfer_agents(eval_fn)`: Agenten über Umgebungen transferieren; ersetzt wenn besser.
+  - `step(eval_fn, mutate_agent_fn)`: vollständiger POET-Generationsschritt (Evaluate → Mutate → Transfer → Reproduce).
+- `train_poet(eval_fn, mutate_agent_fn, initial_env_params, initial_agent, n_generations, ...)` → `POETResult`.
+- `NeuroEvolution.train_poet(eval_fn, initial_env_params, ...)`: Wrapper; nutzt bestes Genom als Initial-Agent.
+- Spike (`CoevolutionPair`, `CoevolutionPool`) in `experimental.py` als DEPRECATED markiert (ersetzt durch dieses Modul).
+- Exportiert: `EnvironmentGenome`, `EnvironmentCriterion`, `POETPair`, `POETArchive`, `POETResult`, `train_poet`.
+- 26 Tests in `tests/test_poet.py`, alle bestanden.
+- Benchmark LunarLander: deferred (erfordert optionale gym-Abhängigkeit).
 
 ---
 
-### ⚡ P2 Genome-Phylogenie (Stammbaum der Innovationen)
+### ✓ P2 Genome-Phylogenie (Stammbaum der Innovationen)
 
-**Aktueller Stand:** Teilweise implementiert. Genome tragen IDs und Parent-IDs;
-`InnovationTracker` kann Crossover, Innovationen und Ahnenketten erfassen.
-Fitness-Delta-Attribution pro Innovation, Baum-/Graph-Analyse, Export und GUI-
-Visualisierung fehlen noch.
+**Implementiert** in `evolution/phylogeny.py`:
+
+- `PhylogenyNode(genome_id, parent_id, fitness, generation, innovations, fitness_delta)`: Snapshot eines Genoms.
+- `PhylogenyTree(max_size)`: Phylogenetischer Baum (Tree via Primary-Parent-Modell, kein DAG).
+  - `enable()` / `disable()`: Zero-Cost wenn deaktiviert.
+  - `record(genome_id, parent_id, fitness, generation, innovations)`: Genome aufnehmen.
+  - `ancestry(genome_id)`: Ahnenkette älteste-zuerst.
+  - `descendants(genome_id)`: alle Nachkommen (BFS).
+  - `depth(genome_id)`: Tiefe im Baum (Root=0).
+  - `mrca(a, b)`: Most Recent Common Ancestor.
+  - `innovation_attribution(genome_id)`: Fitness-Delta gleichmäßig auf neue Innovationen verteilt.
+  - `root_ids()`: Genome ohne Elternteil.
+  - `best_fitness_in_lineage(genome_id)`: Maximum-Fitness entlang der Ahnenkette.
+  - `to_dict()`: JSON-serialisierbarer Export.
+  - `to_json()`: JSON-String.
+  - `to_dot(label_fn, max_nodes)`: Graphviz-DOT-Export.
+- `NeuroEvolution.enable_phylogeny(max_size)`: aktiviert Recording; gibt `PhylogenyTree` zurück.
+- `NeuroEvolution.get_phylogeny()`: gibt aktiven Baum zurück.
+- `NeuroEvolution.disable_phylogeny()`: deaktiviert Recording.
+- Train-Loop-Hook: zeichnet nach jeder Evaluation auf (inkl. Parent-ID, Innovations aus Tracker).
+- Exportiert: `PhylogenyTree`, `PhylogenyNode`.
+- 45 Tests in `tests/test_phylogeny.py`, alle bestanden.
+- GUI-Visualisierung: deferred.
 
 ---
 
-### ⚡ P2 Verhaltensklonierung als Warm-Start
+### ✓ P2 Verhaltensklonierung als Warm-Start
 
-Evolution braucht viele Iterationen bis zu brauchbaren Loesungen; Demonstrationen koennen das beschleunigen.
+**Implementiert** in `evolution/behaviour_cloning.py`:
 
-**Aktueller Stand:** Teilweise implementiert. `behaviour_clone()` optimiert ein
-Genom mit Demonstrationspaaren ueber eine einfache lokale Suche und gibt das
-gekloente Genom zurueck. Es wird noch nicht automatisch als Population-Seed
-verdrahtet; Backprop-/Torch-Training, Lamarck-Integration und Benchmarks fehlen.
-
-- `yane.behaviour_clone(demonstrations, n_steps)`: supervised Vortraining des besten Genoms auf Demonstrations-Daten via Lamarck/Backprop.
-- Demonstrationen als Liste von `(inputs, outputs)`-Paaren.
-- Benchmark: BC-Warm-Start vs. random-init auf LunarLander.
+- `BehaviourCloneResult(cloned_genome, initial_mse, final_mse, n_steps_run)`: Ergebnis mit `compression_ratio`, `seed_population(n_copies, noise_sigma, freeze_layers)`.
+- `behaviour_clone(ne, demonstrations, n_steps, sigma, ...)`: Lamarck-basiertes Hill-Climbing gegen MSE; monotone Garantie (final_mse ≤ initial_mse). Gibt `BehaviourCloneResult` zurück.
+- `seed_population_with(ne, genome, n_copies, noise_sigma, freeze_layers)`: `load_genome_as_seed()` + optionale Rausch-Kopien in den Pool; gibt neue Pool-Größe zurück.
+- `NeuroEvolution.behaviour_clone(demonstrations, n_steps, sigma, seed_population, noise_sigma, freeze_layers)`: Wrapper; delegiert an Modul. Gibt `BehaviourCloneResult` (nicht mehr Genome).
+- Exportiert: `BehaviourCloneResult`, `behaviour_clone`, `seed_population_with`.
+- 19 Tests in `tests/test_behaviour_cloning.py`, alle bestanden.
+- Backprop/Torch-Training und LunarLander-Benchmark: deferred (optionale torch-Abhängigkeit).
 
 ---
 
@@ -1356,7 +1385,7 @@ verdrahtet; Backprop-/Torch-Training, Lamarck-Integration und Benchmarks fehlen.
 
 ---
 
-### □ P2 Self-Play / Adversarial Populations (Kompetitive Co-Evolution)
+### ✓ P2 Self-Play / Adversarial Populations (Kompetitive Co-Evolution)
 
 **Ziel:** `set_adversarial_populations()` teilt Population in gegnerische Sub-Populationen.
 
@@ -1372,7 +1401,7 @@ verdrahtet; Backprop-/Torch-Training, Lamarck-Integration und Benchmarks fehlen.
 
 ---
 
-### □ P2 Hierarchical NEAT (H-NEAT) — Mehrstufige Policy-Architektur
+### ✓ P2 Hierarchical NEAT (H-NEAT) — Mehrstufige Policy-Architektur
 
 **Ziel:** Zweistufiges System: Manager-Genom waehlt Sub-Policy, Worker-Genome fuehren aus.
 
@@ -1460,7 +1489,7 @@ High-Level Manager → Sub-Policy Pool (N Low-Level Genome)
 
 ---
 
-### □ P2 Evolutionary Reservoir Computing
+### ✓ P2 Evolutionary Reservoir Computing
 
 **Implementiert** in `evolution/reservoir.py`:
 
@@ -1474,7 +1503,7 @@ High-Level Manager → Sub-Policy Pool (N Low-Level Genome)
 
 ---
 
-### □ P2 Open-Ended Evolution / Minimal Criterion
+### ✓ P2 Open-Ended Evolution / Minimal Criterion
 
 **Ziel:** `set_minimal_criterion(fn)` filtert Genome vor Selektion.
 
@@ -1490,7 +1519,7 @@ High-Level Manager → Sub-Policy Pool (N Low-Level Genome)
 
 ---
 
-### □ P2 Multi-Agent Cooperation (kooperativ, nicht adversarial)
+### ✓ P2 Multi-Agent Cooperation (kooperativ, nicht adversarial)
 
 **Implementiert** in `evolution/cooperative.py`:
 

@@ -295,27 +295,26 @@ class Neuromodulator:
 
 
 # =====================================================================
-# Co-Evolution — environment-agent pairing
+# Co-Evolution — SUPERSEDED
+#
+# CoevolutionPair and CoevolutionPool were experimental spikes.
+# Use evolution/poet.py (EnvironmentGenome, POETPair, POETArchive,
+# train_poet) for production-quality POET-like co-evolution.
 # =====================================================================
 
 class CoevolutionPair:
-    """Pair an agent genome with an environment genome.
-
-    The environment genome encodes task parameters (e.g. slope, obstacles).
-    Both populations evolve simultaneously.
-    """
+    """DEPRECATED: use evolution/poet.py — POETPair instead."""
 
     def __init__(self, agent: Genome, env: Genome):
         self.agent = agent
         self.env = env
 
     def evaluate(self, fitness_fn: Callable) -> float:
-        """Evaluate the agent on the environment."""
         return fitness_fn(self.agent)
 
 
 class CoevolutionPool:
-    """Manages paired agent-environment evolution."""
+    """DEPRECATED: use evolution/poet.py — POETArchive instead."""
 
     def __init__(self, n_agents: int = 50, n_envs: int = 20):
         self.agents: list[Genome] = []
@@ -329,7 +328,6 @@ class CoevolutionPool:
         self.envs.append(genome)
 
     def pair(self) -> list[CoevolutionPair]:
-        """Create random agent-environment pairs."""
         pairs = []
         for agent in self.agents:
             env = random.choice(self.envs) if self.envs else None

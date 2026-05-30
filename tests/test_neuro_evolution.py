@@ -1076,7 +1076,8 @@ class TestWarmStartTransfer(unittest.TestCase):
         )
         self.assertEqual(yane.population.unevaluated_count, 1)
         self.assertEqual(len(yane.population._unevaluated[0].output_nodes), 1)
-        self.assertEqual(yane.population._unevaluated[0].fitness, clone.fitness)
+        # behaviour_clone now returns BehaviourCloneResult; access .cloned_genome.fitness
+        self.assertEqual(yane.population._unevaluated[0].fitness, clone.cloned_genome.fitness)
 
 
 if __name__ == "__main__":

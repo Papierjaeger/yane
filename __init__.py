@@ -44,6 +44,16 @@ from yane.evolution.sparse_neat import find_lottery_ticket, apply_ticket, Lotter
 from yane.evolution.tflite_export import genome_to_c_array, genome_to_tflite
 from yane.evolution.cooperative import CooperativeSystem, CooperativeResult, train_cooperative
 from yane.evolution.auto_train import AutoTrainResult
+from yane.evolution.behaviour_cloning import BehaviourCloneResult, behaviour_clone, seed_population_with
+from yane.evolution.phylogeny import PhylogenyTree, PhylogenyNode
+from yane.evolution.poet import (
+    EnvironmentGenome,
+    EnvironmentCriterion,
+    POETPair,
+    POETArchive,
+    POETResult,
+    train_poet,
+)
 from yane.evolution.interactive_eval import InteractiveEvaluator
 from yane.evolution.resource_budget import (
     BudgetConfig,
@@ -118,6 +128,20 @@ __all__ = [
     "ChainMetric",
     "TopologyDistance",
     "WeightDistance",
+    # Behaviour Cloning
+    "BehaviourCloneResult",
+    "behaviour_clone",
+    "seed_population_with",
+    # Phylogeny
+    "PhylogenyTree",
+    "PhylogenyNode",
+    # POET Co-Evolution
+    "EnvironmentGenome",
+    "EnvironmentCriterion",
+    "POETPair",
+    "POETArchive",
+    "POETResult",
+    "train_poet",
     # Distillation
     "distill_ensemble",
     "DistillationResult",
