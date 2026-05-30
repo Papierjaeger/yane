@@ -674,6 +674,9 @@ class AutoSetupWorker(QThread):
                 test_interval=50, test_duration=20, degradation_patience=60,
                 include_heavyweight=profile.task_type in ("rl_discrete", "rl_continuous"),
             )
+            if self._yane._feature_gate is not None and profile.reward_sparsity > 0.3:
+                self._yane._feature_gate.pre_activate("curiosity", self._yane)
+                self._yane._feature_gate.pre_activate("diversity_injection", self._yane)
 
             self.setup_done.emit({
                 "profile":        profile,

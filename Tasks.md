@@ -14,9 +14,7 @@ Roadmap und Implementierungshistorie.
 
 **Profiler: noise_level direkt für Multi-Eval nutzen** ✓ *erledigt*
 
-**Profiler: reward_sparsity für Feature-Aktivierung verwenden**
-`reward_sparsity` wird gemessen (Anteil Evals mit Fitness ≈ 0), aber nie ausgewertet. Bei hoher Sparsity sollte `curiosity` oder `diversity_injection` direkt in der Cold-Start-Phase aktiviert werden statt auf FeatureGating zu warten.
-- Datei: `evolution/auto_train.py` (`apply_cold_start_defaults()`)
+**Profiler: reward_sparsity für Feature-Aktivierung verwenden** ✓ *erledigt*
 
 **FeatureGating: max_concurrent von 2 auf 3 erhöhen**
 Mit 2 concurrent Features und 12 lightweight registrierten Features kann ein Feature im schlechtesten Fall erst nach ~6 × test_interval getestet werden. max_concurrent=3 verbessert die Abdeckung ohne wesentlichen Overhead.

@@ -7161,6 +7161,18 @@ class NeuroEvolution:
             include_heavyweight=_is_temporal,
         )
 
+        # ── 6b. Sparse-reward pre-activation ────────────────────────────────
+        # For high reward-sparsity tasks most fitness evaluations return ≈ 0,
+        # making vanilla selection nearly random.  Curiosity and diversity
+        # injection are known to help; pre-activating them avoids waiting
+        # 50+ generations for FeatureGating to discover this on its own.
+        # Degradation monitoring still applies — they will be disabled if
+        # they hurt later performance.
+        _sparsity = getattr(profile, "reward_sparsity", 0.0)
+        if self._feature_gate is not None and _sparsity > 0.3:
+            self._feature_gate.pre_activate("curiosity", self)
+            self._feature_gate.pre_activate("diversity_injection", self)
+
         # ── 7. Train ────────────────────────────────────────────────────────
         self.train(evaluator)
 

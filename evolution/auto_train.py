@@ -135,9 +135,13 @@ def build_report(
         noise_note = " → multi-eval n=5"
     elif noise > 0.3:
         noise_note = " → multi-eval n=3"
+    sparsity = getattr(profile, "reward_sparsity", 0.0) if profile else 0.0
+    sparsity_note = " → curiosity+diversity pre-activated" if sparsity > 0.3 else ""
     lines.append(
         f"Difficulty: {diff:.2f} | Noise: {noise:.2f}{noise_note} | Temporal: {temporal:.2f}"
     )
+    if sparsity > 0.0:
+        lines.append(f"Reward sparsity: {sparsity:.2f}{sparsity_note}")
     lines.append("")
 
     # Knowledge Base section

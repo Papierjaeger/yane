@@ -165,6 +165,37 @@ class FeatureGate:
             rec.stagnation_count = 0
             rec.disabled_at_gen = -1
 
+    def pre_activate(self, name: str, ne: Any) -> bool:
+        """Activate a feature immediately, bypassing the test window.
+
+        Used when the problem profiler identifies that a feature is very likely
+        beneficial (e.g. curiosity for sparse-reward tasks) and waiting for
+        UCB1 selection would waste dozens of generations.
+
+        The feature is marked ACTIVE so FeatureGating skips testing it and
+        goes straight to degradation monitoring — it will still be disabled
+        automatically if it hurts performance.
+
+        Returns True if the feature was activated, False if unknown or already
+        ACTIVE/TESTING.
+        """
+        if name not in self._features:
+            return False
+        rec = self._features[name]
+        if rec.status not in (FeatureStatus.INACTIVE, FeatureStatus.DISABLED):
+            return False
+        try:
+            rec.enable_fn(ne)
+        except Exception:
+            return False
+        rec.status = FeatureStatus.ACTIVE
+        rec.active_since_gen = 0
+        rec.stagnation_count = 0
+        rec.degradation_level = 0.0
+        rec.disabled_at_gen = -1
+        self._log("active", rec, 0, "pre-activated by profiler")
+        return True
+
     def get_active_features(self) -> list[str]:
         return [n for n, r in self._features.items() if r.status == FeatureStatus.ACTIVE]
 
