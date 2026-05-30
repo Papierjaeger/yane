@@ -259,6 +259,20 @@ def build_default_registry(ne: "NeuroEvolution") -> ParamRegistry:
     _register_shared_weights(reg)
     _register_pruning(reg)
     _register_misc(reg)
+    # Layer-3 Research Features
+    _register_attention(reg)
+    _register_stdp(reg)
+    _register_neuromodulation(reg)
+    _register_ltc(reg)
+    _register_input_grouping(reg)
+    _register_output_grouping(reg)
+    _register_conv_neat(reg)
+    _register_hybrid_mode(reg)
+    _register_probabilistic(reg)
+    _register_island_model(reg)
+    _register_augmentation(reg)
+    _register_phylogeny(reg)
+    _register_safety(reg)
     return reg
 
 
@@ -763,6 +777,184 @@ def _register_pruning(reg: ParamRegistry) -> None:
         ),
         dispatcher=lambda ne, v: ne.set_post_training_pruning(max_drop_frac=v),
     )
+
+
+def _register_attention(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="attention.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="attention",
+        description="Enable evolvable attention heads on genome inputs.",
+    ), dispatcher=lambda ne, v: ne.set_attention(enabled=v))
+    reg.register(ParamSpec(
+        name="attention.head_dim", type="integer", domain=(2, 32),
+        default=4, stage="both", subsystem="attention",
+        description="Dimensionality of each attention head.",
+    ), dispatcher=lambda ne, v: ne.set_attention(head_dim=v))
+    reg.register(ParamSpec(
+        name="attention.num_heads", type="integer", domain=(1, 8),
+        default=2, stage="both", subsystem="attention",
+        description="Number of parallel attention heads.",
+    ), dispatcher=lambda ne, v: ne.set_attention(num_heads=v))
+
+
+def _register_stdp(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="stdp.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="stdp",
+        description="Enable Spike-Timing-Dependent Plasticity (STDP).",
+    ), dispatcher=lambda ne, v: ne.set_stdp(enabled=v))
+    reg.register(ParamSpec(
+        name="stdp.weight_min", type="continuous", domain=(-5.0, 0.0),
+        default=-1.0, stage="both", subsystem="stdp",
+        description="Minimum weight allowed after STDP update.",
+    ), dispatcher=lambda ne, v: ne.set_stdp(weight_min=v))
+    reg.register(ParamSpec(
+        name="stdp.weight_max", type="continuous", domain=(0.0, 5.0),
+        default=1.0, stage="both", subsystem="stdp",
+        description="Maximum weight allowed after STDP update.",
+    ), dispatcher=lambda ne, v: ne.set_stdp(weight_max=v))
+
+
+def _register_neuromodulation(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="neuromodulation.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="neuromodulation",
+        description="Enable dynamic neuromodulation of connection weights.",
+    ), dispatcher=lambda ne, v: ne.set_neuromodulation(enabled=v))
+
+
+def _register_ltc(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="ltc.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="ltc",
+        description="Enable Liquid Time-Constant ODE neuron dynamics.",
+    ), dispatcher=lambda ne, v: ne.set_ltc(enabled=v))
+
+
+def _register_input_grouping(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="input_grouping.enabled", type="boolean", domain=[True, False],
+        default=False, stage="init", subsystem="input_grouping",
+        description="Enable evolvable input-aggregation groups.",
+    ), dispatcher=lambda ne, v: ne.set_input_grouping(enabled=v))
+
+
+def _register_output_grouping(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="output_grouping.enabled", type="boolean", domain=[True, False],
+        default=False, stage="init", subsystem="output_grouping",
+        description="Enable evolvable output-expansion groups.",
+    ), dispatcher=lambda ne, v: ne.set_output_grouping(enabled=v))
+
+
+def _register_conv_neat(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="conv_neat.enabled", type="boolean", domain=[True, False],
+        default=False, stage="init", subsystem="conv_neat",
+        description="Enable Convolutional NEAT image-preprocessing stack.",
+    ), dispatcher=lambda ne, v: ne.set_conv_neat(enabled=v))
+    reg.register(ParamSpec(
+        name="conv_neat.n_blocks", type="integer", domain=(1, 6),
+        default=2, stage="init", subsystem="conv_neat",
+        description="Number of convolutional blocks in the stack.",
+    ), dispatcher=lambda ne, v: ne.set_conv_neat(n_blocks=v))
+
+
+def _register_hybrid_mode(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="hybrid.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="hybrid",
+        description="Enable Gradient-NEAT hybrid backprop interleaving.",
+    ), dispatcher=lambda ne, v: ne.set_hybrid_mode(enabled=v))
+    reg.register(ParamSpec(
+        name="hybrid.bp_interval", type="integer", domain=(1, 100),
+        default=10, stage="both", subsystem="hybrid",
+        description="Generations between backprop refinement rounds.",
+    ), dispatcher=lambda ne, v: ne.set_hybrid_mode(bp_interval=v))
+    reg.register(ParamSpec(
+        name="hybrid.bp_lr", type="continuous", domain=(1e-5, 0.1),
+        default=1e-3, stage="both", subsystem="hybrid",
+        description="Learning rate for Adam optimizer during backprop.",
+    ), dispatcher=lambda ne, v: ne.set_hybrid_mode(bp_lr=v))
+
+
+def _register_probabilistic(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="probabilistic.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="probabilistic",
+        description="Enable Gaussian output noise for uncertainty estimation.",
+    ), dispatcher=lambda ne, v: ne.set_probabilistic(enabled=v))
+    reg.register(ParamSpec(
+        name="probabilistic.noise_std", type="continuous", domain=(0.001, 2.0),
+        default=0.05, stage="both", subsystem="probabilistic",
+        description="Standard deviation of per-output Gaussian noise.",
+    ), dispatcher=lambda ne, v: ne.set_probabilistic(noise_std=v))
+    reg.register(ParamSpec(
+        name="probabilistic.inference_mode", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="probabilistic",
+        description="When True forward() is deterministic (no noise).",
+    ), dispatcher=lambda ne, v: ne.set_probabilistic(inference_mode=v))
+
+
+def _register_island_model(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="island.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="island",
+        description="Enable multi-population island model with migration.",
+    ), dispatcher=lambda ne, v: (
+        ne.set_island_model(n_islands=2) if v else setattr(ne, "_island_model", None)
+    ))
+    reg.register(ParamSpec(
+        name="island.n_islands", type="integer", domain=(2, 20),
+        default=4, stage="init", subsystem="island",
+        description="Number of independent island populations.",
+    ), dispatcher=lambda ne, v: ne.set_island_model(n_islands=v))
+    reg.register(ParamSpec(
+        name="island.migrate_interval", type="integer", domain=(1, 200),
+        default=20, stage="both", subsystem="island",
+        description="Generations between inter-island migrations.",
+    ), dispatcher=lambda ne, v: ne.set_island_model(migration_interval=v))
+    reg.register(ParamSpec(
+        name="island.migrate_count", type="integer", domain=(1, 20),
+        default=2, stage="both", subsystem="island",
+        description="Number of genomes migrating per event.",
+    ), dispatcher=lambda ne, v: ne.set_island_model(migration_count=v))
+
+
+def _register_augmentation(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="augmentation.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="augmentation",
+        description="Enable evolutionary input data augmentation.",
+    ), dispatcher=lambda ne, v: ne.set_evolutionary_augmentation(enabled=v))
+    reg.register(ParamSpec(
+        name="augmentation.pool_size", type="integer", domain=(2, 50),
+        default=5, stage="both", subsystem="augmentation",
+        description="Number of augmentation pipelines in the pool.",
+    ), dispatcher=lambda ne, v: ne.set_evolutionary_augmentation(population_augmentations=v))
+    reg.register(ParamSpec(
+        name="augmentation.evolve_interval", type="integer", domain=(1, 100),
+        default=20, stage="both", subsystem="augmentation",
+        description="Generations between augmentation pool evolution steps.",
+    ), dispatcher=lambda ne, v: ne.set_evolutionary_augmentation(evolution_interval=v))
+
+
+def _register_phylogeny(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="phylogeny.enabled", type="boolean", domain=[True, False],
+        default=False, stage="both", subsystem="phylogeny",
+        description="Enable genome phylogeny tracking (Stammbaum).",
+    ), dispatcher=lambda ne, v: (
+        ne.enable_phylogeny() if v else ne.disable_phylogeny()
+    ))
+
+
+def _register_safety(reg: ParamRegistry) -> None:
+    reg.register(ParamSpec(
+        name="safety.min_safe_frac", type="continuous", domain=(0.0, 1.0),
+        default=0.0, stage="both", subsystem="safety",
+        description="Minimum fraction of population that must pass hard safety constraints.",
+    ), dispatcher=None)  # Dispatcher requires constraint objects; set via /features/safety
 
 
 def _register_misc(reg: ParamRegistry) -> None:

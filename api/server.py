@@ -5,8 +5,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from yane.neuro_evolution import NeuroEvolution
 from yane.api.routes import network, population as pop_routes
+from yane.api.routes import features as feat_routes
+from yane.api.routes import training as train_routes
+from yane.api.routes import export as export_routes
 from yane.util.logger import setup_logging as _setup_log, log_info
 from yane.util.presets import list_presets, load_preset
 
@@ -35,10 +37,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-state: NeuroEvolution = NeuroEvolution()
+from yane.api.state import state  # noqa: E402 — shared singleton
 
 app.include_router(network.router, prefix="/network")
 app.include_router(pop_routes.router, prefix="/population")
+app.include_router(feat_routes.router, prefix="/features")
+app.include_router(train_routes.router, prefix="/train")
+app.include_router(export_routes.router, prefix="/export")
 
 
 class ConfigureRequest(BaseModel):
@@ -129,6 +134,60 @@ def configure(req: ConfigureRequest) -> dict:
     if req.max_process_gb is not None:
         state.set_resource_limits(max_process_gb=req.max_process_gb)
     return state._config_dict()
+
+
+# ── Generic parameter registry endpoints ────────────────────────────────────
+
+
+@app.get("/params", tags=["params"],
+         summary="List all registered hyperparameters with type, domain, and current value")
+def list_params() -> dict:
+    """Return the full ParamRegistry as a dict keyed by parameter name.
+
+    Each entry contains:
+    - ``type``: ``"boolean"`` | ``"integer"`` | ``"continuous"`` | ``"categorical"``
+    - ``domain``: allowed range or list of values
+    - ``default``: factory default
+    - ``current``: last value set (equals default if never changed)
+    - ``subsystem``: owning YANE component
+    - ``description``: human-readable description
+    - ``stage``: ``"init"`` | ``"runtime"`` | ``"both"``
+    """
+    reg = state._ensure_param_registry()
+    return reg.get_param_space()
+
+
+class SetParamRequest(BaseModel):
+    name: str = Field(..., description="Dot-namespaced parameter name, e.g. 'attention.enabled'")
+    value: object = Field(..., description="New value (validated against the parameter's domain)")
+
+
+@app.post("/param", tags=["params"],
+          summary="Set one hyperparameter by name (validated against registered domain)")
+def set_param(req: SetParamRequest) -> dict:
+    """Set a single registered hyperparameter.
+
+    The value is validated against the registered type and domain.  The
+    appropriate ``set_*()`` method is called automatically.
+
+    Use ``GET /params`` to discover available parameter names and their domains.
+    """
+    if not state.is_configured:
+        raise HTTPException(400, "NeuroEvolution not configured yet.")
+    try:
+        state.set_param(req.name, req.value)
+    except KeyError:
+        raise HTTPException(404, f"Unknown parameter: {req.name!r}. See GET /params.")
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e))
+    reg = state._ensure_param_registry()
+    spec = reg._specs.get(req.name)
+    return {
+        "ok": True,
+        "name": req.name,
+        "value": req.value,
+        "current": spec.current_value if spec else req.value,
+    }
 
 
 @app.get("/health", tags=["setup"])
