@@ -333,7 +333,7 @@ class TestTrainingLifecycle(unittest.TestCase):
 
     def setUp(self):
         _configure()
-        # Reset training state
+        # /train/reset blocks until any background thread finishes
         client.post("/train/reset")
 
     def test_status_initially_idle(self):
@@ -376,6 +376,15 @@ class TestTrainingLifecycle(unittest.TestCase):
         client.post("/train/reset")
         r = client.get("/train/status")
         self.assertEqual(r.json()["status"], "idle")
+
+    def test_auto_without_registered_fn_returns_404(self):
+        """POST /train/auto without a registered function returns 404."""
+        from yane.api.routes.training import _fitness_registry
+        _fitness_registry.clear()
+        r = client.post("/train/auto", json={
+            "n_inputs": 2, "n_outputs": 1, "fitness_fn_name": "nonexistent"
+        })
+        self.assertEqual(r.status_code, 404)
 
 
 # ---------------------------------------------------------------------------
@@ -505,3 +514,54 @@ class TestBehaviourCloningEndpoint(unittest.TestCase):
         r = client.post("/export/clone",
                         json={"demonstrations": [], "n_steps": 5})
         self.assertEqual(r.status_code, 422)
+
+
+# ---------------------------------------------------------------------------
+# POST /train/auto — isolated (modifies global state via auto_train internals)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.ci
+class TestAutoTrain(unittest.TestCase):
+    """Isolated test class for /train/auto.
+
+    auto_train() modifies global NeuroEvolution state (MetaOptimizer, FeatureGating,
+    KnowledgeBase, etc.).  Keeping it isolated prevents state contamination of
+    other test classes.
+    """
+
+    def setUp(self):
+        _configure()
+        client.post("/train/reset")
+
+    def tearDown(self):
+        # Ensure background thread has fully exited before next test class
+        client.post("/train/reset")
+
+    def test_auto_with_registered_fn_starts_and_finishes(self):
+        """POST /train/auto with a valid fitness function runs to completion."""
+        import time
+        src = "def fitness_fn(genome): return sum(genome.forward([0.5, 0.5]))"
+        client.post("/train/register_fn", json={"name": "auto_fn2", "source": src})
+
+        r = client.post("/train/auto", json={
+            "n_inputs": 2,
+            "n_outputs": 1,
+            "fitness_fn_name": "auto_fn2",
+            "max_iterations": 5,
+            "n_warmup": 5,
+        })
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["status"], "running")
+        self.assertEqual(data["fitness_fn"], "auto_fn2")
+
+        # Wait for completion (max 8 seconds)
+        for _ in range(40):
+            time.sleep(0.2)
+            status = client.get("/train/status").json()["status"]
+            if status in ("finished", "failed"):
+                break
+
+        final = client.get("/train/status").json()
+        self.assertIn(final["status"], ("finished", "failed"))

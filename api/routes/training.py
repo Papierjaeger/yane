@@ -60,6 +60,20 @@ def _update(updates: dict) -> None:
         _train_state.update(updates)
 
 
+def _wait_for_idle(timeout: float = 10.0) -> bool:
+    """Block until the background training thread has fully exited.
+
+    Joins the thread directly rather than polling status to avoid
+    race conditions between the status update and actual thread completion.
+    Returns True if idle within *timeout* seconds, False on timeout.
+    """
+    thread = _train_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=timeout)
+        return not thread.is_alive()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # GET /train/status
 # ---------------------------------------------------------------------------
@@ -104,7 +118,11 @@ def train_stop() -> dict:
 
 @router.post("/reset", summary="Reset training state to idle (after finished/failed)")
 def train_reset() -> dict:
-    """Reset state to idle so a new training run can be started."""
+    """Reset state to idle so a new training run can be started.
+
+    Waits up to 5 s for any background thread to finish before resetting.
+    """
+    _wait_for_idle(timeout=5.0)
     with _lock:
         if _train_state["status"] == "running":
             raise HTTPException(400, "Training is still running. POST /train/stop first.")
@@ -130,6 +148,11 @@ def train_reset() -> dict:
 class AutoTrainRequest(BaseModel):
     n_inputs: int = Field(..., ge=1)
     n_outputs: int = Field(..., ge=1)
+    fitness_fn_name: str = Field(
+        ...,
+        description="Name of a fitness function registered via POST /train/register_fn. "
+                    "This function is used for both problem profiling and training.",
+    )
     target_fitness: float | None = None
     max_time_seconds: float | None = Field(None, gt=0.0)
     max_iterations: int | None = Field(None, ge=1)
@@ -137,15 +160,36 @@ class AutoTrainRequest(BaseModel):
     n_warmup: int = Field(20, ge=5, le=500)
 
 
-@router.post("/auto", summary="Run auto_train() in background (zero-config)")
+@router.post("/auto", summary="Run auto_train() (zero-config) in background")
 def train_auto(req: AutoTrainRequest) -> dict:
-    """Start ``auto_train()`` in a background thread.
+    """Start ``auto_train()`` in a background thread using a registered fitness function.
 
-    The server profiles the problem automatically and configures all
-    hyperparameters.  Poll ``GET /train/status`` for progress.
+    **Workflow:**
+
+    1. Register your fitness function:
+       ``POST /train/register_fn  {"name": "my_fn", "source": "def fitness_fn(genome): ..."}``
+
+    2. Launch auto-train:
+       ``POST /train/auto  {"n_inputs": 4, "n_outputs": 2, "fitness_fn_name": "my_fn"}``
+
+    3. Poll for progress:
+       ``GET /train/status``
+
+    ``auto_train()`` automatically profiles the problem, selects hyperparameters
+    via the Knowledge Base, enables promising research features via Feature Gating,
+    and runs the MetaOptimizer — all without manual ``set_*()`` calls.
 
     Returns immediately with ``{"ok": true, "status": "running"}``.
+    The full ``auto_config_report`` is available in ``GET /train/status`` once finished.
     """
+    fn = _fitness_registry.get(req.fitness_fn_name)
+    if fn is None:
+        raise HTTPException(
+            404,
+            f"Fitness function {req.fitness_fn_name!r} not registered. "
+            "Register it first with POST /train/register_fn.",
+        )
+
     with _lock:
         if _train_state["status"] == "running":
             raise HTTPException(409, "Training already running.")
@@ -153,20 +197,8 @@ def train_auto(req: AutoTrainRequest) -> dict:
     def _run() -> None:
         _update({"status": "running", "started_at": time.monotonic(), "error": None})
         try:
-            # Configure if not already done
-            if not state.is_configured:
-                state.configure(req.n_inputs, req.n_outputs)
-            if req.max_iterations is not None:
-                state.set_max_iterations(req.max_iterations)
-
-            def _fitness_proxy(genome):
-                # auto_train needs an evaluator — for API mode we use the
-                # manual-loop fitness function with a stub that returns 0.
-                # Clients should use /train/manual_loop instead for real evals.
-                return 0.0
-
             result = state.auto_train(
-                _fitness_proxy,
+                fn,
                 n_inputs=req.n_inputs,
                 n_outputs=req.n_outputs,
                 target_fitness=req.target_fitness,
@@ -178,6 +210,7 @@ def train_auto(req: AutoTrainRequest) -> dict:
                 "status": "finished",
                 "stop_reason": "auto_train_complete",
                 "best_fitness": result.final_fitness,
+                "iterations": result.total_generations,
                 "auto_result": result.auto_config_report,
                 "finished_at": time.monotonic(),
             })
@@ -187,7 +220,7 @@ def train_auto(req: AutoTrainRequest) -> dict:
     global _train_thread
     _train_thread = threading.Thread(target=_run, daemon=True)
     _train_thread.start()
-    return {"ok": True, "status": "running"}
+    return {"ok": True, "status": "running", "fitness_fn": req.fitness_fn_name}
 
 
 # ---------------------------------------------------------------------------
