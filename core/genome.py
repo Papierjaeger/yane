@@ -161,6 +161,47 @@ class Genome:
         # None = disabled (no cost).  Set via NeuroEvolution.set_conv_neat().
         self.conv_stack = None  # ConvStack | None
 
+        # Developmental NEAT — ontogenesis during evaluation.
+        # dev_rules: list of DevelopmentalRule that may fire after forward().
+        # _dev_added: (src_node, conn) pairs added this episode (cleared on reset()).
+        # _dev_frozen: when True, no rules are evaluated.
+        self.dev_rules: list = []
+        self._dev_added: list = []
+        self._dev_frozen: bool = False
+
+        # Evolvable Attention Heads — optional attention preprocessing layer.
+        # None = disabled (no cost).  Set via NeuroEvolution.set_attention().
+        self.attention_block = None  # AttentionBlock | None
+
+    # -------------------------------------------------------------------------
+    # Developmental NEAT
+    # -------------------------------------------------------------------------
+
+    def developmental_forward(self, inputs: "list[float]") -> "list[float]":
+        """Run forward pass then evaluate developmental rules.
+
+        After the standard ``forward()`` computes node activations, each rule
+        in ``self.dev_rules`` is checked.  Triggered rules add connections
+        (which take effect on the *next* call within the same episode).
+
+        ``reset()`` removes all episode-local connections and resets rule
+        fire counters.
+
+        Returns
+        -------
+        list[float]
+            Same as ``forward(inputs)``.
+        """
+        from yane.evolution.developmental import developmental_forward as _dev_fwd
+        return _dev_fwd(self, inputs)
+
+    def freeze_development(self) -> None:
+        """Disable all developmental rules for the remainder of this episode.
+
+        Call ``reset()`` (or set ``genome._dev_frozen = False``) to re-enable.
+        """
+        self._dev_frozen = True
+
     # -------------------------------------------------------------------------
     # Convolutional NEAT
     # -------------------------------------------------------------------------
@@ -257,6 +298,11 @@ class Genome:
             node.value = 0.0
         if self._values_arr is not None:
             self._values_arr.fill(0.0)
+        # Developmental NEAT: remove episode-local connections and reset rule counters.
+        dev_added = getattr(self, "_dev_added", [])
+        if dev_added:
+            from yane.evolution.developmental import reset_developmental
+            reset_developmental(self)
 
     # -------------------------------------------------------------------------
     # Forward mode (full pass with cycle protection)
@@ -966,6 +1012,11 @@ class Genome:
             new_conn = Connection(child_tgt, innovation=innov)
             new_conn.weight = weight
             new_conn.mutation = conn.mutation.copy()
+            # Inherit Hebb plasticity coefficients from the fitter parent's connection.
+            new_conn.hebb_a = conn.hebb_a
+            new_conn.hebb_b = conn.hebb_b
+            new_conn.hebb_c = conn.hebb_c
+            new_conn.hebb_d = conn.hebb_d
             child_src.connections.append(new_conn)
             conn_count += 1
 
@@ -1049,6 +1100,28 @@ class Genome:
             child.conv_stack = self.conv_stack.copy()
         else:
             child.conv_stack = None
+        # Attention block crossover.
+        if self.attention_block is not None and other.attention_block is not None:
+            try:
+                child.attention_block = self.attention_block.crossover(other.attention_block)
+            except Exception:
+                child.attention_block = self.attention_block.copy()
+        elif self.attention_block is not None:
+            child.attention_block = self.attention_block.copy()
+        else:
+            child.attention_block = None
+        # Developmental rules: inherit from fitter parent (self); per-gene crossover.
+        if self.dev_rules and other.dev_rules:
+            shared = min(len(self.dev_rules), len(other.dev_rules))
+            import random as _rnd
+            child.dev_rules = [
+                (self.dev_rules[i] if _rnd.random() < 0.5 else other.dev_rules[i]).copy()
+                for i in range(shared)
+            ] + [r.copy() for r in self.dev_rules[shared:]]
+        else:
+            child.dev_rules = [r.copy() for r in self.dev_rules]
+        child._dev_added = []
+        child._dev_frozen = False
         child._invalidate_topology()
         return child
 
@@ -1119,6 +1192,11 @@ class Genome:
         genome.out_grouper = self.out_grouper.copy() if self.out_grouper is not None else None
         # Convolutional NEAT stack.
         genome.conv_stack = self.conv_stack.copy() if self.conv_stack is not None else None
+        genome.attention_block = self.attention_block.copy() if self.attention_block is not None else None
+        # Developmental rules: copy each rule; episode state (_dev_added) starts fresh.
+        genome.dev_rules = [r.copy() for r in self.dev_rules]
+        genome._dev_added = []
+        genome._dev_frozen = self._dev_frozen
         return genome
 
     # -------------------------------------------------------------------------
@@ -1143,6 +1221,8 @@ class Genome:
         state['_innov_cache'] = None
         state['_active_structure_cache'] = None
         state['_values_arr'] = None   # numpy buffer; rebuilt on first forward() in subprocess
+        # _dev_added contains Node/Connection references — episode-local, not persisted.
+        state['_dev_added'] = []
         return state
 
     def __setstate__(self, state: dict) -> None:
@@ -1164,6 +1244,10 @@ class Genome:
         self.__dict__.setdefault('grouper', None)
         self.__dict__.setdefault('out_grouper', None)
         self.__dict__.setdefault('conv_stack', None)
+        self.__dict__.setdefault('attention_block', None)
+        self.__dict__.setdefault('dev_rules', [])
+        self.__dict__.setdefault('_dev_added', [])
+        self.__dict__.setdefault('_dev_frozen', False)
         if 'mutation_gate_source' not in state:
             m = Mutation()
             m.bool_rate = 0.05

@@ -26,8 +26,19 @@ from yane.evolution.fitness_transform import (
     ChainTransform,
 )
 from yane.evolution.genome_export import genome_to_python, genome_to_numpy_weights
+from yane.evolution.compatibility import TemporalDistance, ChainMetric, TopologyDistance, WeightDistance
 from yane.evolution.onnx_export import genome_to_onnx
+from yane.evolution.wasm_export import genome_to_js, genome_to_html
 from yane.evolution.distillation import distill_ensemble, DistillationResult
+from yane.evolution.self_play import AdversarialSystem, AdversarialResult, train_adversarial
+from yane.evolution.h_neat import HierarchicalGenome
+from yane.evolution.grn_encoding import GRNGene, GRNGenome, GRNCodec
+from yane.evolution.developmental import DevelopmentalRule, ParametricRule, make_threshold_rule
+from yane.evolution.continual import ContinualLearner, TaskAnchor, TaskMemory, compute_ewc_penalty
+from yane.evolution.meta_learning import MetaLearner, MetaTrainResult
+from yane.evolution.reservoir import ReservoirGenome, ReservoirTrainResult, train_ridge_readout
+from yane.evolution.minimal_criterion import MinimalCriterion
+from yane.evolution.cooperative import CooperativeSystem, CooperativeResult, train_cooperative
 from yane.evolution.auto_train import AutoTrainResult
 from yane.evolution.interactive_eval import InteractiveEvaluator
 from yane.evolution.resource_budget import (
@@ -83,9 +94,48 @@ __all__ = [
     "genome_to_python",
     "genome_to_numpy_weights",
     "genome_to_onnx",
+    "genome_to_js",
+    "genome_to_html",
+    # Temporal Speciation
+    "TemporalDistance",
+    "ChainMetric",
+    "TopologyDistance",
+    "WeightDistance",
     # Distillation
     "distill_ensemble",
     "DistillationResult",
+    # H-NEAT
+    "HierarchicalGenome",
+    # Cooperative Multi-Agent
+    "CooperativeSystem",
+    "CooperativeResult",
+    "train_cooperative",
+    # Minimal Criterion
+    "MinimalCriterion",
+    # Reservoir Computing
+    "ReservoirGenome",
+    "ReservoirTrainResult",
+    "train_ridge_readout",
+    # Meta-Learning
+    "MetaLearner",
+    "MetaTrainResult",
+    # Continual Learning
+    "ContinualLearner",
+    "TaskAnchor",
+    "TaskMemory",
+    "compute_ewc_penalty",
+    # Developmental NEAT
+    "DevelopmentalRule",
+    "ParametricRule",
+    "make_threshold_rule",
+    # GRN Encoding
+    "GRNGene",
+    "GRNGenome",
+    "GRNCodec",
+    # Self-Play
+    "AdversarialSystem",
+    "AdversarialResult",
+    "train_adversarial",
     # P0 Meta-Adaptive
     "AutoTrainResult",
     # P1 Interactive Evolution

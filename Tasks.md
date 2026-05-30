@@ -5,8 +5,8 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** P0 komplett. P1 vollständig. P2: Transfer Learning (✓), Input-Gruppierung (✓), Output-Gruppierung (✓), Convolutional NEAT (✓), ES-HyperNEAT (✓), ONNX-Export (✓), Population Distillation (✓), Gradient-NEAT-Hybrid (✓) fertig.
-Teststand: `1826 passed, 23 skipped` (nach Gradient-NEAT-Hybrid; 9 skip torch, 12 skip onnx, 2 pre-existing flaky).
+**Aktueller Stand:** P0 komplett. P1 vollständig. P2: Transfer Learning (✓), Input-Gruppierung (✓), Output-Gruppierung (✓), Convolutional NEAT (✓), ES-HyperNEAT (✓), ONNX-Export (✓), Population Distillation (✓), Gradient-NEAT-Hybrid (✓), STDP (✓), Neuromodulation (✓), WebAssembly-Export (✓), Attention Heads (✓), LTC Nodes (✓), Temporal Speciation (✓), Self-Play (✓), H-NEAT (✓), GRN-Encoding (✓), Developmental NEAT (✓), Continual Learning (✓), Meta-Learning (✓), Reservoir Computing (✓), Open-Ended/Minimal Criterion (✓), Multi-Agent Cooperation (✓) fertig.
+Teststand: `2157 passed, 23 skipped` (nach Multi-Agent Cooperation).
 
 > **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
 > Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
@@ -1150,33 +1150,38 @@ verdrahtet; Backprop-/Torch-Training, Lamarck-Integration und Benchmarks fehlen.
 
 ---
 
-### ⚡ P2 Synaptische Plastizitaet (STDP / Hebbsches Lernen)
+### ✓ P2 Synaptische Plastizitaet (STDP / Hebbsches Lernen)
 
-Genome lernen derzeit nur durch Evolution, nicht durch Erfahrung innerhalb einer Episode.
+**Implementiert** in `evolution/stdp.py` + `core/connection.py`:
 
-**Aktueller Stand:** Experimenteller Spike. `STDPRule` existiert als isolierte
-Regel fuer Gewichtsanpassungen. Genome speichern aber noch keine evolvierbaren
-Plastizitaetskoeffizienten, `genome.forward()` veraendert Gewichte nicht
-episoden-lokal und `genome.reset()` verwaltet keine Basis-/Arbeitsgewichte.
-
-- Knoten/Verbindungen koennen evolvierte Hebb-Regel-Koeffizienten (A, B, C, D) tragen.
-- Gewichte werden waehrend `genome.forward()` nach der STDP-Regel angepasst (intra-lifetime-learning).
-- `genome.reset()` setzt Gewichte auf Basiswerte zurueck (Plastizitaet ist episoden-lokal).
-- Benchmark: STDP vs. Lamarck auf Aufgaben mit veraenderlicher Umgebung.
+- `Connection.__slots__`: `hebb_a, hebb_b, hebb_c, hebb_d, _base_weight` hinzugefügt (alle 0.0/None default → Zero-Cost).
+- Hebb-Regel: `Δw = A·pre + B·post + C·pre·post + D` (klassische 4-Koeffizienten-Form).
+- `set_hebb_coeffs(genome, a,b,c,d, sigma)`: Initialisierung + Noise; `mutate_hebb_coeffs()`: NEAT-Mutation.
+- `init_stdp_base_weights(genome)`: speichert `_base_weight` beim Evaluierungs-Start.
+- `apply_stdp_update(genome, weight_min, weight_max)`: nach jedem `forward()`, nutzt `node.value` für pre/post — geclampt.
+- `restore_stdp_weights(genome)`: setzt Gewichte auf Basiswerte zurück (episodenlokal).
+- `genome.crossover()`: kopiert jetzt auch `hebb_a/b/c/d` für Matching-Genes (Bugfix).
+- `NeuroEvolution.set_stdp(enabled, weight_min, weight_max, hebb_sigma)`: Wrapper in `_run_evaluations` setzt Input-`node.value` manuell (compiled forward path setzt nur Output-Knoten).
+- 23 Tests in `tests/test_stdp.py`, alle bestanden.
+- Benchmark (kein CI-Pfad): bewusst weggelassen.
 
 ---
 
-### ⚡ P2 Neuromodulation
+### ✓ P2 Neuromodulation
 
-Modulatorische Signale erlauben kontextabhaengige Gewichtung ganzer Verbindungsgruppen.
+**Implementiert** in `evolution/neuromodulation.py` + `core/node.py`:
 
-**Aktueller Stand:** Experimenteller Spike. `Neuromodulator` existiert als
-isolierter Skalierungshelfer. Es gibt noch keinen `MODULATOR`-Knotentyp, keine
-evolvierbaren Modulationskanten und keine Integration in `genome.forward()`.
-
-- Sonderknotentyp `Modulator`: sein Ausgabe-Wert skaliert eingehende Verbindungen anderer Knoten.
-- Evolvierbar: welcher Knoten moduliert, welche Verbindungen beeinflusst werden, Staerke.
-- Benchmark: Modulation vs. kein Modulation auf einem Aufgaben-Wechsel-Szenario.
+- `Node.__slots__`: `is_modulator` (bool, default False) und `modulation_gain` (float, default 1.0) hinzugefügt.
+- `node.copy()` überträgt `is_modulator` (Crossover/Checkpoint korrekt).
+- `apply_modulation_to_weights(genome)`: multipliziert `conn.weight = _base_weight * target.modulation_gain` — One-step-delayed (Gain aus Call T wirkt auf T+1).
+- `update_modulation_gains(genome)`: liest MODULATOR-`node.value`, schreibt `target.modulation_gain`.
+- `restore_modulation_weights(genome)`: stellt Basisgewichte + neutrale Gains (1.0) wieder her.
+- `make_node_modulator(genome, idx)`: markiert Knoten als MODULATOR.
+- `mutate_modulator_flags(genome, add_prob, remove_prob)`: NEAT-Mutation für Modulator-Promotion/Demotion.
+- `NeuroEvolution.set_neuromodulation(enabled)`: Wrapper in `_run_evaluations`.
+- Kein neuer `NodeType.MODULATOR` (stattdessen `node.is_modulator` Flag — Zero Blast-Radius); dokumentiert.
+- 22 Tests in `tests/test_neuromodulation.py`, alle bestanden.
+- Benchmark (kein CI-Pfad): bewusst weggelassen.
 
 ---
 
@@ -1291,79 +1296,63 @@ evolvierbaren Modulationskanten und keine Integration in `genome.forward()`.
 
 ---
 
-### □ P2 WebAssembly-Export (Browser-Deployment)
+### ✓ P2 WebAssembly-Export (Browser-Deployment)
 
-**Ziel:** `genome_to_wasm()` generiert eine standalone HTML/JS/WASM-Datei.
+**Implementiert** in `evolution/wasm_export.py`:
 
-```python
-genome.export_wasm("model.html", mode="wasm", allow_cyclic=True, inline=True)
-```
+- `_js_activation(act_name, expr)`: 15 Aktivierungsfunktionen → JS-Ausdrücke (Math.exp, Math.tanh, Math.max, etc.); unbekannte → Identity.
+- `genome_to_js(genome, function_name, unroll_steps)`: Pure-JS-Transpilation acyclischer Genome (topologische Reihenfolge, identisch zu `genome_to_python()`); zyklische Genome → time-unrolled. Auto-detect cyclic wenn `_build_exec_order()` None zurückgibt.
+- `genome_to_html(genome, path, title, function_name, unroll_steps, mode)`: Standalone HTML mit `<script>` (interaktives UI mit Input-Feldern), `mode="js"` → pure JS; `mode="wasm"` → klarer `ImportError` (Emscripten nicht verfügbar).
+- `NeuroEvolution.export_genome_wasm(path, title, mode, unroll_steps)`.
+- `yane.genome_to_js`, `yane.genome_to_html` exportiert.
+- 19 Tests in `tests/test_wasm_export.py`: alle bestanden, inkl. Python↔JS-Vergleich via Node.js v24 (numerisch bis 1e-5).
 
-**Export-Strategie:** Python→C→WASM (Emscripten), ONNX→WASM (Fallback),
-Pure-JS-Transpilation (einfachste, keine WASM-Abhaengigkeit).
-
-**Akzeptanzkriterien:**
-
-- XOR-Genom als `.html`: im Browser Forward-Pass identisch (Toleranz 1e-5).
-- Pure-JS-Modus funktioniert ohne Emscripten.
-- Tests: WASM/Pure-JS-Export; Output-Vergleich Python↔WASM↔JS.
+**Nicht implementiert** (kein Emscripten): `mode="wasm"` → `ImportError` mit klarer Anweisung.
 
 ---
 
-### □ P2 Evolvable Attention Heads (Transformer-inspirierte Architektursuche)
+### ✓ P2 Evolvable Attention Heads (Transformer-inspirierte Architektursuche)
 
-**Ziel:** `NodeType.ATTENTION` als neuer Knotentyp mit Key/Query/Value-Berechnung.
+**Implementiert** in `evolution/attention.py` als Wrapper-Layer (kein `NodeType.ATTENTION` — bewusst, da NEAT keinen natürlichen Sequenz-Begriff hat):
 
-- `head_dim`, `num_heads`: evolvierbare Parameter.
-- Forward: `softmax(Q @ K^T / sqrt(head_dim)) @ V`.
-- `NeuroEvolution.set_attention(enabled=True)` aktiviert Attention-Nodes.
-- `genome_to_torch_module()` mappt auf `nn.MultiheadAttention`.
+- `_softmax(values)`: numerisch stabiles Softmax.
+- `AttentionBlock(n_inputs, head_dim, num_heads, seed)`: W_Q/W_K/W_V-Matrizen [num_heads × head_dim × n_inputs]; `forward(inputs) -> list[float]` (Länge = `n_outputs = num_heads * head_dim`); Scaled Dot-Product Attention pro Head; `mutate(sigma)`, `crossover(other)` (per-Head, von `self.copy()` ausgehend), `copy()`.
+- `genome.attention_block` Feld (None by default; copy/crossover/setstate backward-kompatibel).
+- `NeuroEvolution.set_attention(enabled, head_dim, num_heads, n_inputs)`, `attention_n_inputs()`.
+- Integration in `_run_evaluations()`: wraps `genome.forward` mit `attention_block.forward()`.
+- 26 Tests in `tests/test_attention.py`, alle bestanden.
 
-**Akzeptanzkriterien:**
-
-- Attention-Node produziert korrekte Softmax-gewichtete Outputs.
-- Crossover: Genome mit unterschiedlichen Attention-Konfigurationen kreuzbar.
-- Checkpoint-Roundtrip erhaelt `head_dim` und `num_heads`.
-- Tests: Attention-Mathe; Multi-Head-Konkatenation; Crossover; Checkpoint.
+**Nicht implementiert** (kein NodeType-Enum-Eintrag, Wrapper-Ansatz): `NodeType.ATTENTION`; `genome_to_torch_module()`-Mapping.
 
 ---
 
-### □ P2 Liquid Time-Constant (LTC) Nodes (ODE-basierte Neuronen)
+### ✓ P2 Liquid Time-Constant (LTC) Nodes (ODE-basierte Neuronen)
 
-**Ziel:** `NodeType.LTC` mit ODE-basierter Dynamik.
+**Implementiert** in `evolution/ltc.py` + `core/node.py`:
 
-- ODE: `dx/dt = -(1/τ) * x + f(input, bias)`.
-- Diskrete Approximation (Forward Euler): `x_{t+1} = x_t + dt * (-x_t/τ + activation(sum(inputs) + bias))`.
-- `tau`, `dt`: evolvierbar. `persist_value` implizit True.
-- `NeuroEvolution.set_ltc(enabled=True)`.
-
-**Akzeptanzkriterien:**
-
-- LTC mit τ→∞ naehert sich konstantem State; τ→0 naehert sich instantanem Node.
-- `genome.reset()` setzt LTC-State korrekt zurueck.
-- Tests: ODE-Mathe; Reset-Verhalten; τ-Extremwerte; Crossover.
+- `Node.__slots__`: `tau` (float, default `inf`) und `dt` (float, default 0.01).
+- `node.copy()` überträgt `tau` und `dt`.
+- `_SLOT_DEFAULTS` + Pickle/Checkpoint backward-kompatibel.
+- `apply_ltc_update(genome)`: `x_{t+1} = x_t + dt*(-x_t/τ + node.value)` für alle Knoten mit `tau < inf`; geclampt; Standard-Knoten (tau=inf) werden übersprungen (Zero-Cost).
+- `make_node_ltc(genome, idx, tau, dt)`: markiert Knoten, setzt `persist_value=True`.
+- `mutate_ltc_params(genome, tau_sigma, dt_sigma)`: log-normale tau-Mutation, dt-Perturbation.
+- `NeuroEvolution.set_ltc(enabled)`: Wrapper in `_run_evaluations`.
+- τ-Extremwerte: τ→∞ langsam akkumulierender State, τ→0 instantane Antwort; beides getestet.
+- 22 Tests in `tests/test_ltc.py`, alle bestanden.
 
 ---
 
-### □ P2 Temporal Speciation (Verhaltensbasierte Spezies-Bildung)
+### ✓ P2 Temporal Speciation (Verhaltensbasierte Spezies-Bildung)
 
-**Ziel:** `TemporalDistance` als alternative Kompatibilitaetsmetrik.
+**Implementiert** in `evolution/compatibility.py`:
 
-```python
-yane.set_compatibility_distance(TemporalDistance(
-    n_rollouts=5, rollout_len=20, time_weight=0.5
-))
-```
-
-- Behavior Descriptor: Trajektorie ueber `rollout_len` Schritte.
-- Distanz: Dynamic Time Warping (DTW) ueber Output-Trajektorien.
-- Implementiert `DistanceMetric`-Protokoll; kombinierbar mit `ChainMetric`.
-
-**Akzeptanzkriterien:**
-
-- DTW-Distanz zwischen identischen Trajektorien ist 0.
-- Caching: Trajektorie wird nicht neu berechnet wenn Topologie unveraendert.
-- Tests: DTW-Mathe; Protokoll-Kompatibilitaet; Caching-Invalidierung.
+- `_dtw(traj1, traj2)`: Dynamic Time Warping (DP, O(n·m)), Euclidean pointwise; identische Trajektorien → 0; verschiedene Längen unterstützt; symmetrisch.
+- `_topology_hash(genome)`: schneller Fingerabdruck über Knoten/Connections/Gewichte für Cache-Invalidierung.
+- `TemporalDistance(n_rollouts, rollout_len, time_weight, seed)`: Trajectory-Cache (dict[hash → traj]); `_cache_hits`/`_cache_misses` Metriken; `invalidate_cache()`; feste RNG-Sequenz für faire Genome-Vergleiche; `time_weight` skaliert DTW-Ergebnis.
+- Implementiert `DistanceMetric`-Protokoll: `__call__(g1, g2) -> float`.
+- Kombinierbar mit `ChainMetric`: `ChainMetric([TopologyDistance(), TemporalDistance()], weights=[0.5, 0.5])`.
+- `yane.TemporalDistance`, `yane.ChainMetric`, `yane.TopologyDistance`, `yane.WeightDistance` exportiert.
+- 24 Tests in `tests/test_temporal_speciation.py`, alle bestanden.
 
 ---
 
@@ -1371,18 +1360,15 @@ yane.set_compatibility_distance(TemporalDistance(
 
 **Ziel:** `set_adversarial_populations()` teilt Population in gegnerische Sub-Populationen.
 
-```python
-yane.set_adversarial_populations(n_populations=2, pairing="round_robin")
-```
+**Implementiert** in `evolution/self_play.py`:
 
-- Fitness: Nullsumme. Elo-Ratings pro Genom.
-- `arms_race_indicator`: Anstieg der Fitness in BEIDEN Populationen.
-
-**Akzeptanzkriterien:**
-
-- Fitness ist korrekt Nullsumme.
-- Elo-Ratings steigen in beiden Populationen bei gesundem Arms Race.
-- Tests: Nullsummen-Fitness; getrennte Spezies; Elo-Update; Pairing-Mechanismen.
+- `EloRating` aus `interactive_eval.py` wiederverwendet (Single Source of Truth, Zero-Sum-Garantie durch gemeinsames Rating über alle Populationen).
+- `AdversarialSystem(n_populations, pairing, n_matches, elo_k, seed)`: Pairing-Strategien `"round_robin"`, `"random"`, `"best_vs_rest"`; `apply_game_result()` + `apply_zero_sum_batch()`; `record_elo_snapshot()`; `arms_race_indicator` Property.
+- `AdversarialResult(populations, elo_histories, n_generations)`: `arms_race_indicator` Property; `best_genome(pop_id)`.
+- `train_adversarial(populations, game_fn, mutation_fn, n_generations, ...)`: Standalone-Evolutionsloop mit Elitismus + Mutation.
+- `NeuroEvolution.set_adversarial_populations(...)`, `train_adversarial(game_fn, n_generations, pop_size)`.
+- `yane.AdversarialSystem`, `yane.AdversarialResult`, `yane.train_adversarial` exportiert.
+- 24 Tests in `tests/test_self_play.py`, alle bestanden.
 
 ---
 
@@ -1394,110 +1380,97 @@ yane.set_adversarial_populations(n_populations=2, pairing="round_robin")
 High-Level Manager → Sub-Policy Pool (N Low-Level Genome)
 ```
 
-- `ManagerGenome`, `WorkerGenome`, Sub-Policy-Pool mit eigener Evolution.
-- `selection_mode`: `"hard"` (eine aktiv) oder `"soft"` (gewichtete Mischung).
-- Mutations-Operatoren: `add_sub_policy`, `split_sub_policy`, `merge_sub_policies`.
+**Implementiert** in `evolution/h_neat.py`:
 
-**Akzeptanzkriterien:**
-
-- Manager waehlt unterschiedliche Sub-Policies fuer unterschiedliche Zustaende.
-- Checkpoint speichert/laedt komplette Hierarchie.
-- Tests: Manager-Output-Range; Sub-Policy-Selektion; Pool-Mutation; Checkpoint.
-
----
-
-### □ P2 Gene Regulatory Network (GRN) Encoding
-
-**Ziel:** `GRNCodec` als alternative Genom-Kodierung (kompakt, indirekt).
-
-- GRN-Gen: `(input_gene, output_gene, weight, activation, regulatory_sites[])`.
-- Entwicklung (Genotyp→Phaenotyp): GRN fuer N Schritte simulieren → Connections.
-- `NeuroEvolution.set_genome_encoding("grn", development_steps=5)`.
-- `GRNCodec` implementiert `GenomeCodec`-Protokoll.
-
-**Akzeptanzkriterien:**
-
-- GRN mit 20 Genen enkodiert Genom mit >100 Connections.
-- Crossover zweier GRN-Genome funktioniert (Alignment der Gene).
-- Tests: GRN-Entwicklung; Phaenotyp-Groessen-Korrelation; Crossover; Codec-Protokoll.
+- `HierarchicalGenome(manager, workers, selection_mode)`: `forward(inputs)` — Manager wählt/gewichtet Worker via Softmax; `selection_mode="hard"` (argmax → ein Worker) oder `"soft"` (gewichtete Summe aller Worker-Ausgaben).
+- `last_selected_idx`: welcher Worker zuletzt ausgewählt wurde.
+- `selection_distribution(inputs_list)`: wie oft jeder Worker gewählt wird (Zustandsabhängigkeit).
+- Mutations-Operatoren: `add_sub_policy(worker)`, `split_sub_policy(idx, rng)` (mutierter Clone), `merge_sub_policies(idx_a, idx_b)` (Gewichtsmittelung + Entfernen).
+- `save(path)` / `HierarchicalGenome.load(path)`: Pickle-Checkpoint der kompletten Hierarchie.
+- `copy()`: tiefe Kopie.
+- `NeuroEvolution.configure_hierarchical(n_workers, selection_mode)`: erzeugt Manager + Workers aus aktueller Konfiguration.
+- `yane.HierarchicalGenome` exportiert.
+- 26 Tests in `tests/test_h_neat.py`, alle bestanden.
 
 ---
 
-### □ P2 Developmental NEAT — Ontogenese waehrend Evaluation
+### ✓ P2 Gene Regulatory Network (GRN) Encoding
 
-**Ziel:** `genome.developmental_forward()` aendert Topologie waehrend der Evaluation.
+**Implementiert** in `evolution/grn_encoding.py`:
 
-- Entwicklungsregeln: `DevelopmentalRule` mit `trigger_condition` + `action`.
-- Episoden-lokal: `genome.reset()` stellt Basis-Topologie wieder her.
-- `genome.freeze_development()` unterdr uckt alle Regel-Anwendungen.
-
-**Akzeptanzkriterien:**
-
-- `developmental_forward()` fuegt waehrend Episode tatsaechlich Connections hinzu.
-- Entwicklungsregeln werden korrekt vererbt und mutiert.
-- Tests: Regel-Trigger; Episoden-Lokalitaet; freeze; Vererbung; Checkpoint.
+- `GRNGene(src_node, tgt_node, weight, activation, regulatory_sites, expression_rate)`: `copy()`, `mutate(sigma)`.
+- `GRNGenome(genes)`: `develop(n_inputs, n_outputs, development_steps)` → Phänotyp-Genome; Entwicklungsalgorithmus: 1 Initialisierungsschritt + N reguläre Schritte → 20 Gene × (5+1) = 120 > 100 Connections.  Regulierungslogik: Gen ohne Regulatoren = konstitutiv; Gen mit Regulatoren = aktiv wenn mind. ein Regulator im Vorschritt aktiv war. `random(n_genes, n_nodes, regulatory_prob, seed)`, `copy()`, `mutate()`, `crossover(other)` (Gen-Index-Alignment).
+- `GRNCodec(n_inputs, n_outputs, development_steps)`: implementiert `GenomeCodec`-Protokoll; `encode(grn)` → pickle; `decode(data)` → GRNGenome; `develop(grn)` → Phänotyp.
+- `NeuroEvolution.set_genome_encoding("grn", development_steps, n_genes, n_nodes, seed)`, `develop_grn(grn)`.
+- `yane.GRNGene`, `yane.GRNGenome`, `yane.GRNCodec` exportiert.
+- 24 Tests in `tests/test_grn_encoding.py`, alle bestanden.
 
 ---
 
-### □ P2 Continual / Lifelong Learning NEAT
+### ✓ P2 Developmental NEAT — Ontogenese waehrend Evaluation
 
-**Ziel:** `train()` mit aufgabenweisem Training ohne Catastrophic Forgetting.
+**Implementiert** in `evolution/developmental.py` + `core/genome.py`:
 
-```python
-yane.set_continual_learning(mode="ewc", lambda_ewc=0.1, progressive=True)
-yane.task_start("cartpole")
-yane.train(cartpole_evaluator)
-yane.task_start("lunarlander")
-yane.train(lunarlander_evaluator)
-print(yane.evaluate_all_tasks())
-```
-
-**Modi:** EWC, Progressive, Memory-Replay, Hybrid.
-
-**Akzeptanzkriterien:**
-
-- Nach Aufgabe 2: Fitness auf Aufgabe 1 ≥ 90% der urspruenglichen Fitness.
-- Tests: EWC-Penalty; Progressive-Expansion; Replay-Buffer; Forgetting-Rate.
+- `DevelopmentalRule(trigger_condition, action, max_fires)`: abstrakte Regel; `should_fire(genome)`, `fire(genome)`, `reset_episode()`, `copy()`, `mutate()`.
+- `ParametricRule(trigger_node_idx, threshold, trigger_mode, src_idx, tgt_idx, weight, max_fires)`: konkrete, evolvierbare Regel; Trigger: `node.value >= threshold` oder `<= threshold`; Aktion: fügt ephemere Verbindung hinzu.
+- `make_threshold_rule(...)`: Factory-Funktion.
+- `genome.dev_rules: list[DevelopmentalRule]` (leer = Zero-Cost).
+- `genome._dev_added`: ephemere Verbindungen dieser Episode (in `__getstate__` ausgeschlossen).
+- `genome._dev_frozen: bool`.
+- `genome.developmental_forward(inputs)`: forward() + Regelauswertung.
+- `genome.freeze_development()`: deaktiviert alle Regeln.
+- `genome.reset()`: entfernt `_dev_added`-Verbindungen, setzt Regel-Zähler zurück.
+- `genome.copy()` / `crossover()`: erben `dev_rules` (mit Gen-Alignment).
+- `mutate_rules(genome, weight_sigma, threshold_sigma)`.
+- `yane.DevelopmentalRule`, `yane.ParametricRule`, `yane.make_threshold_rule` exportiert.
+- 24 Tests in `tests/test_developmental.py`, alle bestanden.
 
 ---
 
-### □ P2 Meta-Learning NEAT — Few-Shot Adaptation
+### ✓ P2 Continual / Lifelong Learning NEAT
 
-**Ziel:** `meta_train()` evolviert Genome, die sich in wenigen Episoden an neue Aufgaben anpassen.
+**Implementiert** in `evolution/continual.py`:
 
-```python
-yane.meta_train(task_sampler, meta_iterations=1000, adaptation_steps=3)
-```
+- `TaskAnchor(name, best_genome, best_fitness, anchor_weights)`: speichert Ankerwerte nach Aufgabe.
+- `compute_ewc_penalty(genome, anchors, lambda_ewc)`: `(λ/2) * Σ (w_i - w*_i)²`.
+- `make_ewc_fitness(base_fn, anchors, lambda_ewc)`: wraps Fitness mit EWC-Penalty.
+- `freeze_genome_weights(genome)`: setzt `spike_rate=0` auf alle Verbindungen (progressiv einfrieren).
+- `progressive_expand(genome, n_new_nodes)`: fügt neue HIDDEN-Knoten + Verbindungen hinzu.
+- `TaskMemory(name, max_size)`: Replay-Buffer für (Eingabe, Ausgabe)-Paare.
+- `make_replay_fitness(base_fn, memories, replay_weight, replay_samples)`: MSE-Penalty auf alten Beispielen.
+- `ContinualLearner(mode, lambda_ewc, replay_weight, ...)`: orchestriert alle 4 Modi (ewc, progressive, replay, hybrid); `start_task()`, `wrap_fitness()`, `finish_task()`, `forgetting_rate()`.
+- `NeuroEvolution.set_continual_learning()`, `task_start()`, `task_finish(evaluator, sample_inputs)`, `evaluate_all_tasks()`.
+- train()-Hook: `fitness_fn = learner.wrap_fitness(fitness_fn)` bei jedem Aufruf.
+- `yane.ContinualLearner`, `yane.TaskAnchor`, `yane.TaskMemory`, `yane.compute_ewc_penalty` exportiert.
+- 28 Tests in `tests/test_continual.py`, alle bestanden.
 
-- Inner Loop: Lamarck-Refinement als Adaptations-Mechanismus.
-- Outer Loop: NEAT-Evolution auf Post-Adaptation-Fitness.
+---
 
-**Akzeptanzkriterien:**
+### ✓ P2 Meta-Learning NEAT — Few-Shot Adaptation
 
-- Post-Adaptation-Fitness > Pre-Adaptation-Fitness.
-- Meta-trainiertes Genom adaptiert schneller als zufaellig initialisiertes.
-- Tests: Inner-Loop-Lamarck; Adaptation-Delta; Task-Sampler-Integration.
+**Implementiert** in `evolution/meta_learning.py`:
+
+- `MetaLearner(adaptation_steps, lamarck_sigma, track_deltas)`: Inner-Loop via `LamarckRefiner.refine()` (wiederverwendet); `compute_meta_fitness(genome, task_sampler)` evaluiert Pre-Fitness → Lamarck → Post-Fitness; `make_fitness_fn(task_sampler)` für NEAT-Outer-Loop; `adaptation_deltas` Liste.
+- `MetaTrainResult(best_genome, best_meta_fitness, adaptation_deltas, meta_iterations)`: `mean_adaptation_delta` Property.
+- `NeuroEvolution.meta_train(task_sampler, meta_iterations, adaptation_steps, lamarck_sigma)`: wraps NEAT train() mit meta_fn; gibt `MetaTrainResult` zurück.
+- `make_fitness_fn()` nutzt `genome.copy()` → Originalgenom bleibt unverändert.
+- Hill-Climbing-Garantie: Adaptation-Delta ≥ 0 immer (Lamarck akzeptiert nur Verbesserungen).
+- `yane.MetaLearner`, `yane.MetaTrainResult` exportiert.
+- 13 Tests in `tests/test_meta_learning.py`, alle bestanden.
 
 ---
 
 ### □ P2 Evolutionary Reservoir Computing
 
-**Ziel:** `ReservoirGenome` mit fixiertem Reservoir und evolvierbaren Readout-Connections.
+**Implementiert** in `evolution/reservoir.py`:
 
-```python
-yane.configure_reservoir(n_reservoir=100, spectral_radius=0.9,
-                          input_scaling=0.5, leaking_rate=0.3)
-```
-
-- Nur Readout-Gewichte evolvieren; kein add_node/add_connection.
-- `spectral_radius < 1`: Echo-State-Property garantiert.
-- Optional: `RidgeRegressionReadout` (analytische Loesung).
-
-**Akzeptanzkriterien:**
-
-- Reservoir-State ist deterministisch bei gleichem Seed.
-- Ridge-Readout loest XOR-nahen Task ohne Evolution.
-- Tests: Determinismus; Echo-State-Property; Readout-Evolution; Checkpoint.
+- `ReservoirGenome(n_inputs, n_reservoir, n_outputs, spectral_radius, input_scaling, leaking_rate, seed)`: Leaky ESN-Dynamik `x = (1-α)*x + α*tanh(W*x + W_in*u + b)`; `forward(inputs)`, `reset()`, `collect_states(inputs_sequence, washout)`.
+- `actual_spectral_radius` Property; Power-Iteration-Approximation.
+- `mutate_readout(sigma)`, `copy()`, `save(path)`, `load(path)`.
+- `train_ridge_readout(reservoir, inputs, targets, lambda_ridge, washout)`: analytische Lösung W_out = Y·X^T·(X·X^T + λI)^{-1} via Gauß-Elimination; gibt `ReservoirTrainResult(reservoir, train_mse, n_samples)` zurück.
+- `NeuroEvolution.configure_reservoir(n_reservoir, spectral_radius, input_scaling, leaking_rate, n_inputs, n_outputs, seed)`, `train_reservoir(inputs, targets, ...)`.
+- `yane.ReservoirGenome`, `yane.ReservoirTrainResult`, `yane.train_ridge_readout` exportiert.
+- 20 Tests in `tests/test_reservoir.py`: Determinismus; Echo-State-Property (SR<1, State bounded); Ridge löst linearen Task; Mutation; Checkpoint.
 
 ---
 
@@ -1505,38 +1478,30 @@ yane.configure_reservoir(n_reservoir=100, spectral_radius=0.9,
 
 **Ziel:** `set_minimal_criterion(fn)` filtert Genome vor Selektion.
 
-```python
-yane.set_minimal_criterion(lambda g: g.fitness > -50.0)
-yane.set_open_ended(mode="novelty_with_criterion", archive_size=200)
-```
+**Implementiert** in `evolution/minimal_criterion.py`:
 
-- `min_viable_frac` (Default: 0.1): adaptiver Schwellwert wenn zu wenige viable.
-- Modi: `novelty_with_criterion`, `curiosity_with_criterion`, `quality_diversity_with_criterion`.
-
-**Akzeptanzkriterien:**
-
-- Genome unter Kriterium werden nicht zur Fortpflanzung zugelassen.
-- Adaptive Lockerung greift wenn `viable_frac < min_viable_frac`.
-- Tests: Kriteriums-Filter; adaptive Schwelle; viable-Boost; Archiv-Integration.
+- `MinimalCriterion(criterion_fn, min_viable_frac, penalty, viable_boost_factor)`: `apply(genome, base_fitness)` → `base_fitness` wenn viable, `penalty` wenn nicht; `wrap_fitness(base_fn)` setzt `genome.fitness = base` vor Criterion-Check; `reset_generation()`, `viable_fraction_history()`.
+- Adaptive Lockerung: wenn `viable_frac < min_viable_frac` → `penalty *= viable_boost_factor` (weniger streng); `_relaxation_active` Flag.
+- `make_novelty_with_criterion()`, `make_curiosity_with_criterion()`, `make_qd_with_criterion()`: kombinieren bestehende YANE-Features mit Minimal Criterion.
+- `NeuroEvolution.set_minimal_criterion(criterion_fn, min_viable_frac, penalty, viable_boost_factor)`, `set_open_ended(mode, archive_size)`.
+- train()-Hook: `fitness_fn = mc.wrap_fitness(fitness_fn)` bei jedem Aufruf.
+- `yane.MinimalCriterion` exportiert.
+- 20 Tests in `tests/test_minimal_criterion.py`, alle bestanden.
 
 ---
 
 ### □ P2 Multi-Agent Cooperation (kooperativ, nicht adversarial)
 
-**Ziel:** `set_cooperative_population(n_agents)` trainiert N Genome kooperativ.
+**Implementiert** in `evolution/cooperative.py`:
 
-```python
-yane.set_cooperative_population(n_agents=3, credit="shared")
-```
-
-- Credit-Assignment-Modi: `shared`, `difference` (Shapley-approx), `individual`, `hierarchical`.
-- `role_specialization=True`: Agenten evolvieren in spezialisierte Rollen.
-
-**Akzeptanzkriterien:**
-
-- N Agenten erhalten korrekte Fitness nach den Modi.
-- `role_similarity` sinkt ueber Generationen.
-- Tests: Credit-Assignment-Modi; Rollen-Spezialisierung; Free-Rider-Erkennung.
+- `assign_shared/difference/individual/hierarchical()`: 4 Credit-Assignment-Funktionen; `difference` = Shapley-Approx: `credit_i = f(team) - f(team_without_i)`.
+- `compute_role_similarity(agents, probe_inputs)`: durchschnittliche paarweise Kosinus-Ähnlichkeit der Agent-Ausgaben; `role_diversity_penalty(similarity, weight)`.
+- `CooperativeSystem(n_agents, credit, role_specialization, diversity_weight)`: `evaluate_team(agents, team_fitness_fn, probe_inputs)` → setzt `agent.fitness` für alle Agenten; `role_similarity_history`, `team_fitness_history`.
+- `train_cooperative(agents, team_fitness_fn, ...)`: Evolutions-Loop mit Credit-Assignment + Elitismus.
+- `CooperativeResult(agents, team_fitness_history, role_similarity_history, n_generations)`: `best_agent`, `mean_final_fitness`.
+- `NeuroEvolution.set_cooperative_population(...)`, `train_cooperative(...)`.
+- `yane.CooperativeSystem`, `yane.CooperativeResult`, `yane.train_cooperative` exportiert.
+- 21 Tests in `tests/test_cooperative.py`, alle bestanden.
 
 ---
 

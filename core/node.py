@@ -41,6 +41,11 @@ class Node:
         # overrides the static memory_gate parameter for this persistent node.
         # None = use static memory_gate (default).  Set by Genome._mutate_gate_source().
         'gate_node',
+        # Neuromodulation — optional per-node fields.
+        'is_modulator', 'modulation_gain',
+        # Liquid Time-Constant (LTC) ODE dynamics.
+        # tau=inf → standard node; tau>0 → ODE update.
+        'tau', 'dt',
     )
 
     # Slot-level defaults for __setstate__ (handles genomes serialised before these slots existed).
@@ -48,6 +53,8 @@ class Node:
         'innovation': -1, 'input_scale': 1.0, 'output_scale': 1.0,
         'leak_alpha': 1.0, 'memory_gate': 0.0, '_leak_alpha_mutable': False,
         'gate_node': None,
+        'is_modulator': False, 'modulation_gain': 1.0,
+        'tau': float("inf"), 'dt': 0.01,
     }
 
     def __init__(self, node_type: NodeType = NodeType.HIDDEN, innovation: int = -1) -> None:
@@ -82,6 +89,14 @@ class Node:
         self.mutation_output_scale = Mutation()
         self.mutation_leak_alpha = Mutation()
         self.mutation_memory_gate = Mutation()
+        # Neuromodulation (zero-cost when not set).
+        self.is_modulator: bool = False
+        self.modulation_gain: float = 1.0
+        # Liquid Time-Constant (LTC) ODE dynamics.
+        # tau = float("inf")  → standard node (no dynamics)
+        # tau > 0             → x_{t+1} = x_t + dt*(-x_t/tau + activation(inputs+bias))
+        self.tau: float = float("inf")
+        self.dt: float = 0.01
 
     # -- persist_value property -----------------------------------------------
     # Exposes _persist_value and keeps _retain_value in sync on every write.
@@ -278,4 +293,8 @@ class Node:
         n.mutation_leak_alpha = self.mutation_leak_alpha.copy()
         n.mutation_memory_gate = self.mutation_memory_gate.copy()
         n.gate_node = self.gate_node  # shallow ref; genome.copy() remaps to the new genome's nodes
+        n.is_modulator = self.is_modulator
+        # modulation_gain is episode-local state — offspring starts at neutral
+        n.tau = self.tau
+        n.dt = self.dt
         return n

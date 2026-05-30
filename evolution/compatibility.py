@@ -274,3 +274,181 @@ def _compat_numpy(g1_innov, g2_innov, g1_sorted, g2_sorted,
     excess  = int((g1_excl > smaller_max).sum()) + int((g2_excl > smaller_max).sum())
     disjoint = len(g1_excl) + len(g2_excl) - excess
     return (excess / N) + (disjoint / N) + (0.4 * W_bar)
+
+
+# ---------------------------------------------------------------------------
+# Temporal Speciation — behaviour-based distance via DTW
+# ---------------------------------------------------------------------------
+
+def _dtw(traj1: list[list[float]], traj2: list[list[float]]) -> float:
+    """Dynamic Time Warping distance between two output trajectories.
+
+    Each trajectory is a list of output vectors (one per timestep).
+    The pointwise distance is Euclidean between output vectors.
+
+    Returns 0.0 when both trajectories are identical.
+
+    Parameters
+    ----------
+    traj1, traj2 :
+        Lists of equal-length output vectors.  May have different numbers
+        of timesteps.
+
+    Returns
+    -------
+    float
+        DTW distance (≥ 0).  Equal trajectories return 0.
+    """
+    import math
+    n, m = len(traj1), len(traj2)
+    if n == 0 or m == 0:
+        return 0.0
+
+    def _dist(a: list[float], b: list[float]) -> float:
+        return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+    # DP table (n+1) × (m+1), initialised to inf
+    INF = float("inf")
+    prev = [INF] * (m + 1)
+    prev[0] = 0.0
+
+    for i in range(1, n + 1):
+        curr = [INF] * (m + 1)
+        for j in range(1, m + 1):
+            cost = _dist(traj1[i - 1], traj2[j - 1])
+            curr[j] = cost + min(prev[j], curr[j - 1], prev[j - 1])
+        prev = curr
+
+    return prev[m]
+
+
+def _topology_hash(genome: "Genome") -> int:
+    """Cheap structural fingerprint for trajectory cache invalidation.
+
+    Changes whenever a connection is added, removed, enabled/disabled, or
+    has its weight modified.  Does NOT require ``_invalidate_topology()``.
+    """
+    h = len(genome.nodes) * 1000003
+    for src in genome.nodes:
+        for conn in src.connections:
+            if conn.enabled:
+                h ^= hash((conn.innovation, round(conn.weight, 6)))
+    return h
+
+
+class TemporalDistance:
+    """Behaviour-based speciation distance using Dynamic Time Warping.
+
+    Two genomes are considered similar when they produce similar output
+    *trajectories* over ``rollout_len`` timesteps on random inputs.
+    Each genome's trajectory is cached by topology hash so identical
+    structures are never re-evaluated.
+
+    Implements the :class:`DistanceMetric` protocol; can be combined with
+    topology metrics via :class:`ChainMetric`.
+
+    Parameters
+    ----------
+    n_rollouts :
+        Number of independent rollout trials to average over.
+    rollout_len :
+        Length of each rollout (timesteps per trial).
+    time_weight :
+        Scaling factor applied to the raw DTW distance.  Use < 1.0 to
+        down-weight temporal behaviour relative to topology when combined in a
+        ``ChainMetric``.
+    seed :
+        RNG seed for the random input sequences.  Fixed by default so the
+        same inputs are used across all genome comparisons in a run.
+
+    Example
+    -------
+    ::
+
+        yane.set_compatibility_distance(TemporalDistance(
+            n_rollouts=5, rollout_len=20, time_weight=0.5
+        ))
+        # Or combined with topology:
+        from yane.evolution.compatibility import ChainMetric, TopologyDistance
+        yane.set_compatibility_distance(ChainMetric(
+            [TopologyDistance(), TemporalDistance()],
+            weights=[0.5, 0.5],
+        ))
+    """
+
+    def __init__(
+        self,
+        n_rollouts: int = 5,
+        rollout_len: int = 20,
+        time_weight: float = 1.0,
+        seed: int = 42,
+    ) -> None:
+        self.n_rollouts = max(1, n_rollouts)
+        self.rollout_len = max(1, rollout_len)
+        self.time_weight = float(time_weight)
+        self._seed = seed
+        # Trajectory cache: topology_hash → averaged trajectory
+        self._cache: dict[int, list[list[float]]] = {}
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
+
+    def __call__(self, g1: "Genome", g2: "Genome") -> float:
+        traj1 = self._get_trajectory(g1)
+        traj2 = self._get_trajectory(g2)
+        if not traj1 or not traj2:
+            return 0.0
+        return self.time_weight * _dtw(traj1, traj2)
+
+    def invalidate_cache(self) -> None:
+        """Clear the trajectory cache (e.g., between generations)."""
+        self._cache.clear()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_trajectory(self, genome: "Genome") -> list[list[float]]:
+        """Return cached trajectory or compute and cache it."""
+        key = _topology_hash(genome)
+        if key in self._cache:
+            self._cache_hits += 1
+            return self._cache[key]
+        self._cache_misses += 1
+        traj = self._compute_trajectory(genome)
+        self._cache[key] = traj
+        return traj
+
+    def _compute_trajectory(self, genome: "Genome") -> list[list[float]]:
+        """Run ``n_rollouts`` rollouts and return the mean trajectory."""
+        import random
+        n_in = len(genome.input_nodes)
+        if n_in == 0:
+            return []
+
+        rng = random.Random(self._seed)
+        # Pre-generate all input sequences so they're identical across genomes
+        sequences: list[list[list[float]]] = [
+            [[rng.uniform(-1.0, 1.0) for _ in range(n_in)] for _ in range(self.rollout_len)]
+            for _ in range(self.n_rollouts)
+        ]
+
+        n_out = len(genome.output_nodes)
+        summed = [[0.0] * n_out for _ in range(self.rollout_len)]
+
+        for seq in sequences:
+            genome.reset()
+            for t, inputs in enumerate(seq):
+                try:
+                    out = genome.forward(inputs)
+                    for j, v in enumerate(out[:n_out]):
+                        summed[t][j] += float(v) if _is_finite(float(v)) else 0.0
+                except Exception:
+                    pass  # genome with errors contributes 0
+
+        n = max(1, self.n_rollouts)
+        return [[s / n for s in step] for step in summed]
+
+
+def _is_finite(v: float) -> bool:
+    import math
+    return math.isfinite(v)

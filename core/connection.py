@@ -11,7 +11,14 @@ if TYPE_CHECKING:
 class Connection:
     __slots__ = ('target', '_weight', 'mutation', 'innovation', '__weakref__',
                  '_weight_arr', '_weight_idx', 'enabled', 'spike_rate',
-                 'weight_group')
+                 'weight_group',
+                 # STDP / Hebbian plasticity — evolvable per-connection coefficients.
+                 # Δw = hebb_a*pre + hebb_b*post + hebb_c*pre*post + hebb_d
+                 # All default to 0.0 (no plasticity = zero cost).
+                 'hebb_a', 'hebb_b', 'hebb_c', 'hebb_d',
+                 # Base weight saved at episode start; restored by genome.reset().
+                 # None = STDP not active for this connection.
+                 '_base_weight')
 
     def __init__(self, target: Node, innovation: int = -1) -> None:
         self.target = target
@@ -32,6 +39,12 @@ class Connection:
         self.spike_rate: float = 0.05
         # Shared weight group identifier (None = not grouped).
         self.weight_group: str | None = None
+        # Hebbian plasticity coefficients (STDP).
+        self.hebb_a: float = 0.0
+        self.hebb_b: float = 0.0
+        self.hebb_c: float = 0.0
+        self.hebb_d: float = 0.0
+        self._base_weight: float | None = None
 
     # ------------------------------------------------------------------
     # weight property — keeps _weight_arr in sync on every assignment
@@ -54,11 +67,14 @@ class Connection:
     def __getstate__(self):
         # Expose as 'weight' (not '_weight') for backward compat.
         # _weight_arr / _weight_idx are not pickled — rebuilt by _compile_forward().
+        # _base_weight is episode-local state; not persisted across checkpoints.
         return {
             'target': self.target, 'weight': self._weight,
             'mutation': self.mutation, 'innovation': self.innovation,
             'enabled': self.enabled, 'spike_rate': self.spike_rate,
             'weight_group': self.weight_group,
+            'hebb_a': self.hebb_a, 'hebb_b': self.hebb_b,
+            'hebb_c': self.hebb_c, 'hebb_d': self.hebb_d,
         }
 
     def __setstate__(self, state):
@@ -71,6 +87,11 @@ class Connection:
         self.enabled     = state.get('enabled', True)
         self.spike_rate  = state.get('spike_rate', 0.05)
         self.weight_group = state.get('weight_group', None)
+        self.hebb_a      = state.get('hebb_a', 0.0)
+        self.hebb_b      = state.get('hebb_b', 0.0)
+        self.hebb_c      = state.get('hebb_c', 0.0)
+        self.hebb_d      = state.get('hebb_d', 0.0)
+        self._base_weight = None  # episode-local; never restored from pickle
 
     # ------------------------------------------------------------------
     # Mutation / copy
@@ -96,4 +117,9 @@ class Connection:
         conn.enabled = self.enabled
         conn.spike_rate = self.spike_rate
         conn.weight_group = self.weight_group
+        conn.hebb_a = self.hebb_a
+        conn.hebb_b = self.hebb_b
+        conn.hebb_c = self.hebb_c
+        conn.hebb_d = self.hebb_d
+        # _base_weight is episode-local; offspring starts fresh
         return conn
