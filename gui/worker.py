@@ -665,14 +665,16 @@ class AutoSetupWorker(QThread):
                 enabled=True, tune_interval=5,
                 plateau_patience=30, phase_min_gens=10, max_overhead_pct=10.0,
             )
-            # Use the same minimums as auto_train() so GUI and API behave
-            # consistently.  The exact values scale with run length in
-            # auto_train(); here we use the floor values (≥50/≥20/≥60) since
-            # we don't know the final iteration budget at setup time.
+            # Use task-adaptive floor values matching auto_train() minimums.
+            # Exact scaling with run length happens in auto_train(); here we
+            # only know the task type, so use the per-type floor values.
+            _is_temporal_w = profile.task_type in ("rl_discrete", "rl_continuous")
             self._yane.set_auto_features(
-                enabled=True, max_concurrent=2,
-                test_interval=50, test_duration=20, degradation_patience=60,
-                include_heavyweight=profile.task_type in ("rl_discrete", "rl_continuous"),
+                enabled=True, max_concurrent=3,
+                test_interval=80 if _is_temporal_w else 30,
+                test_duration=30 if _is_temporal_w else 15,
+                degradation_patience=60,
+                include_heavyweight=_is_temporal_w,
             )
             if self._yane._feature_gate is not None and profile.reward_sparsity > 0.3:
                 self._yane._feature_gate.pre_activate("curiosity", self._yane)

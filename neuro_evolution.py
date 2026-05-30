@@ -7140,21 +7140,28 @@ class NeuroEvolution:
         )
 
         # ── 6. Feature Gating ───────────────────────────────────────────────
-        # Scale conservatism with expected training length: for short runs
-        # (few total generations) test features rarely and briefly so they
-        # don't disturb a near-converged population.
+        # Scale conservatism with expected training length and task type.
         _expected_gens = max(10, iters // max(1, pop_size))
-        _test_interval = max(50, _expected_gens // 6)   # ≥50, at most 1/6 of budget
-        _test_duration = max(20, _expected_gens // 15)  # ≥20 gens per test
+        _task_type = getattr(profile, "task_type", "")
+        _is_temporal = _task_type in ("rl_discrete", "rl_continuous")
+        # RL tasks have slow episodes — use wider test windows so results
+        # aren't dominated by noise from a handful of episodes.
+        # Dataset tasks (classification/regression) evaluate cheaply — can
+        # test features more aggressively (shorter intervals, shorter windows).
+        if _is_temporal:
+            _test_interval = max(80, _expected_gens // 4)
+            _test_duration = max(30, _expected_gens // 10)
+        else:
+            _test_interval = max(30, _expected_gens // 8)
+            _test_duration = max(15, _expected_gens // 20)
         _degradation_patience = max(60, _expected_gens // 4)
         # Heavyweight features (STDP, attention, neuromodulation, LTC, augmentation)
         # add per-sample computation that can multiply eval time by 10-100×.
         # Only enable them automatically for temporal/RL tasks where they are
         # likely beneficial; for regression/classification keep them disabled.
-        _is_temporal = getattr(profile, "task_type", "") in ("rl_discrete", "rl_continuous")
         self.set_auto_features(
             enabled=True,
-            max_concurrent=2,
+            max_concurrent=3,
             test_interval=_test_interval,
             test_duration=_test_duration,
             degradation_patience=_degradation_patience,

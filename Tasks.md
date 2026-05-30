@@ -16,14 +16,9 @@ Roadmap und Implementierungshistorie.
 
 **Profiler: reward_sparsity für Feature-Aktivierung verwenden** ✓ *erledigt*
 
-**FeatureGating: max_concurrent von 2 auf 3 erhöhen**
-Mit 2 concurrent Features und 12 lightweight registrierten Features kann ein Feature im schlechtesten Fall erst nach ~6 × test_interval getestet werden. max_concurrent=3 verbessert die Abdeckung ohne wesentlichen Overhead.
-- Datei: `evolution/auto_train.py` (Zeile ~7135: `set_auto_features(max_concurrent=2, ...)`)
-- Datei: `gui/worker.py` (`AutoSetupWorker.run()`: `set_auto_features(max_concurrent=2, ...)`)
+**FeatureGating: max_concurrent von 2 auf 3 erhöhen** ✓ *erledigt*
 
-**FeatureGating: Task-adaptive test_interval / test_duration**
-Aktuell: `test_interval = max(50, expected_gens // 6)` — gleich für alle Tasks. Besser: RL-Tasks mit langer Episodendauer brauchen längere Fenster (`// 4`), kurze Dataset-Tasks können schneller testen (`// 8`).
-- Datei: `evolution/auto_train.py` (Feature-Gating-Konfiguration in `auto_train()`)
+**FeatureGating: Task-adaptive test_interval / test_duration** ✓ *erledigt*
 
 ### P1 — Wichtige Erweiterungen
 
