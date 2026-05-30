@@ -38,6 +38,10 @@ from yane.evolution.continual import ContinualLearner, TaskAnchor, TaskMemory, c
 from yane.evolution.meta_learning import MetaLearner, MetaTrainResult
 from yane.evolution.reservoir import ReservoirGenome, ReservoirTrainResult, train_ridge_readout
 from yane.evolution.minimal_criterion import MinimalCriterion
+from yane.evolution.bayesian_neat import set_probabilistic, bayesian_forward
+from yane.evolution.safety import SafetyConstraint, SafetySystem
+from yane.evolution.sparse_neat import find_lottery_ticket, apply_ticket, LotteryTicket
+from yane.evolution.tflite_export import genome_to_c_array, genome_to_tflite
 from yane.evolution.cooperative import CooperativeSystem, CooperativeResult, train_cooperative
 from yane.evolution.auto_train import AutoTrainResult
 from yane.evolution.interactive_eval import InteractiveEvaluator
@@ -94,6 +98,19 @@ __all__ = [
     "genome_to_python",
     "genome_to_numpy_weights",
     "genome_to_onnx",
+    # Probabilistic / Bayesian NEAT
+    "set_probabilistic",
+    "bayesian_forward",
+    # Safety-Constrained Evolution
+    "SafetyConstraint",
+    "SafetySystem",
+    # Sparse NEAT / Lottery Ticket
+    "find_lottery_ticket",
+    "apply_ticket",
+    "LotteryTicket",
+    # Embedded / C-Array Export
+    "genome_to_c_array",
+    "genome_to_tflite",
     "genome_to_js",
     "genome_to_html",
     # Temporal Speciation

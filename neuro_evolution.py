@@ -172,6 +172,12 @@ class NeuroEvolution:
         # Output sanitizing — replaces NaN/Inf in forward() results (disabled by default)
         self._output_sanitize: bool = False
         self._output_fallback: float = 0.0
+        # Probabilistic / Bayesian NEAT (disabled by default)
+        self._prob_enabled: bool = False
+        self._prob_noise_std: float = 0.05
+        self._prob_inference_mode: bool = False
+        # Safety-Constrained Evolution (Safe NEAT)
+        self._safety_system = None  # SafetySystem | None
         # Cached configure() parameters for logging / introspection.
         self._n_inputs: int = 0
         self._n_outputs: int = 0
@@ -4410,6 +4416,13 @@ class NeuroEvolution:
                 result -= compute_penalty(hw_metrics, self._hw_constraints)
             except Exception:
                 pass   # hardware estimation is non-critical; never break training
+        if genome is not None:
+            system = getattr(self, "_safety_system", None)
+            if system is not None:
+                try:
+                    result = system.evaluate(genome, result)
+                except Exception:
+                    pass  # safety checks must never break training
         return result
 
     def _run_evaluations(
@@ -5441,6 +5454,79 @@ class NeuroEvolution:
             unroll_steps=unroll_steps,
         )
 
+    def export_genome_c_array(
+        self,
+        path: "str | Path" = ".",
+        prefix: str = "yane_net",
+    ) -> tuple:
+        """Export the best genome as C99 source files for embedded deployment.
+
+        Generates ``{path}/{prefix}.h`` and ``{path}/{prefix}.cc``.
+        The code depends only on ``<math.h>`` and is fully C99-compatible.
+
+        Parameters
+        ----------
+        path :
+            Directory to write files into (created if absent).
+        prefix :
+            Name prefix for the generated files and C identifiers.
+
+        Returns
+        -------
+        (header_path, source_path):
+            Absolute :class:`pathlib.Path` objects for the generated files.
+        """
+        from yane.evolution.tflite_export import genome_to_c_array
+        self._ensure_configured()
+        return genome_to_c_array(self._population.get_best(), path=path, prefix=prefix)
+
+    def find_lottery_ticket(
+        self,
+        fitness_fn,
+        target_sparsity: float = 0.5,
+        max_fitness_drop: float = 0.05,
+        iterations: int = 5,
+        lamarck_steps: int = 0,
+        lamarck_sigma: float = 0.1,
+    ):
+        """Find the sparse lottery ticket for the best genome via IMP.
+
+        Uses Iterative Magnitude Pruning on the current best genome.
+        The genome is **not** modified in place; call
+        :func:`~yane.evolution.sparse_neat.apply_ticket` (or
+        ``genome.apply_ticket(ticket)``) to apply the result.
+
+        Parameters
+        ----------
+        fitness_fn:
+            ``(genome) -> float`` fitness function used for evaluation.
+        target_sparsity:
+            Target fraction of connections to prune (0–1).
+        max_fitness_drop:
+            Maximum allowed absolute fitness drop from original fitness.
+        iterations:
+            Number of IMP rounds.
+        lamarck_steps:
+            Hill-climbing fine-tuning steps per round (0 = disabled).
+        lamarck_sigma:
+            Step size for Lamarckian refinement.
+
+        Returns
+        -------
+        LotteryTicket
+        """
+        from yane.evolution.sparse_neat import find_lottery_ticket as _flt
+        self._ensure_configured()
+        return _flt(
+            self._population.get_best(),
+            fitness_fn,
+            target_sparsity=target_sparsity,
+            max_fitness_drop=max_fitness_drop,
+            iterations=iterations,
+            lamarck_steps=lamarck_steps,
+            lamarck_sigma=lamarck_sigma,
+        )
+
     def export_genome_weights(self) -> dict:
         """Return the best genome's weight matrix and bias vector.
 
@@ -5450,6 +5536,44 @@ class NeuroEvolution:
         from yane.evolution.genome_export import genome_to_numpy_weights
         self._ensure_configured()
         return genome_to_numpy_weights(self._population.get_best())
+
+    # -------------------------------------------------------------------------
+    # Probabilistic / Bayesian NEAT
+    # -------------------------------------------------------------------------
+
+    def set_probabilistic(
+        self,
+        enabled: bool = True,
+        noise_std: float = 0.05,
+        inference_mode: bool = False,
+    ) -> None:
+        """Enable or disable probabilistic output noise on all genomes.
+
+        When enabled, each ``genome.forward()`` call adds per-output
+        Gaussian noise, enabling uncertainty estimation via
+        ``genome.bayesian_forward(n=100)``.
+
+        Parameters
+        ----------
+        enabled:
+            Whether probabilistic noise is active.
+        noise_std:
+            Standard deviation of the per-output Gaussian noise.
+        inference_mode:
+            When True, forward() is deterministic (no noise).
+        """
+        from yane.evolution.bayesian_neat import set_probabilistic as _sp
+        self._prob_enabled = enabled
+        self._prob_noise_std = float(noise_std)
+        self._prob_inference_mode = inference_mode
+        if self._population is not None:
+            all_genomes = (
+                list(self._population._evaluated)
+                + list(self._population._unevaluated)
+            )
+            for genome in all_genomes:
+                _sp(genome, enabled=enabled, noise_std=noise_std,
+                    inference_mode=inference_mode)
 
     def set_continual_learning(
         self,
@@ -5656,6 +5780,57 @@ class NeuroEvolution:
             probe_inputs=probe_inputs,
             seed=self._seed,
         )
+
+    # -------------------------------------------------------------------------
+    # Safety-Constrained Evolution (Safe NEAT)
+    # -------------------------------------------------------------------------
+
+    def set_safety_constraints(
+        self,
+        constraints: "list | None",
+        min_safe_frac: float = 0.0,
+    ) -> "SafetySystem | None":
+        """Configure safety constraints for the evolutionary process.
+
+        When set, the fitness function is wrapped to apply constraints to every
+        evaluated genome.  Hard-constraint violations result in ``penalty``
+        fitness immediately.  Soft and barrier constraints reduce fitness
+        proportionally.
+
+        Parameters
+        ----------
+        constraints:
+            List of :class:`~yane.evolution.safety.SafetyConstraint` objects,
+            or ``None`` to disable.
+        min_safe_frac:
+            Minimum fraction of the population that must be "safe" (no hard
+            violations).  When fewer are safe, their fitness is boosted
+            slightly to prevent them from being eliminated.
+
+        Returns
+        -------
+        SafetySystem | None
+        """
+        if constraints is None:
+            self._safety_system = None
+            return None
+        from yane.evolution.safety import SafetySystem
+        self._safety_system = SafetySystem(
+            constraints=constraints,
+            min_safe_frac=min_safe_frac,
+        )
+        return self._safety_system
+
+    def _apply_safety_constraints(
+        self,
+        genome: "Genome",
+        raw_fitness: float,
+    ) -> float:
+        """Apply safety constraints to raw_fitness.  Internal use."""
+        system = getattr(self, "_safety_system", None)
+        if system is None:
+            return raw_fitness
+        return system.evaluate(genome, raw_fitness)
 
     def set_minimal_criterion(
         self,

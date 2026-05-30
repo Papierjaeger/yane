@@ -5,8 +5,8 @@ oben. Abgeschlossene Arbeit ist am Ende kompakt zusammengefasst.
 
 ## Status
 
-**Aktueller Stand:** P0 komplett. P1 vollständig. P2: Transfer Learning (✓), Input-Gruppierung (✓), Output-Gruppierung (✓), Convolutional NEAT (✓), ES-HyperNEAT (✓), ONNX-Export (✓), Population Distillation (✓), Gradient-NEAT-Hybrid (✓), STDP (✓), Neuromodulation (✓), WebAssembly-Export (✓), Attention Heads (✓), LTC Nodes (✓), Temporal Speciation (✓), Self-Play (✓), H-NEAT (✓), GRN-Encoding (✓), Developmental NEAT (✓), Continual Learning (✓), Meta-Learning (✓), Reservoir Computing (✓), Open-Ended/Minimal Criterion (✓), Multi-Agent Cooperation (✓) fertig.
-Teststand: `2157 passed, 23 skipped` (nach Multi-Agent Cooperation).
+**Aktueller Stand:** P0 komplett. P1 vollständig. P2: Transfer Learning (✓), Input-Gruppierung (✓), Output-Gruppierung (✓), Convolutional NEAT (✓), ES-HyperNEAT (✓), ONNX-Export (✓), Population Distillation (✓), Gradient-NEAT-Hybrid (✓), STDP (✓), Neuromodulation (✓), WebAssembly-Export (✓), Attention Heads (✓), LTC Nodes (✓), Temporal Speciation (✓), Self-Play (✓), H-NEAT (✓), GRN-Encoding (✓), Developmental NEAT (✓), Continual Learning (✓), Meta-Learning (✓), Reservoir Computing (✓), Open-Ended/Minimal Criterion (✓), Multi-Agent Cooperation (✓), Bayesian NEAT (✓), Safe NEAT (✓), Sparse NEAT / Lottery Ticket (✓), TFLite/C-Array-Export (✓), Symbolic Regression Export (✓) fertig.
+Teststand: `2253 passed, 23 skipped` (nach Bayesian/Safety/Sparse/TFLite/Symbolic).
 
 > **Roadmap:** 6 P1-Tasks (Benchmarking-Suite, WandB/MLflow, Interactive
 > Evolution, Hardware-Aware, ResourceBudget-System, Data Augmentation) und
@@ -1505,103 +1505,81 @@ High-Level Manager → Sub-Policy Pool (N Low-Level Genome)
 
 ---
 
-### □ P2 Probabilistic / Bayesian NEAT
+### ✓ P2 Probabilistic / Bayesian NEAT
 
-**Ziel:** `NodeType.PROBABILISTIC` mit dualem Output (μ, σ).
+**Implementiert** in `evolution/bayesian_neat.py` + `core/genome.py`:
 
-- Forward: `output = mu + sigma * epsilon` (Reparameterization).
-- `genome.bayesian_forward(n=100)`: gibt `(mean, std)` zurueck.
-- `NeuroEvolution.set_probabilistic(enabled=True, n_samples=5)`.
-
-**Akzeptanzkriterien:**
-
-- `bayesian_forward(n=100)` reduziert Output-Varianz vs. n=1.
-- `inference_mode=True`: deterministischer Output.
-- Tests: Reparameterization-Sampling; Uncertainty-Kalibrierung; Crossover.
-
----
-
-### □ P2 Safety-Constrained Evolution (Safe NEAT)
-
-**Ziel:** `set_safety_constraints(constraints)` — unverletzbare Regeln fuer sicherheitskritische Anwendungen.
-
-```python
-yane.set_safety_constraints([
-    SafetyConstraint("joint_limit",
-                     check=lambda state, action: max(action) < 1.0,
-                     mode="hard"),
-])
-```
-
-- `mode="hard"`: Evaluation sofort abbrechen, Fitness = −∞.
-- `mode="soft"`: Fitness-Reduktion proportional zur Verletzungshaeufigkeit.
-- `mode="barrier"`: logarithmische Barriere-Funktion.
-
-**Akzeptanzkriterien:**
-
-- Hard-Constraint-Verletzung → Fitness = penalty, keine weiteren Schritte.
-- `min_safe_frac`-Mechanismus schuetzt sichere Genome vor Verdraengung.
-- Tests: Hard-Constraint-Abbruch; Soft-Constraint-Penalty; Safe-Fraction-Schutz.
+- Monte-Carlo Dropout-artiges Gauß-Rauschen auf Genome-Outputs (`_apply_prob_noise`).
+- `set_probabilistic(genome, enabled, noise_std, inference_mode)`: Flags setzen.
+- `bayesian_forward(genome, inputs, n)`: n stochastische Samples → `(mean, std)` pro Output.
+- `genome.bayesian_forward(inputs, n)`: Methode auf Genome-Ebene (delegiert).
+- `genome._prob_enabled`, `_prob_noise_std`, `_prob_inference_mode`: Flags, vererbt bei `copy()` und `crossover()`.
+- `NeuroEvolution.set_probabilistic(enabled, noise_std, inference_mode)`: propagiert an alle Genome der Population.
+- Exportiert in `yane.__init__`: `set_probabilistic`, `bayesian_forward`.
+- 18 Tests in `tests/test_bayesian_neat.py`, alle bestanden.
 
 ---
 
-### □ P2 Sparse NEAT / Lottery Ticket Hypothesis
+### ✓ P2 Safety-Constrained Evolution (Safe NEAT)
 
-**Ziel:** `genome.find_lottery_ticket()` identifiziert sparsestes Subnetzwerk.
+**Implementiert** in `evolution/safety.py`:
 
-```python
-ticket = genome.find_lottery_ticket(target_sparsity=0.1,
-                                     max_fitness_drop=0.01,
-                                     iterations=5)
-genome.apply_ticket(ticket)
-```
-
-**Algorithmus (Iterative Magnitude Pruning):** Trainiere → Pruning p% → Fine-tune → Wiederholen.
-
-**Akzeptanzkriterien:**
-
-- Ticket-Fitness ≥ Original − `max_fitness_drop`.
-- IMP findet sparsere Tickets als Random (p < 0.05 ueber 10 Runs).
-- Tests: IMP-Iteration; Ticket-Sparsity; Fitness-Drop-Check; Ticket-Serialisierung.
+- `SafetyConstraint(name, check, mode, penalty)`: Einzelne Sicherheitsbedingung.
+  - `mode="hard"`: Verletzung → Fitness sofort auf `penalty` gesetzt, keine weiteren Constraints.
+  - `mode="soft"`: Fitness -= `abs(fitness) * penalty_frac` (immer verschlechtert, auch bei negativen Werten).
+  - `mode="barrier"`: Fitness -= `log(1 + |penalty|)` (logarithmische Verschlechterung).
+- `SafetySystem(constraints, min_safe_frac)`: verwaltet Constraints; `evaluate()`, `is_safe()`, `safe_fraction()`, `protect_safe_fraction()`, `wrap_fitness_fn()`.
+- `NeuroEvolution.set_safety_constraints(constraints, min_safe_frac)` → `SafetySystem | None`.
+- `_finalize_fitness()`: ruft Safety-Constraints nach Hardware-Penalty auf; `genome=None` sicher (kein Crash).
+- Bugfix: Soft-Penalty nutzt `abs(fitness) * frac` statt `fitness * (1-frac)` (war falsch für negative Fitness).
+- Exportiert: `SafetyConstraint`, `SafetySystem`.
+- 20 Tests in `tests/test_safety_neat.py`, alle bestanden.
 
 ---
 
-### □ P2 Genome-to-TFLite / Embedded Export
+### ✓ P2 Sparse NEAT / Lottery Ticket Hypothesis
 
-**Ziel:** `genome.export_tflite("model.tflite", quantization="int8")`.
+**Implementiert** in `evolution/sparse_neat.py` + `core/genome.py`:
 
-**Export-Pipeline:** `genome_to_torch_module()` → `torch.onnx.export()` → TFLite.
-Alternativ: direkte TFLite-Modellkonstruktion via `tflite.Model`-API.
-
-**Quantisierungs-Modi:** `"fp32"`, `"fp16"`, `"int8"`, `"hybrid"`.
-Output-Formate: `model.tflite`, `model.cc` (C-Array), `model.h`.
-
-**Akzeptanzkriterien:**
-
-- XOR: TFLite-Inferenz innerhalb 1e-3 (fp32).
-- INT8: Outputs innerhalb 5% relativen Fehlers.
-- `model.cc` kompilierbar (syntaktisch korrektes C-Array).
-- Tests: TFLite-Export; Quantisierungs-Vergleich; C-Array-Export.
+- `LotteryTicket(mask, sparsity, fitness, original_fitness)`: Ergebnis-Dataclass; Pickle-kompatibel.
+- `find_lottery_ticket(genome, fitness_fn, target_sparsity, max_fitness_drop, iterations, lamarck_steps, lamarck_sigma)`: IMP — Schwächste Verbindungen iterativ entfernen; Genome nach Suche vollständig restauriert.
+- `apply_ticket(genome, ticket)`: Verbindungen nicht im Mask deaktivieren; Innovation=-1-Verbindungen unberührt.
+- `Genome.find_lottery_ticket(...)`: Methode delegiert an Modul.
+- `Genome.apply_ticket(ticket)`: Methode delegiert an Modul.
+- `NeuroEvolution.find_lottery_ticket(fitness_fn, ...)`: Wrapper für bestes Genome.
+- Exportiert: `find_lottery_ticket`, `apply_ticket`, `LotteryTicket`.
+- 18 Tests in `tests/test_sparse_neat.py`, alle bestanden.
 
 ---
 
-### □ P2 Symbolic Regression Export (Genom → mathematische Formel)
+### ✓ P2 Genome-to-TFLite / Embedded Export
 
-**Ziel:** `genome.to_symbolic(format="latex")` — analytische, menschenlesbare Formel.
+**Implementiert** in `evolution/tflite_export.py`:
 
-```python
-formula = genome.to_symbolic(input_names=["x", "y"], format="latex")
-# f(x,y) = sin(0.5*x - 0.3*y) + tanh(0.8*x + 0.2)
-```
+- `genome_to_c_array(genome, path, prefix)`: C99-Export (`.h` + `.cc`) ohne ML-Framework-Abhängigkeit.
+  - Bias-Array, Connection-Tabelle `{src, tgt, weight}`, `{prefix}_forward(float* inputs, float* outputs)`.
+  - 15 Aktivierungsfunktionen → C-Ausdrücke (identisch zu ONNX-/WASM-Export).
+  - Topologische Ausführungsreihenfolge für acyklische Genome; zyklische Genome emittieren Hinweis.
+- `genome_to_tflite(genome, path)`: raises `ImportError` mit klarem Hinweis (TFLite nicht installiert).
+- `NeuroEvolution.export_genome_c_array(path, prefix)`: Wrapper für bestes Genome.
+- Exportiert: `genome_to_c_array`, `genome_to_tflite`.
+- 16 Tests in `tests/test_tflite_export.py`, alle bestanden.
 
-**Ausgabe-Formate:** `"latex"`, `"python"`, `"sympy"`, `"text"`.
-**Konstanten-Faltung:** `0.0 * x` → entfernt, `1.0 * x` → `x`.
+---
 
-**Akzeptanzkriterien:**
+### ✓ P2 Symbolic Regression Export (Genom → mathematische Formel)
 
-- Symbolic-Output evaluiert zu identischen Werten wie `genome.forward()` (Toleranz 1e-6).
-- LaTeX-Output ist kompilierbar.
-- Tests: Format-Korrektheit; Output-Aequivalenz; Konstanten-Faltung; CSE-Reduktion.
+**Implementiert** in `core/_symbolic.py` + `core/genome.py`:
+
+- `genome_to_symbolic(genome, input_names, fmt, fold_constants)`: acyclische Genome → Symbolischer Ausdruck.
+  - `fmt="python"` / `"sympy"`: `eval()`-kompatibler Python-Ausdruck (Toleranz 1e-6 vs. `genome.forward()`).
+  - `fmt="text"`: menschenlesbarer Infix-Ausdruck (identische Syntax wie Python).
+  - `fmt="latex"`: LaTeX-Markup (`\tanh`, `\sin`, `\sigma`, `|x|`, etc.).
+  - `fold_constants=True`: `0.0*x` → entfernt, `1.0*x` → `x`, `-1.0*x` → `-(x)`.
+  - Multi-Output: Ausdrücke per `"; "` (python/text/sympy) bzw. `", "` (latex) getrennt.
+  - Zyklisches Genom → `ValueError` (keine geschlossene Form möglich).
+- `Genome.to_symbolic(input_names, format, fold_constants)`: Methode delegiert an `_symbolic.genome_to_symbolic`.
+- 24 Tests in `tests/test_symbolic_regression.py`, alle bestanden.
 
 ---
 

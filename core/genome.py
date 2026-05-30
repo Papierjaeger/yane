@@ -68,6 +68,12 @@ class Genome:
         self._output_fallback: float = 0.0
         self.n_output_sanitized: int = 0      # cumulative, session-only (not copied to children)
 
+        # Probabilistic / Bayesian NEAT — add Gaussian noise after each forward().
+        # Set via NeuroEvolution.set_probabilistic() or bayesian_neat.set_probabilistic().
+        self._prob_enabled: bool = False
+        self._prob_noise_std: float = 0.05
+        self._prob_inference_mode: bool = False
+
         # Optional size caps — set by NeuroEvolution.configure()
         self.max_nodes: int | None = None
         self.max_connections: int | None = None
@@ -282,6 +288,54 @@ class Genome:
                 result[i] = fallback
                 self.n_output_sanitized += 1
         return result
+
+    def _apply_prob_noise(self, result: list[float]) -> list[float]:
+        """Add Gaussian noise to forward output if probabilistic mode is active."""
+        if not self._prob_enabled:
+            return result
+        if self._prob_inference_mode:
+            return result
+        import random as _rnd
+        std = self._prob_noise_std
+        if std <= 0.0:
+            return result
+        return [v + _rnd.gauss(0.0, std) for v in result]
+
+    def set_probabilistic(
+        self,
+        enabled: bool = True,
+        noise_std: float = 0.05,
+        inference_mode: bool = False,
+    ) -> None:
+        """Enable or disable probabilistic (stochastic) output noise.
+
+        Parameters
+        ----------
+        enabled:
+            Whether probabilistic noise is active.
+        noise_std:
+            Standard deviation of the per-output Gaussian noise.
+        inference_mode:
+            When True, forward() is deterministic (no noise).
+        """
+        self._prob_enabled = enabled
+        self._prob_noise_std = float(noise_std)
+        self._prob_inference_mode = inference_mode
+
+    def bayesian_forward(
+        self,
+        inputs: list,
+        n: int = 100,
+    ) -> tuple:
+        """Monte-Carlo forward pass: collect *n* stochastic samples.
+
+        Returns (mean_outputs, std_outputs), both lists of length n_outputs.
+        std_outputs[i] converges as O(1/sqrt(n)).
+
+        Temporarily forces probabilistic mode regardless of current settings.
+        """
+        from yane.evolution.bayesian_neat import bayesian_forward as _bf
+        return _bf(self, inputs, n=n)
 
     def get_outputs(self) -> list[float]:
         return [node.value * node.output_scale for node in self.output_nodes]
@@ -665,7 +719,9 @@ class Genome:
         fn = self._forward_dispatch
         if fn is not None:
             result = fn(data)
-            return self._sanitize_outputs(result) if self._output_sanitize else result
+            if self._output_sanitize:
+                result = self._sanitize_outputs(result)
+            return self._apply_prob_noise(result) if self._prob_enabled else result
 
         # First call: resolve topology and install the dispatch function.
         if not self._has_cycles:
@@ -676,12 +732,16 @@ class Genome:
                 self._compiled_forward = compiled
                 self._forward_dispatch = compiled
                 result = compiled(data)
-                return self._sanitize_outputs(result) if self._output_sanitize else result
+                if self._output_sanitize:
+                    result = self._sanitize_outputs(result)
+                return self._apply_prob_noise(result) if self._prob_enabled else result
             self._has_cycles = True
 
         self._forward_dispatch = self._bfs_forward
         result = self._bfs_forward(data)
-        return self._sanitize_outputs(result) if self._output_sanitize else result
+        if self._output_sanitize:
+            result = self._sanitize_outputs(result)
+        return self._apply_prob_noise(result) if self._prob_enabled else result
 
     def forward_batch(self, batch) -> list[list[float]]:
         """Vectorized forward pass for a batch of input vectors.
@@ -1064,6 +1124,9 @@ class Genome:
 
         child._output_sanitize = self._output_sanitize
         child._output_fallback = self._output_fallback
+        child._prob_enabled = self._prob_enabled
+        child._prob_noise_std = self._prob_noise_std
+        child._prob_inference_mode = self._prob_inference_mode
         # DARTS gates from fitter parent (self); child gets fresh copy to evolve.
         if self._darts_gates is not None:
             child._darts_gates = dict(self._darts_gates)
@@ -1168,6 +1231,10 @@ class Genome:
 
         genome._output_sanitize = self._output_sanitize
         genome._output_fallback = self._output_fallback
+        # Probabilistic mode: inherit from parent.
+        genome._prob_enabled = self._prob_enabled
+        genome._prob_noise_std = self._prob_noise_std
+        genome._prob_inference_mode = self._prob_inference_mode
         # n_output_sanitized starts fresh (per-instance counter, not inherited)
         genome._connection_count = self._connection_count
         # Topology caches reference old Node objects — must recompute for the copy.
@@ -1683,3 +1750,111 @@ class Genome:
         if tracker is not None:
             return tracker.get_ancestors(self._genome_id)
         return list(self._parent_ids)
+
+    # -------------------------------------------------------------------------
+    # Sparse NEAT / Lottery Ticket
+    # -------------------------------------------------------------------------
+
+    def find_lottery_ticket(
+        self,
+        fitness_fn,
+        target_sparsity: float = 0.5,
+        max_fitness_drop: float = 0.05,
+        iterations: int = 5,
+        lamarck_steps: int = 0,
+        lamarck_sigma: float = 0.1,
+    ):
+        """Find the sparse lottery ticket via Iterative Magnitude Pruning.
+
+        Delegates to :func:`yane.evolution.sparse_neat.find_lottery_ticket`.
+        The genome is temporarily modified and then fully restored.
+
+        Parameters
+        ----------
+        fitness_fn:
+            ``(genome) -> float`` fitness function.
+        target_sparsity:
+            Target fraction of connections to prune (0–1).
+        max_fitness_drop:
+            Maximum allowed absolute fitness drop from original.
+        iterations:
+            Number of IMP rounds.
+        lamarck_steps:
+            Hill-climbing fine-tuning steps per IMP round (0 = disabled).
+        lamarck_sigma:
+            Step size for Lamarckian refinement.
+
+        Returns
+        -------
+        LotteryTicket
+        """
+        from yane.evolution.sparse_neat import find_lottery_ticket as _flt
+        return _flt(
+            self,
+            fitness_fn,
+            target_sparsity=target_sparsity,
+            max_fitness_drop=max_fitness_drop,
+            iterations=iterations,
+            lamarck_steps=lamarck_steps,
+            lamarck_sigma=lamarck_sigma,
+        )
+
+    def apply_ticket(self, ticket) -> None:
+        """Apply a lottery ticket, disabling connections not in its mask.
+
+        Delegates to :func:`yane.evolution.sparse_neat.apply_ticket`.
+
+        Parameters
+        ----------
+        ticket:
+            :class:`~yane.evolution.sparse_neat.LotteryTicket` from
+            :meth:`find_lottery_ticket`.
+        """
+        from yane.evolution.sparse_neat import apply_ticket as _at
+        _at(self, ticket)
+
+    # -------------------------------------------------------------------------
+    # Symbolic Regression Export
+    # -------------------------------------------------------------------------
+
+    def to_symbolic(
+        self,
+        input_names: "list[str] | None" = None,
+        format: str = "python",
+        fold_constants: bool = True,
+    ) -> str:
+        """Export genome as a closed-form symbolic expression.
+
+        Only acyclic genomes are supported.  Cyclic genomes (memory nodes)
+        cannot be represented as a closed-form mathematical expression.
+
+        Parameters
+        ----------
+        input_names:
+            Names for each input variable.  Defaults to ``["x0", "x1", ...]``.
+        format:
+            ``"python"``  — Python expression string (evaluable with eval).
+            ``"text"``    — human-readable infix notation.
+            ``"latex"``   — LaTeX math string (for use with \\( … \\)).
+            ``"sympy"``   — sympy-parseable string (same as "python" format).
+        fold_constants:
+            Whether to simplify: remove zero-weight terms, collapse
+            ``1.0 * x`` → ``x``, and ``0.0 * x`` → ``0.0``.
+
+        Returns
+        -------
+        str
+            Symbolic representation of the genome's forward function.
+
+        Raises
+        ------
+        ValueError
+            If the genome contains cycles (cannot be represented in closed form).
+        """
+        from yane.core._symbolic import genome_to_symbolic
+        return genome_to_symbolic(
+            self,
+            input_names=input_names,
+            fmt=format,
+            fold_constants=fold_constants,
+        )
