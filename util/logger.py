@@ -69,7 +69,9 @@ def setup_logging(name: str, log_root_override: str | Path | None = None) -> Pat
     """
     root = _resolve_root(log_root_override)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = root / name / timestamp
+    # Sanitize each path component: colons are forbidden in NTFS/SMB directory names.
+    safe_name = "/".join(_sanitize_dir_component(p) for p in name.split("/"))
+    run_dir = root / safe_name / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Configure the shared logger to write into this run directory.
@@ -80,7 +82,7 @@ def setup_logging(name: str, log_root_override: str | Path | None = None) -> Pat
     _install_excepthook()
 
     # Auto-cleanup old runs in this category.
-    _cleanup_old_runs(root, name)
+    _cleanup_old_runs(root, safe_name)
 
     return run_dir
 
@@ -247,6 +249,12 @@ def _setup_file_handler(log_file: Path) -> None:
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
+
+
+def _sanitize_dir_component(part: str) -> str:
+    """Replace characters forbidden in NTFS/SMB directory names with '-'."""
+    # Colons conflict with NTFS alternate data streams and break Samba.
+    return part.replace(":", "-")
 
 
 def _cleanup_old_runs(root: Path, category: str) -> None:
