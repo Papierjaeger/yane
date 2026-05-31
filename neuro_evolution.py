@@ -89,28 +89,6 @@ class NeuroEvolution:
         self._output_grouping_initial: list | None = None  # list[OutputGroup] | None
         self._conv_neat_enabled: bool = False
         self._conv_neat_stack = None  # ConvStack | None (template for new genomes)
-        self._attention_enabled: bool = False
-        self._attention_block = None  # AttentionBlock | None (template)
-        self._ltc_enabled: bool = False
-        self._neuromodulation_enabled: bool = False
-        self._adversarial_system = None  # AdversarialSystem | None
-        self._cooperative_system = None  # CooperativeSystem | None
-        self._minimal_criterion = None  # MinimalCriterion | None
-        self._open_ended_mode: str | None = None
-        self._continual_learner = None  # ContinualLearner | None
-        self._task_evaluators: list[tuple[str, object]] = []  # (name, evaluator)
-        self._stdp_enabled: bool = False
-        self._stdp_weight_min: float = -5.0
-        self._stdp_weight_max: float = 5.0
-        self._stdp_hebb_sigma: float = 0.05
-        self._hybrid_mode_enabled: bool = False
-        self._hybrid_bp_interval: int = 10
-        self._hybrid_bp_epochs: int = 50
-        self._hybrid_bp_lr: float = 0.01
-        self._hybrid_bp_batch_size: int = 32
-        self._hybrid_top_k: int = 3
-        self._hybrid_train_data: list | None = None  # list[(inputs, targets)] | None
-        self._hybrid_replay_buffer = None  # ReplayBuffer | None
         self._complexity_penalty_nodes: float = 0.0
         self._complexity_penalty_connections: float = 0.0
         self._resource_guard = ResourceGuard()
@@ -172,12 +150,6 @@ class NeuroEvolution:
         # Output sanitizing — replaces NaN/Inf in forward() results (disabled by default)
         self._output_sanitize: bool = False
         self._output_fallback: float = 0.0
-        # Probabilistic / Bayesian NEAT (disabled by default)
-        self._prob_enabled: bool = False
-        self._prob_noise_std: float = 0.05
-        self._prob_inference_mode: bool = False
-        # Safety-Constrained Evolution (Safe NEAT)
-        self._safety_system = None  # SafetySystem | None
         # Cached configure() parameters for logging / introspection.
         self._n_inputs: int = 0
         self._n_outputs: int = 0
@@ -198,7 +170,6 @@ class NeuroEvolution:
         self._on_stage_advance: Callable | None = None
         from yane.evolution.innovation import InnovationTracker
         self._tracker = InnovationTracker()
-        self._phylogeny: "PhylogenyTree | None" = None
         self._normalizer = None
         self._multi_objective_enabled: bool = False
         self._multi_objective_weights: tuple[float, ...] | None = None
@@ -406,10 +377,6 @@ class NeuroEvolution:
         # Conv NEAT: attach a conv_stack to the initial genome if configured.
         if self._conv_neat_enabled and self._conv_neat_stack is not None:
             initial.conv_stack = self._conv_neat_stack.copy()
-
-        # Attention: attach an attention_block to the initial genome if configured.
-        if self._attention_enabled and self._attention_block is not None:
-            initial.attention_block = self._attention_block.copy()
 
         # Output Grouping: attach an out_grouper to the initial genome if configured.
         # The out_grouper maps n_outputs proto-outputs → _n_external_outputs expanded outputs.
@@ -1295,159 +1262,6 @@ class NeuroEvolution:
             ] if grouper else [],
         }
 
-    def set_stdp(
-        self,
-        enabled: bool = True,
-        weight_min: float = -5.0,
-        weight_max: float = 5.0,
-        hebb_sigma: float = 0.05,
-    ) -> None:
-        """Enable Synaptische Plastizität (STDP / Hebbian intra-lifetime learning).
-
-        When active, each ``genome.forward()`` call during evaluation applies a
-        Hebb-rule weight update using the current pre- and post-synaptic
-        activations.  At the end of every episode (``genome.reset()`` or at the
-        end of each genome evaluation) the original evolved weights are restored
-        so plasticity is **episoden-lokal** — it never accumulates across
-        generations.
-
-        **Hebb rule applied after each forward call:**
-        ``Δw = A·pre + B·post + C·pre·post + D``
-
-        A, B, C, D are per-connection genes evolved alongside connection weights.
-        All default to 0.0 (no plasticity = zero cost).  Use
-        :func:`~yane.evolution.stdp.set_hebb_coeffs` to initialise them for
-        testing, or let evolution discover useful values from small random seeds.
-
-        Parameters
-        ----------
-        enabled :
-            Toggle STDP on or off.
-        weight_min, weight_max :
-            Clamp range for working weights — prevents runaway plasticity.
-        hebb_sigma :
-            Gaussian noise applied to Hebb coefficients each NEAT mutation.
-
-        Example
-        -------
-        ::
-
-            from yane.evolution.stdp import set_hebb_coeffs
-            yane.set_stdp(enabled=True, weight_min=-3.0, weight_max=3.0)
-            # Seed hebb coefficients for demonstration:
-            for g in yane.population._unevaluated:
-                set_hebb_coeffs(g, c=0.01, sigma=0.005)
-            yane.train(fitness_fn)
-        """
-        self._stdp_enabled = bool(enabled)
-        self._stdp_weight_min = float(weight_min)
-        self._stdp_weight_max = float(weight_max)
-        self._stdp_hebb_sigma = float(hebb_sigma)
-
-    def set_neuromodulation(
-        self,
-        enabled: bool = True,
-    ) -> None:
-        """Enable Neuromodulation — kontextabhängige Gewichtung via Modulator-Knoten.
-
-        When active, nodes marked with ``node.is_modulator = True`` act as
-        modulatory interneurons: their activation value is applied as a
-        multiplicative gain to all connections feeding into their target nodes.
-
-        The modulation is **one-step-delayed**: the MODULATOR's activation from
-        call T sets the gain for call T+1.  This avoids two-pass forward
-        computation while still enabling context-sensitive gating.
-
-        MODULATOR nodes are evolved by NEAT like normal hidden nodes.  Mark
-        a node as a MODULATOR via ``genome.nodes[i].is_modulator = True``,
-        or let :func:`~yane.evolution.neuromodulation.mutate_modulator_flags`
-        discover them during evolution.
-
-        Parameters
-        ----------
-        enabled :
-            Toggle neuromodulation on or off.
-
-        Example
-        -------
-        ::
-
-            from yane.evolution.neuromodulation import make_node_modulator
-            yane.set_neuromodulation(enabled=True)
-            # After configure(), mark hidden node as modulator:
-            for g in yane.population._unevaluated:
-                if len(g.nodes) > 3:
-                    make_node_modulator(g, 2)
-            yane.train(fitness_fn)
-        """
-        self._neuromodulation_enabled = bool(enabled)
-
-    def set_hybrid_mode(
-        self,
-        enabled: bool = True,
-        bp_interval: int = 10,
-        bp_epochs: int = 50,
-        bp_lr: float = 0.01,
-        bp_batch_size: int = 32,
-        top_k: int = 3,
-        train_data: "list | None" = None,
-        replay_buffer_size: int = 10_000,
-    ) -> None:
-        """Enable Gradient-NEAT Hybrid mode (backprop interleaved with evolution).
-
-        Every ``bp_interval`` generations the top-K genomes receive a short
-        backprop fine-tuning phase before being returned to evolution.  This
-        combines NEAT's global structural search with gradient descent's
-        efficient local weight tuning.
-
-        Requires PyTorch (``pip install torch``).  The backprop phase raises
-        ``ImportError`` when PyTorch is absent; calling :meth:`set_hybrid_mode`
-        itself does not require PyTorch.
-
-        Parameters
-        ----------
-        enabled :
-            Toggle hybrid mode on or off.
-        bp_interval :
-            Run a backprop phase every this many generations.
-        bp_epochs :
-            Gradient-descent steps per genome per backprop phase.
-        bp_lr :
-            Adam optimiser learning rate.
-        bp_batch_size :
-            Number of samples drawn from the replay buffer per gradient step.
-        top_k :
-            Number of best-fitness genomes to fine-tune each backprop phase.
-        train_data :
-            Optional list of ``(inputs, targets)`` pairs to use as supervised
-            training data.  When *None*, the replay buffer is used (inputs
-            seen during NEAT evaluation, labelled by the current best genome).
-        replay_buffer_size :
-            Maximum entries in the auto-accumulated replay buffer.
-
-        Example
-        -------
-        ::
-
-            yane.set_hybrid_mode(bp_interval=10, bp_epochs=30, bp_lr=0.005,
-                                 train_data=[([0,0],[0]), ([0,1],[1]),
-                                             ([1,0],[1]), ([1,1],[0])])
-            yane.train(xor_fitness_fn)
-        """
-        if not enabled:
-            self._hybrid_mode_enabled = False
-            self._hybrid_replay_buffer = None
-            return
-        from yane.evolution.hybrid_neat import ReplayBuffer
-        self._hybrid_mode_enabled = True
-        self._hybrid_bp_interval = max(1, bp_interval)
-        self._hybrid_bp_epochs = max(1, bp_epochs)
-        self._hybrid_bp_lr = bp_lr
-        self._hybrid_bp_batch_size = max(1, bp_batch_size)
-        self._hybrid_top_k = max(1, top_k)
-        self._hybrid_train_data = list(train_data) if train_data is not None else None
-        self._hybrid_replay_buffer = ReplayBuffer(max_size=replay_buffer_size)
-
     def set_conv_neat(
         self,
         enabled: bool = True,
@@ -1528,85 +1342,6 @@ class NeuroEvolution:
                 "No ConvStack configured.  Call set_conv_neat() first."
             )
         return self._conv_neat_stack.n_outputs
-
-    def set_attention(
-        self,
-        enabled: bool = True,
-        head_dim: int = 4,
-        num_heads: int = 2,
-        n_inputs: int | None = None,
-    ) -> "AttentionBlock | None":
-        """Enable Evolvable Attention Heads preprocessing.
-
-        Attaches an :class:`~yane.evolution.attention.AttentionBlock` to each
-        genome.  The block runs a multi-head self-attention computation on the
-        raw inputs and produces a ``num_heads * head_dim``-dimensional feature
-        vector, which is then fed into the NEAT network.
-
-        Call **before** :meth:`configure`.  Pass ``n_inputs=yane.attention_n_inputs()``
-        as the network's input count.
-
-        Parameters
-        ----------
-        enabled :
-            Toggle on or off.
-        head_dim :
-            Dimensionality of each attention head (K/Q/V projection size).
-        num_heads :
-            Number of parallel attention heads.
-        n_inputs :
-            Number of raw input features.  Defaults to the configured ``n_inputs``
-            from the last :meth:`configure` call; must be set when called before
-            ``configure()``.
-
-        Returns
-        -------
-        AttentionBlock | None
-        """
-        if not enabled:
-            self._attention_enabled = False
-            self._attention_block = None
-            return None
-        from yane.evolution.attention import AttentionBlock as _AB
-        n_in = n_inputs or getattr(self, "_n_inputs", None)
-        if n_in is None:
-            raise ValueError(
-                "set_attention() requires n_inputs.  Pass it explicitly or call "
-                "configure() first."
-            )
-        self._attention_enabled = True
-        self._attention_block = _AB(n_inputs=n_in, head_dim=head_dim, num_heads=num_heads)
-        return self._attention_block
-
-    def attention_n_inputs(self) -> int:
-        """Return the output dimension of the active attention block.
-
-        Pass as ``n_inputs`` to :meth:`configure`.  Raises ``RuntimeError``
-        when no block is set.
-        """
-        if self._attention_block is None:
-            raise RuntimeError(
-                "No AttentionBlock configured.  Call set_attention() first."
-            )
-        return self._attention_block.n_outputs
-
-    def set_ltc(self, enabled: bool = True) -> None:
-        """Enable Liquid Time-Constant (LTC) node dynamics.
-
-        When active, nodes with ``node.tau < inf`` use the LTC ODE update rule
-        after each ``genome.forward()`` call instead of the standard activation:
-
-        ``x_{t+1} = x_t + dt * (-x_t/τ + activation(sum(inputs) + bias))``
-
-        Mark individual nodes as LTC via
-        :func:`~yane.evolution.ltc.make_node_ltc`.
-
-        Parameters
-        ----------
-        enabled :
-            Toggle LTC dynamics on or off.
-        """
-        self._ltc_enabled = bool(enabled)
 
     def set_multi_eval(
         self,
@@ -2659,14 +2394,6 @@ class NeuroEvolution:
                 "Call set_curriculum() first or pass a fitness function."
             )
 
-        # Continual learning: wrap fitness_fn with EWC / replay regularization.
-        if self._continual_learner is not None:
-            fitness_fn = self._continual_learner.wrap_fitness(fitness_fn, ne=self)
-
-        # Minimal criterion: wrap fitness_fn to penalize non-viable genomes.
-        if self._minimal_criterion is not None:
-            fitness_fn = self._minimal_criterion.wrap_fitness(fitness_fn)
-
         # --- Structured logging setup ----------------------------------------
         name = run_name or (
             self._curriculum.current_stage.name or "curriculum"
@@ -2741,25 +2468,6 @@ class NeuroEvolution:
         if self._budget_enforcer is not None:
             self._budget_enforcer.start()
 
-        # Hybrid mode: wrap fitness_fn to capture inputs for replay buffer.
-        if self._hybrid_mode_enabled and self._hybrid_replay_buffer is not None:
-            _rb = self._hybrid_replay_buffer
-            _orig_fitness_fn = fitness_fn
-            def fitness_fn(g, _fn=_orig_fitness_fn):
-                _inputs_seen: list = []
-                _orig_fwd = g.forward
-                def _capturing_fwd(inp):
-                    _inputs_seen.append(list(inp))
-                    return _orig_fwd(inp)
-                g.__dict__["forward"] = _capturing_fwd
-                try:
-                    result = _fn(g)
-                finally:
-                    g.__dict__.pop("forward", None)
-                for inp in _inputs_seen:
-                    _rb.add(inp)
-                return result
-
         self._n_evaluations_done = 0
         stop_reason: str | None = None
         iterations = 0
@@ -2778,23 +2486,6 @@ class NeuroEvolution:
             _gen_eval_ms += result.elapsed_ms
             iterations += 1
             self._n_evaluations_done += result.n_fitness_calls
-            # Phylogeny recording (zero-cost when disabled)
-            if self._phylogeny is not None and self._phylogeny.is_enabled:
-                _parent_id = (genome._parent_ids[0]
-                              if getattr(genome, "_parent_ids", None) else None)
-                _generation = iterations // max(1, _gen_size)
-                _innov_log = getattr(self._tracker, "_innovation_log", {})
-                _genome_innovations = [
-                    innov for innov, (_, gid) in _innov_log.items()
-                    if gid == genome._genome_id
-                ]
-                self._phylogeny.record(
-                    genome_id=genome._genome_id,
-                    parent_id=_parent_id,
-                    fitness=fitness,
-                    generation=_generation,
-                    innovations=_genome_innovations,
-                )
 
             # --- "new_best" event -------------------------------------------
             if self._population._evaluated:
@@ -2905,10 +2596,6 @@ class NeuroEvolution:
                         best_fitness=_cur_fit,
                     )
                 _gen_eval_ms = 0.0   # reset for next generation
-
-                # Hybrid NEAT: run backprop phase every bp_interval generations.
-                if self._hybrid_mode_enabled and _gen_num > 0 and _gen_num % self._hybrid_bp_interval == 0:
-                    self._run_hybrid_backprop(_gen_num)
 
                 # Augmentation pool: reward current pipeline, maybe evolve, select next.
                 if self._aug_pool is not None:
@@ -4434,13 +4121,6 @@ class NeuroEvolution:
                 result -= compute_penalty(hw_metrics, self._hw_constraints)
             except Exception:
                 pass   # hardware estimation is non-critical; never break training
-        if genome is not None:
-            system = getattr(self, "_safety_system", None)
-            if system is not None:
-                try:
-                    result = system.evaluate(genome, result)
-                except Exception:
-                    pass  # safety checks must never break training
         return result
 
     def _run_evaluations(
@@ -4460,80 +4140,6 @@ class NeuroEvolution:
             _out_grouper = genome.out_grouper
             _orig_fwd_out = genome.forward
             genome.__dict__["forward"] = lambda data, _fwd=_orig_fwd_out, _og=_out_grouper: _og.expand(_fwd(data))
-
-        _stdp_active = False
-        if self._stdp_enabled:
-            from yane.evolution.stdp import (
-                genome_has_stdp as _ghs,
-                init_stdp_base_weights as _init_stdp,
-                restore_stdp_weights as _restore_stdp,
-                apply_stdp_update as _apply_stdp,
-            )
-            if _ghs(genome):
-                _stdp_active = True
-                _wmin = self._stdp_weight_min
-                _wmax = self._stdp_weight_max
-                _init_stdp(genome)   # saves _base_weight if not already set
-                _orig_fwd_stdp = genome.forward
-                _orig_reset_stdp = genome.reset
-                def _stdp_fwd(data, _fwd=_orig_fwd_stdp, _g=genome, _mn=_wmin, _mx=_wmax):
-                    result = _fwd(data)
-                    # The compiled forward path does not update node.value for
-                    # input nodes — set them explicitly for pre-synaptic STDP.
-                    for _in in _g.input_nodes:
-                        _idx = getattr(_in, 'input_index', 0)
-                        if _idx < len(data):
-                            _in.value = float(data[_idx]) * _in.input_scale
-                    _apply_stdp(_g, _mn, _mx)
-                    return result
-                def _stdp_reset(_reset=_orig_reset_stdp, _g=genome):
-                    _reset()
-                    _restore_stdp(_g)
-                genome.__dict__["forward"] = _stdp_fwd
-                genome.__dict__["reset"] = _stdp_reset
-
-        _neuromod_active = False
-        if self._neuromodulation_enabled:
-            from yane.evolution.neuromodulation import (
-                genome_has_modulators as _ghm,
-                apply_modulation_to_weights as _apply_mod,
-                update_modulation_gains as _update_gains,
-                restore_modulation_weights as _restore_mod,
-            )
-            if _ghm(genome):
-                _neuromod_active = True
-                _orig_fwd_mod = genome.forward
-                _orig_reset_mod = genome.reset
-                def _mod_fwd(data, _fwd=_orig_fwd_mod, _g=genome):
-                    _apply_mod(_g)     # pre-forward: apply gains from previous call
-                    result = _fwd(data)
-                    _update_gains(_g)  # post-forward: record new MODULATOR outputs
-                    return result
-                def _mod_reset(_reset=_orig_reset_mod, _g=genome):
-                    _reset()
-                    _restore_mod(_g)   # reset: restore base weights + neutral gains
-                genome.__dict__["forward"] = _mod_fwd
-                genome.__dict__["reset"] = _mod_reset
-
-        _ltc_active = False
-        if self._ltc_enabled:
-            from yane.evolution.ltc import genome_has_ltc as _ghl, apply_ltc_update as _apply_ltc
-            if _ghl(genome):
-                _ltc_active = True
-                _orig_fwd_ltc = genome.forward
-                def _ltc_fwd(data, _fwd=_orig_fwd_ltc, _g=genome):
-                    result = _fwd(data)
-                    _apply_ltc(_g)
-                    return result
-                genome.__dict__["forward"] = _ltc_fwd
-
-        _attention_active = False
-        if self._attention_enabled and getattr(genome, "attention_block", None) is not None:
-            _attention_active = True
-            _attn = genome.attention_block
-            _orig_fwd_attn = genome.forward
-            genome.__dict__["forward"] = lambda data, _fwd=_orig_fwd_attn, _a=_attn: _fwd(_a.forward(data))
-
         if self._input_transform is not None:
             _t = self._input_transform
             _orig_fwd = genome.forward
@@ -4597,18 +4203,8 @@ class NeuroEvolution:
                 self._eval_middleware_diagnostics["evaluator_components"] = dict(_cs)
             return result
         finally:
-            if self._input_transform is not None or _aug_active or _curiosity_active or _grouper_active or _out_grouper_active or _stdp_active or _neuromod_active or _attention_active or _ltc_active:
+            if self._input_transform is not None or _aug_active or _curiosity_active or _grouper_active or _out_grouper_active:
                 genome.__dict__.pop("forward", None)
-            if _stdp_active or _neuromod_active:
-                genome.__dict__.pop("reset", None)
-            if _stdp_active:
-                # Restore evolved base weights after evaluation
-                from yane.evolution.stdp import restore_stdp_weights as _rs
-                _rs(genome)
-            if _neuromod_active:
-                # Restore modulation state after evaluation
-                from yane.evolution.neuromodulation import restore_modulation_weights as _rm
-                _rm(genome)
             # Note: _curiosity_task_base is intentionally NOT removed here.
             # finalize_fitness_value() reads and removes it so that raw_fitness
             # records the task-only score even when Lamarck evaluates multiple times.
@@ -4981,57 +4577,6 @@ class NeuroEvolution:
                 self._autosave_report(name, self._active_run_id)
             except Exception:
                 pass
-
-    def _run_hybrid_backprop(self, generation: int) -> None:
-        """Execute one backprop phase for the hybrid NEAT mode."""
-        from yane.util.logger import get_logger
-        log = get_logger()
-        from yane.evolution.hybrid_neat import run_hybrid_backprop
-
-        teachers = self._population.get_top(self._hybrid_top_k)
-        if not teachers:
-            return
-
-        # Determine training data
-        if self._hybrid_train_data is not None:
-            inputs_batch = [list(x) for x, _ in self._hybrid_train_data]
-            targets_batch = [list(y) for _, y in self._hybrid_train_data]
-        else:
-            # Self-supervised: use replay buffer inputs + best genome as teacher
-            rb = self._hybrid_replay_buffer
-            if rb is None or len(rb) == 0:
-                return
-            n_sample = min(self._hybrid_bp_batch_size * 4, len(rb))
-            inputs_batch = rb.sample(n_sample)
-            if not inputs_batch:
-                return
-            best = self._population.get_best()
-            targets_batch = []
-            for inp in inputs_batch:
-                best.reset()
-                try:
-                    targets_batch.append([float(v) for v in best.forward(inp)])
-                except Exception:
-                    targets_batch.append([0.0] * len(best.output_nodes))
-
-        try:
-            result = run_hybrid_backprop(
-                genomes=teachers,
-                inputs_batch=inputs_batch,
-                targets_batch=targets_batch,
-                bp_epochs=self._hybrid_bp_epochs,
-                bp_lr=self._hybrid_bp_lr,
-                bp_batch_size=self._hybrid_bp_batch_size,
-            )
-            log.info(
-                "[hybrid] Gen %d: backprop on %d genomes, final losses: %s",
-                generation, len(teachers),
-                [f"{l:.4f}" for l in result.get("losses", [])],
-            )
-        except ImportError as e:
-            log.warning("[hybrid] Backprop skipped: %s", e)
-        except Exception as e:
-            log.warning("[hybrid] Backprop error (ignored): %s", e)
 
     def _enforce_memory_limit(self) -> None:
         if not self._resource_guard.process_over_limit():
@@ -5432,119 +4977,6 @@ class NeuroEvolution:
             unroll_steps=unroll_steps,
         )
 
-    def export_genome_wasm(
-        self,
-        path: "str | Path | None" = None,
-        title: str = "YANE Network",
-        mode: str = "js",
-        unroll_steps: int = 1,
-    ) -> str:
-        """Export the best genome as a standalone HTML/JS file.
-
-        The generated file runs the network forward pass entirely in the
-        browser via pure JavaScript — no Emscripten, ONNX, or YANE
-        installation needed.
-
-        Parameters
-        ----------
-        path :
-            Optional file path to save the ``.html`` file.
-        title :
-            Page title shown in the browser.
-        mode :
-            ``"js"`` (default) for pure-JS transpilation.
-            ``"wasm"`` raises ``ImportError`` (requires Emscripten).
-        unroll_steps :
-            Recurrent unroll depth for cyclic genomes.
-
-        Returns
-        -------
-        str
-            The full HTML source string.
-        """
-        from yane.evolution.wasm_export import genome_to_html
-        self._ensure_configured()
-        return genome_to_html(
-            self._population.get_best(),
-            path=path,
-            title=title,
-            mode=mode,
-            unroll_steps=unroll_steps,
-        )
-
-    def export_genome_c_array(
-        self,
-        path: "str | Path" = ".",
-        prefix: str = "yane_net",
-    ) -> tuple:
-        """Export the best genome as C99 source files for embedded deployment.
-
-        Generates ``{path}/{prefix}.h`` and ``{path}/{prefix}.cc``.
-        The code depends only on ``<math.h>`` and is fully C99-compatible.
-
-        Parameters
-        ----------
-        path :
-            Directory to write files into (created if absent).
-        prefix :
-            Name prefix for the generated files and C identifiers.
-
-        Returns
-        -------
-        (header_path, source_path):
-            Absolute :class:`pathlib.Path` objects for the generated files.
-        """
-        from yane.evolution.tflite_export import genome_to_c_array
-        self._ensure_configured()
-        return genome_to_c_array(self._population.get_best(), path=path, prefix=prefix)
-
-    def find_lottery_ticket(
-        self,
-        fitness_fn,
-        target_sparsity: float = 0.5,
-        max_fitness_drop: float = 0.05,
-        iterations: int = 5,
-        lamarck_steps: int = 0,
-        lamarck_sigma: float = 0.1,
-    ):
-        """Find the sparse lottery ticket for the best genome via IMP.
-
-        Uses Iterative Magnitude Pruning on the current best genome.
-        The genome is **not** modified in place; call
-        :func:`~yane.evolution.sparse_neat.apply_ticket` (or
-        ``genome.apply_ticket(ticket)``) to apply the result.
-
-        Parameters
-        ----------
-        fitness_fn:
-            ``(genome) -> float`` fitness function used for evaluation.
-        target_sparsity:
-            Target fraction of connections to prune (0–1).
-        max_fitness_drop:
-            Maximum allowed absolute fitness drop from original fitness.
-        iterations:
-            Number of IMP rounds.
-        lamarck_steps:
-            Hill-climbing fine-tuning steps per round (0 = disabled).
-        lamarck_sigma:
-            Step size for Lamarckian refinement.
-
-        Returns
-        -------
-        LotteryTicket
-        """
-        from yane.evolution.sparse_neat import find_lottery_ticket as _flt
-        self._ensure_configured()
-        return _flt(
-            self._population.get_best(),
-            fitness_fn,
-            target_sparsity=target_sparsity,
-            max_fitness_drop=max_fitness_drop,
-            iterations=iterations,
-            lamarck_steps=lamarck_steps,
-            lamarck_sigma=lamarck_sigma,
-        )
-
     def export_genome_weights(self) -> dict:
         """Return the best genome's weight matrix and bias vector.
 
@@ -5554,759 +4986,6 @@ class NeuroEvolution:
         from yane.evolution.genome_export import genome_to_numpy_weights
         self._ensure_configured()
         return genome_to_numpy_weights(self._population.get_best())
-
-    # -------------------------------------------------------------------------
-    # Probabilistic / Bayesian NEAT
-    # -------------------------------------------------------------------------
-
-    def set_probabilistic(
-        self,
-        enabled: bool = True,
-        noise_std: float = 0.05,
-        inference_mode: bool = False,
-    ) -> None:
-        """Enable or disable probabilistic output noise on all genomes.
-
-        When enabled, each ``genome.forward()`` call adds per-output
-        Gaussian noise, enabling uncertainty estimation via
-        ``genome.bayesian_forward(n=100)``.
-
-        Parameters
-        ----------
-        enabled:
-            Whether probabilistic noise is active.
-        noise_std:
-            Standard deviation of the per-output Gaussian noise.
-        inference_mode:
-            When True, forward() is deterministic (no noise).
-        """
-        from yane.evolution.bayesian_neat import set_probabilistic as _sp
-        self._prob_enabled = enabled
-        self._prob_noise_std = float(noise_std)
-        self._prob_inference_mode = inference_mode
-        if self._population is not None:
-            all_genomes = (
-                list(self._population._evaluated)
-                + list(self._population._unevaluated)
-            )
-            for genome in all_genomes:
-                _sp(genome, enabled=enabled, noise_std=noise_std,
-                    inference_mode=inference_mode)
-
-    def set_continual_learning(
-        self,
-        mode: str = "ewc",
-        lambda_ewc: float = 0.1,
-        replay_weight: float = 0.5,
-        replay_buffer_size: int = 500,
-        n_progressive_nodes: int = 2,
-        progressive: bool = False,
-    ) -> "ContinualLearner":
-        """Enable Continual / Lifelong Learning NEAT.
-
-        Wraps fitness functions with regularization to prevent catastrophic
-        forgetting across multiple sequential tasks.
-
-        Parameters
-        ----------
-        mode :
-            ``"ewc"`` — Elastic Weight Consolidation (weight-change penalty).
-            ``"progressive"`` — freeze old weights, expand network for each task.
-            ``"replay"`` — memory-replay of old-task examples.
-            ``"hybrid"`` — EWC + replay combined.
-        lambda_ewc :
-            EWC regularization strength (higher = stronger protection).
-        replay_weight :
-            Memory-replay MSE weighting.
-        replay_buffer_size :
-            Max stored examples per task.
-        n_progressive_nodes :
-            New hidden nodes added per task (progressive mode).
-        progressive :
-            Shortcut: if True, forces ``mode="progressive"``.
-
-        Returns
-        -------
-        ContinualLearner
-        """
-        from yane.evolution.continual import ContinualLearner
-        if progressive:
-            mode = "progressive"
-        self._continual_learner = ContinualLearner(
-            mode=mode,
-            lambda_ewc=lambda_ewc,
-            replay_weight=replay_weight,
-            replay_buffer_size=replay_buffer_size,
-            n_progressive_nodes=n_progressive_nodes,
-        )
-        return self._continual_learner
-
-    def task_start(self, name: str) -> None:
-        """Mark the start of a new continual-learning task.
-
-        Call before :meth:`train` for each new task.  Requires
-        :meth:`set_continual_learning` to have been called first.
-        """
-        if self._continual_learner is None:
-            raise RuntimeError(
-                "Call set_continual_learning() first."
-            )
-        self._continual_learner.start_task(name)
-        self._task_evaluators_pending_name = name
-
-    def task_finish(
-        self,
-        evaluator: "Callable | None" = None,
-        sample_inputs: "list[list[float]] | None" = None,
-    ) -> None:
-        """Mark the end of a continual-learning task.
-
-        Call **after** :meth:`train`.  Anchors the current best genome for
-        future EWC regularization and optionally builds a memory buffer.
-
-        Parameters
-        ----------
-        evaluator :
-            If provided, registered for :meth:`evaluate_all_tasks`.
-        sample_inputs :
-            Input vectors to store as examples for memory-replay.
-        """
-        if self._continual_learner is None:
-            raise RuntimeError("Call set_continual_learning() first.")
-        self._ensure_configured()
-        best = self._population.get_best()
-        if best is None:
-            return
-        self._continual_learner.finish_task(
-            best_genome=best,
-            best_fitness=best.fitness,
-            sample_inputs=sample_inputs,
-        )
-        name = getattr(self, "_task_evaluators_pending_name", "task")
-        if evaluator is not None:
-            self._task_evaluators.append((name, evaluator))
-
-    def evaluate_all_tasks(self) -> dict[str, float]:
-        """Evaluate the current best genome on all registered task evaluators.
-
-        Returns a dict ``{task_name: fitness}`` for each registered task.
-        Register evaluators via :meth:`task_finish`.
-        """
-        self._ensure_configured()
-        best = self._population.get_best()
-        if best is None:
-            return {}
-        results: dict[str, float] = {}
-        for name, evaluator in self._task_evaluators:
-            try:
-                results[name] = float(evaluator(best))
-            except Exception:
-                results[name] = float("nan")
-        return results
-
-    def set_cooperative_population(
-        self,
-        n_agents: int = 3,
-        credit: str = "shared",
-        role_specialization: bool = False,
-        diversity_weight: float = 0.1,
-    ) -> "CooperativeSystem":
-        """Configure multi-agent cooperative evolution.
-
-        Use :meth:`train_cooperative` to run the cooperative training loop.
-
-        Parameters
-        ----------
-        n_agents :
-            Number of cooperative agents.
-        credit :
-            Credit-assignment mode: ``"shared"``, ``"difference"``,
-            ``"individual"``, or ``"hierarchical"``.
-        role_specialization :
-            When True, apply a diversity penalty for similar agents.
-        diversity_weight :
-            Diversity penalty weight (only used when role_specialization=True).
-
-        Returns
-        -------
-        CooperativeSystem
-        """
-        from yane.evolution.cooperative import CooperativeSystem
-        self._cooperative_system = CooperativeSystem(
-            n_agents=n_agents,
-            credit=credit,
-            role_specialization=role_specialization,
-            diversity_weight=diversity_weight,
-        )
-        return self._cooperative_system
-
-    def train_cooperative(
-        self,
-        team_fitness_fn: "Callable",
-        n_generations: int = 100,
-        n_survivors: int | None = None,
-        pop_size: int | None = None,
-        probe_inputs: "list[list[float]] | None" = None,
-    ) -> "CooperativeResult":
-        """Run cooperative co-evolution.
-
-        Requires :meth:`set_cooperative_population` to be called first.
-        Creates ``n_agents`` sub-populations and evaluates them as teams.
-
-        Parameters
-        ----------
-        team_fitness_fn :
-            ``(agents: list[Genome]) -> float`` — team-level fitness.
-        n_generations :
-            Training iterations.
-        n_survivors :
-            Elites kept per generation.
-        pop_size :
-            Total agents.  Defaults to ``self._population_size``.
-        probe_inputs :
-            Inputs for role-similarity measurement.
-
-        Returns
-        -------
-        CooperativeResult
-        """
-        from yane.evolution.cooperative import train_cooperative as _train_coop, CooperativeResult
-        if not hasattr(self, "_cooperative_system") or self._cooperative_system is None:
-            raise RuntimeError("Call set_cooperative_population() first.")
-        self._ensure_configured()
-        system = self._cooperative_system
-        n = pop_size or self._population_size
-        agents = [self.next_genome().copy() for _ in range(n)]
-
-        def _mutate(g):
-            child = g.copy()
-            try:
-                child.mutate(self._tracker)
-            except Exception:
-                pass
-            return child
-
-        return _train_coop(
-            agents=agents,
-            team_fitness_fn=team_fitness_fn,
-            mutation_fn=_mutate,
-            n_generations=n_generations,
-            n_survivors=n_survivors,
-            credit=system.credit,
-            role_specialization=system.role_specialization,
-            diversity_weight=system.diversity_weight,
-            probe_inputs=probe_inputs,
-            seed=self._seed,
-        )
-
-    # -------------------------------------------------------------------------
-    # Safety-Constrained Evolution (Safe NEAT)
-    # -------------------------------------------------------------------------
-
-    def set_safety_constraints(
-        self,
-        constraints: "list | None",
-        min_safe_frac: float = 0.0,
-    ) -> "SafetySystem | None":
-        """Configure safety constraints for the evolutionary process.
-
-        When set, the fitness function is wrapped to apply constraints to every
-        evaluated genome.  Hard-constraint violations result in ``penalty``
-        fitness immediately.  Soft and barrier constraints reduce fitness
-        proportionally.
-
-        Parameters
-        ----------
-        constraints:
-            List of :class:`~yane.evolution.safety.SafetyConstraint` objects,
-            or ``None`` to disable.
-        min_safe_frac:
-            Minimum fraction of the population that must be "safe" (no hard
-            violations).  When fewer are safe, their fitness is boosted
-            slightly to prevent them from being eliminated.
-
-        Returns
-        -------
-        SafetySystem | None
-        """
-        if constraints is None:
-            self._safety_system = None
-            return None
-        from yane.evolution.safety import SafetySystem
-        self._safety_system = SafetySystem(
-            constraints=constraints,
-            min_safe_frac=min_safe_frac,
-        )
-        return self._safety_system
-
-    def _apply_safety_constraints(
-        self,
-        genome: "Genome",
-        raw_fitness: float,
-    ) -> float:
-        """Apply safety constraints to raw_fitness.  Internal use."""
-        system = getattr(self, "_safety_system", None)
-        if system is None:
-            return raw_fitness
-        return system.evaluate(genome, raw_fitness)
-
-    def set_minimal_criterion(
-        self,
-        criterion_fn: "Callable | None" = None,
-        min_viable_frac: float = 0.1,
-        penalty: float = -1e6,
-        viable_boost_factor: float = 0.5,
-    ) -> "MinimalCriterion | None":
-        """Filter genomes by a viability criterion before selection.
-
-        Only genomes passing *criterion_fn* are eligible for reproduction.
-        When too few genomes are viable (< *min_viable_frac*), the penalty
-        is adaptively relaxed to keep the search alive.
-
-        Pass ``None`` to disable the criterion.
-
-        Parameters
-        ----------
-        criterion_fn :
-            ``(genome) -> bool``.  Typically checks the genome's fitness
-            (e.g., ``lambda g: g.fitness > -50.0``).  Pass ``None`` to
-            disable.
-        min_viable_frac :
-            Minimum viable fraction before adaptive relaxation triggers.
-        penalty :
-            Fitness assigned to non-viable genomes.
-        viable_boost_factor :
-            Penalty multiplier when relaxation is active (< 1 = less severe).
-
-        Returns
-        -------
-        MinimalCriterion | None
-        """
-        if criterion_fn is None:
-            self._minimal_criterion = None
-            return None
-        from yane.evolution.minimal_criterion import MinimalCriterion
-        self._minimal_criterion = MinimalCriterion(
-            criterion_fn=criterion_fn,
-            min_viable_frac=min_viable_frac,
-            penalty=penalty,
-            viable_boost_factor=viable_boost_factor,
-        )
-        return self._minimal_criterion
-
-    def set_open_ended(
-        self,
-        mode: str = "novelty_with_criterion",
-        archive_size: int = 200,
-    ) -> None:
-        """Enable open-ended evolution mode combining novelty/curiosity/QD with Minimal Criterion.
-
-        Requires :meth:`set_minimal_criterion` to be called first.
-
-        Parameters
-        ----------
-        mode :
-            ``"novelty_with_criterion"`` — novelty + criterion filter.
-            ``"curiosity_with_criterion"`` — curiosity + criterion filter.
-            ``"quality_diversity_with_criterion"`` — QD + criterion filter.
-        archive_size :
-            Novelty archive size (passed to ``set_novelty_search`` when
-            mode involves novelty).
-        """
-        valid = ("novelty_with_criterion", "curiosity_with_criterion",
-                 "quality_diversity_with_criterion")
-        if mode not in valid:
-            raise ValueError(f"mode must be one of {valid}, got {mode!r}")
-        self._open_ended_mode = mode
-        # Enable the corresponding feature if available
-        if "novelty" in mode:
-            self.set_novelty_search(enabled=True)
-        elif "curiosity" in mode:
-            if not self._curiosity_enabled:
-                self.set_curiosity(enabled=True)
-
-    def configure_reservoir(
-        self,
-        n_reservoir: int = 100,
-        spectral_radius: float = 0.9,
-        input_scaling: float = 0.5,
-        leaking_rate: float = 0.3,
-        n_inputs: int | None = None,
-        n_outputs: int | None = None,
-        seed: int | None = None,
-    ) -> "ReservoirGenome":
-        """Create an Echo State Network reservoir.
-
-        The reservoir is **fixed** after creation (not evolved).  Only the
-        readout weights W_out are updated by :meth:`train_reservoir` or via
-        evolution.
-
-        Parameters
-        ----------
-        n_reservoir :
-            Number of reservoir neurons.
-        spectral_radius :
-            Spectral radius of W.  Must be < 1 for the Echo State Property.
-        input_scaling :
-            Scaling of W_in (input → reservoir).
-        leaking_rate :
-            Leaky integration rate α (0 < α ≤ 1).
-        n_inputs :
-            Number of inputs.  Defaults to ``self._n_inputs`` if configured.
-        n_outputs :
-            Number of outputs.  Defaults to ``self._n_outputs`` if configured.
-        seed :
-            Seed for deterministic reservoir init.
-
-        Returns
-        -------
-        ReservoirGenome
-        """
-        from yane.evolution.reservoir import ReservoirGenome
-        n_in = n_inputs or getattr(self, "_n_inputs", 0)
-        n_out = n_outputs or getattr(self, "_n_outputs", 0)
-        if not n_in or not n_out:
-            raise RuntimeError(
-                "Call configure(n_inputs, n_outputs) first, or pass "
-                "n_inputs/n_outputs explicitly."
-            )
-        self._reservoir = ReservoirGenome(
-            n_inputs=n_in,
-            n_reservoir=n_reservoir,
-            n_outputs=n_out,
-            spectral_radius=spectral_radius,
-            input_scaling=input_scaling,
-            leaking_rate=leaking_rate,
-            seed=seed if seed is not None else self._seed,
-        )
-        return self._reservoir
-
-    def train_reservoir(
-        self,
-        inputs_sequence: "list[list[float]]",
-        targets_sequence: "list[list[float]]",
-        reservoir: "ReservoirGenome | None" = None,
-        lambda_ridge: float = 1e-4,
-        washout: int = 10,
-    ) -> "ReservoirTrainResult":
-        """Train reservoir readout weights analytically via Ridge Regression.
-
-        Call :meth:`configure_reservoir` first (or pass *reservoir* explicitly).
-
-        Parameters
-        ----------
-        inputs_sequence :
-            Training inputs (one vector per timestep).
-        targets_sequence :
-            Corresponding target outputs.
-        reservoir :
-            Reservoir to train.  Defaults to the one from :meth:`configure_reservoir`.
-        lambda_ridge :
-            Ridge regularization strength.
-        washout :
-            Initial timesteps to discard (reservoir warm-up).
-
-        Returns
-        -------
-        ReservoirTrainResult
-        """
-        from yane.evolution.reservoir import train_ridge_readout
-        r = reservoir or getattr(self, "_reservoir", None)
-        if r is None:
-            raise RuntimeError("Call configure_reservoir() first.")
-        return train_ridge_readout(r, inputs_sequence, targets_sequence,
-                                   lambda_ridge=lambda_ridge, washout=washout)
-
-    def meta_train(
-        self,
-        task_sampler: "Callable",
-        meta_iterations: int = 500,
-        adaptation_steps: int = 3,
-        lamarck_sigma: float = 0.1,
-    ) -> "MetaTrainResult":
-        """Train a population of quickly-adaptable genomes.
-
-        Implements a gradient-free MAML-like meta-learning loop:
-
-        * **Inner loop** (Lamarck): for each genome evaluation, sample a new
-          task and refine the genome with ``adaptation_steps`` hill-climbing
-          steps.  The post-adaptation fitness is used as the NEAT fitness
-          signal.
-        * **Outer loop** (NEAT): evolves genomes that achieve high
-          post-adaptation fitness across many task samples.
-
-        Requires :meth:`configure` to have been called first.
-
-        Parameters
-        ----------
-        task_sampler :
-            Callable ``() -> fitness_fn`` that returns a fresh fitness function
-            for each new task.
-        meta_iterations :
-            Maximum total genome evaluations (outer loop).
-        adaptation_steps :
-            Lamarck hill-climbing steps per inner loop (inner loop depth).
-        lamarck_sigma :
-            Noise scale for hill-climbing perturbations.
-
-        Returns
-        -------
-        MetaTrainResult
-        """
-        from yane.evolution.meta_learning import MetaLearner, MetaTrainResult
-        self._ensure_configured()
-
-        learner = MetaLearner(
-            adaptation_steps=adaptation_steps,
-            lamarck_sigma=lamarck_sigma,
-        )
-        meta_fn = learner.make_fitness_fn(task_sampler)
-        self.set_max_iterations(meta_iterations)
-        self.train(meta_fn)
-
-        best = self._population.get_best()
-        return MetaTrainResult(
-            best_genome=best.copy() if best else self.next_genome(),
-            best_meta_fitness=best.fitness if best else -float("inf"),
-            adaptation_deltas=learner.adaptation_deltas,
-            meta_iterations=meta_iterations,
-        )
-
-    def set_adversarial_populations(
-        self,
-        n_populations: int = 2,
-        pairing: str = "round_robin",
-        n_matches: int = 10,
-        elo_k: float = 32.0,
-        seed: int | None = None,
-    ) -> "AdversarialSystem":
-        """Configure Self-Play / Adversarial Co-Evolution.
-
-        Splits the population into *n_populations* competing groups.
-        Use :meth:`train_adversarial` to run the adversarial training loop.
-
-        Parameters
-        ----------
-        n_populations :
-            Number of competing sub-populations (≥ 2).
-        pairing :
-            Matchmaking strategy: ``"round_robin"`` (all pairs),
-            ``"random"`` (n_matches random pairs), or
-            ``"best_vs_rest"`` (best genome from each pop plays all others).
-        n_matches :
-            Matches per genome per generation (``"random"`` mode only).
-        elo_k :
-            Elo K-factor.
-        seed :
-            RNG seed.
-
-        Returns
-        -------
-        AdversarialSystem
-            The configured system (use directly or via :meth:`train_adversarial`).
-        """
-        from yane.evolution.self_play import AdversarialSystem
-        self._adversarial_system = AdversarialSystem(
-            n_populations=n_populations,
-            pairing=pairing,
-            n_matches=n_matches,
-            elo_k=elo_k,
-            seed=seed,
-        )
-        return self._adversarial_system
-
-    def train_adversarial(
-        self,
-        game_fn: "Callable",
-        n_generations: int = 100,
-        n_survivors: int | None = None,
-        pop_size: int | None = None,
-    ) -> "AdversarialResult":
-        """Run adversarial co-evolution.
-
-        Requires :meth:`set_adversarial_populations` to be called first and
-        :meth:`configure` for network topology.  The population is evenly
-        split across sub-populations.
-
-        Parameters
-        ----------
-        game_fn :
-            ``(genome_a, genome_b) → (score_a, score_b)`` — zero-sum scores
-            (score_a + score_b = constant).
-        n_generations :
-            Number of adversarial generations.
-        n_survivors :
-            Elites kept per sub-population per generation.
-        pop_size :
-            Total genomes.  Defaults to ``self._population_size``.
-
-        Returns
-        -------
-        AdversarialResult
-        """
-        from yane.evolution.self_play import AdversarialResult, train_adversarial as _train_adv
-        if not hasattr(self, "_adversarial_system") or self._adversarial_system is None:
-            raise RuntimeError(
-                "Call set_adversarial_populations() first."
-            )
-        self._ensure_configured()
-        system = self._adversarial_system
-        n = pop_size or self._population_size
-        n_pops = system.n_populations
-        pop_n = max(2, n // n_pops)
-
-        # Build N sub-populations from fresh genomes
-        populations: list[list] = []
-        for _ in range(n_pops):
-            pops = [self._population.select_for_evaluation().copy()
-                    for _ in range(pop_n)]
-            populations.append(pops)
-
-        def _mutate(g):
-            child = g.copy()
-            try:
-                child.mutate(self._tracker)
-            except Exception:
-                pass
-            return child
-
-        return _train_adv(
-            populations=populations,
-            game_fn=game_fn,
-            mutation_fn=_mutate,
-            n_generations=n_generations,
-            n_survivors=n_survivors,
-            pairing=system.pairing,
-            n_matches=system.n_matches,
-            elo_k=system._elo.k_factor,
-            seed=self._seed,
-        )
-
-    def set_genome_encoding(
-        self,
-        encoding: str,
-        development_steps: int = 5,
-        n_genes: int = 20,
-        n_nodes: int | None = None,
-        seed: int | None = None,
-    ) -> "GRNCodec | None":
-        """Configure an indirect genome encoding.
-
-        Currently supports ``"grn"`` (Gene Regulatory Network).
-
-        When ``"grn"`` is set, :meth:`configure` additionally creates an
-        initial :class:`~yane.evolution.grn_encoding.GRNGenome` prototype
-        that can be developed via :meth:`develop_grn`.
-
-        Parameters
-        ----------
-        encoding :
-            ``"grn"`` — Gene Regulatory Network indirect encoding.
-        development_steps :
-            GRN development rounds (controls phenotype complexity: more
-            steps → more connections per gene).
-        n_genes :
-            Number of GRN genes for a freshly generated prototype.
-        n_nodes :
-            Node innovation range for random gene generation.
-        seed :
-            RNG seed.
-
-        Returns
-        -------
-        GRNCodec | None
-        """
-        if encoding.lower() == "grn":
-            from yane.evolution.grn_encoding import GRNCodec, GRNGenome
-            n_in = getattr(self, "_n_inputs", 2)
-            n_out = getattr(self, "_n_outputs", 1)
-            codec = GRNCodec(n_inputs=n_in, n_outputs=n_out,
-                             development_steps=development_steps)
-            self._grn_codec = codec
-            self._grn_prototype = GRNGenome.random(
-                n_genes=n_genes,
-                n_nodes=n_nodes or (n_in + n_out + n_genes // 2),
-                seed=seed or self._seed,
-            )
-            return codec
-        else:
-            raise ValueError(f"Unknown genome encoding: {encoding!r}. Use 'grn'.")
-
-    def develop_grn(
-        self,
-        grn: "GRNGenome | None" = None,
-        max_connections: int | None = None,
-    ) -> "Genome":
-        """Develop a GRN genotype into a phenotype Genome.
-
-        Requires :meth:`set_genome_encoding` to have been called with
-        ``encoding="grn"``.
-
-        Parameters
-        ----------
-        grn :
-            The :class:`~yane.evolution.grn_encoding.GRNGenome` to develop.
-            Defaults to the internal prototype.
-        max_connections :
-            Optional cap on the phenotype's connections.
-
-        Returns
-        -------
-        Genome
-        """
-        if not hasattr(self, "_grn_codec") or self._grn_codec is None:
-            raise RuntimeError(
-                "Call set_genome_encoding('grn') first."
-            )
-        target = grn or getattr(self, "_grn_prototype", None)
-        if target is None:
-            raise RuntimeError("No GRN genome provided.")
-        return self._grn_codec.develop(target, max_connections=max_connections)
-
-    def configure_hierarchical(
-        self,
-        n_workers: int = 4,
-        selection_mode: str = "hard",
-    ) -> "HierarchicalGenome":
-        """Build a :class:`~yane.evolution.h_neat.HierarchicalGenome`.
-
-        Creates a manager genome (``n_outputs = n_workers``) and ``n_workers``
-        worker genomes sharing the same topology as ``configure()`` was called
-        with.  The hierarchy can then be used as a fitness function or evolved
-        via repeated mutation/evaluation cycles.
-
-        Call **after** :meth:`configure`.
-
-        Parameters
-        ----------
-        n_workers :
-            Number of sub-policies in the pool.
-        selection_mode :
-            ``"hard"`` or ``"soft"`` — see
-            :class:`~yane.evolution.h_neat.HierarchicalGenome`.
-
-        Returns
-        -------
-        HierarchicalGenome
-        """
-        from yane.evolution.h_neat import HierarchicalGenome
-        self._ensure_configured()
-
-        n_in = self._n_inputs
-        n_out = self._n_outputs
-        max_n = self._max_nodes
-        max_c = self._max_connections
-
-        # Manager: same n_inputs as workers, n_outputs = n_workers
-        mgr_ne = self.__class__(seed=self._seed)
-        mgr_ne.configure(n_inputs=n_in, n_outputs=n_workers,
-                         max_nodes=max_n, max_connections=max_c)
-        manager = mgr_ne.get_best() if mgr_ne.population._evaluated else mgr_ne.next_genome()
-
-        # Workers: same topology as the current configuration
-        workers = [self.next_genome().copy() for _ in range(n_workers)]
-
-        return HierarchicalGenome(manager, workers, selection_mode=selection_mode)
 
     def distill_ensemble(
         self,
@@ -6522,11 +5201,6 @@ class NeuroEvolution:
         Returns
         -------
         BehaviourCloneResult
-
-        Note
-        ----
-        PyTorch/backprop-based cloning and the LunarLander benchmark are
-        deferred (require optional torch dependency).
         """
         from yane.evolution.behaviour_cloning import behaviour_clone as _bc
         return _bc(
@@ -6538,135 +5212,6 @@ class NeuroEvolution:
             noise_sigma=noise_sigma,
             freeze_layers=freeze_layers,
         )
-
-    # -------------------------------------------------------------------------
-    # POET — Paired Open-Ended Trailblazer (Co-Evolution)
-    # -------------------------------------------------------------------------
-
-    def train_poet(
-        self,
-        eval_fn: "Callable",
-        initial_env_params: "list[float]",
-        n_generations: int = 100,
-        archive_size: int = 10,
-        env_bounds: "tuple[float, float] | None" = None,
-        env_mutation_sigma: float = 0.1,
-        lower_bound: float = -float("inf"),
-        upper_bound: "float | None" = None,
-        transfer_interval: int = 5,
-        transfer_k: int = 5,
-        env_children_per_gen: int = 2,
-        seed: "int | None" = None,
-    ) -> "POETResult":
-        """Run POET co-evolution of tasks and agents.
-
-        Uses the current best genome as the initial agent.  The agent is
-        mutated within each POET pair using the configured Lamarck refiner
-        (hill-climbing on the pair's fitness function).
-
-        Parameters
-        ----------
-        eval_fn:
-            ``(agent_genome, env_genome) -> float`` — evaluates the agent.
-        initial_env_params:
-            Parameter vector for the initial environment.
-        n_generations:
-            Number of POET step() iterations.
-        archive_size:
-            Maximum active pairs.
-        env_bounds:
-            ``(min, max)`` clipping bounds for environment parameters.
-        env_mutation_sigma:
-            Sigma for environment genome mutation.
-        lower_bound:
-            Minimum fitness for environment viability (not too hard).
-        upper_bound:
-            Maximum fitness for viability (``None`` = no upper bound).
-        transfer_interval:
-            Generations between agent transfer and environment reproduction.
-        transfer_k:
-            Agents tested per target pair during transfer.
-        env_children_per_gen:
-            Child environments produced per pair per generation.
-        seed:
-            Random seed.
-
-        Returns
-        -------
-        POETResult
-        """
-        from yane.evolution.poet import (
-            EnvironmentCriterion,
-            POETResult,
-            train_poet as _train_poet,
-        )
-        self._ensure_configured()
-        pop = self._population
-        agent = pop.get_best().copy() if pop._evaluated else pop._unevaluated[0].copy()
-
-        criterion = EnvironmentCriterion(
-            lower_bound=lower_bound,
-            upper_bound=upper_bound,
-        )
-
-        def _mutate_agent(genome: "Genome") -> "Genome":
-            child = genome.copy()
-            child.mutate(self._tracker)
-            return child
-
-        return _train_poet(
-            eval_fn=eval_fn,
-            mutate_agent_fn=_mutate_agent,
-            initial_env_params=initial_env_params,
-            initial_agent=agent,
-            n_generations=n_generations,
-            archive_size=archive_size,
-            env_bounds=env_bounds,
-            env_mutation_sigma=env_mutation_sigma,
-            criterion=criterion,
-            transfer_interval=transfer_interval,
-            transfer_k=transfer_k,
-            env_children_per_gen=env_children_per_gen,
-            seed=seed,
-        )
-
-    # -------------------------------------------------------------------------
-    # Genome Phylogeny (Stammbaum der Innovationen)
-    # -------------------------------------------------------------------------
-
-    def enable_phylogeny(self, max_size: "int | None" = None) -> "PhylogenyTree":
-        """Enable genome phylogeny tracking during training.
-
-        When enabled, every evaluated genome is recorded in a
-        :class:`~yane.evolution.phylogeny.PhylogenyTree` with its fitness,
-        parent, and innovation attribution.  Tracking is disabled by default
-        (zero runtime cost).
-
-        Parameters
-        ----------
-        max_size:
-            Maximum number of nodes to retain (oldest roots pruned when
-            exceeded).  ``None`` = unlimited.
-
-        Returns
-        -------
-        PhylogenyTree
-            The active tree (empty until :meth:`train` is called).
-        """
-        from yane.evolution.phylogeny import PhylogenyTree
-        if self._phylogeny is None:
-            self._phylogeny = PhylogenyTree(max_size=max_size)
-        self._phylogeny.enable()
-        return self._phylogeny
-
-    def disable_phylogeny(self) -> None:
-        """Disable phylogeny recording (existing data retained)."""
-        if self._phylogeny is not None:
-            self._phylogeny.disable()
-
-    def get_phylogeny(self) -> "PhylogenyTree | None":
-        """Return the phylogeny tree, or ``None`` if not enabled."""
-        return self._phylogeny
 
     # -------------------------------------------------------------------------
     # Unified Parameter Registry — Phase 1 of P0 Meta-Adaptive Orchestration
@@ -6860,9 +5405,6 @@ class NeuroEvolution:
         self._meta_optimizer_enabled = bool(enabled)
         if enabled:
             from yane.evolution.meta_optimizer import MetaOptimizer
-            # Pass the full ParamRegistry so the MetaOptimizer tunes ALL
-            # registered parameters, not just the hardcoded subset.
-            reg = self._ensure_param_registry() if self.is_configured else None
             self._meta_optimizer_obj = MetaOptimizer(
                 tune_interval=tune_interval,
                 max_overhead_pct=max_overhead_pct,
@@ -6870,7 +5412,6 @@ class NeuroEvolution:
                 phase_min_gens=phase_min_gens,
                 ucb1_c=ucb1_c,
                 seed=self._seed,
-                param_registry=reg,
             )
         else:
             self._meta_optimizer_obj = None
@@ -6938,7 +5479,6 @@ class NeuroEvolution:
         impact_threshold: float = 0.0,
         degradation_patience: int = 30,
         reactivation_delay: int = 100,
-        include_heavyweight: bool = False,
     ) -> None:
         """Automatically select and gate research features via UCB1 + Successive Halving.
 
@@ -6975,7 +5515,7 @@ class NeuroEvolution:
             degradation_patience=degradation_patience,
             reactivation_delay=reactivation_delay,
         )
-        _register_known_features(fg, self, include_heavyweight=include_heavyweight)
+        _register_known_features(fg, self)
         self._feature_gate = fg
 
     def get_feature_gating_diagnostics(self) -> dict:
@@ -7037,7 +5577,6 @@ class NeuroEvolution:
             apply_cold_start_defaults,
             build_report,
             pick_pop_size,
-            pick_n_workers,
         )
 
         t_start = _time.time()
@@ -7056,39 +5595,9 @@ class NeuroEvolution:
         profile = self.profile_problem(evaluator, n_warmup=n_warmup)
         _profiling_ms = (_time.time() - _t_prof) * 1000.0
 
-        # ── 3. Pop-size + structural defaults ───────────────────────────────
+        # ── 3. Pop-size ──────────────────────────────────────────────────────
         pop_size = pick_pop_size(profile)
         self.set_population_size(pop_size)
-        # Matrix-forward is a pure speed optimisation (NumPy path for acyclic
-        # feedforward genomes, automatic fallback otherwise) — always safe.
-        self.set_matrix_forward(True)
-        # Target species: classification/regression benefit from more niches
-        # (structural diversity key for discrete mappings); RL is fine at 5.
-        _species_for_task = {
-            "classification": 10,
-            "regression":     10,
-            "rl_discrete":     5,
-            "rl_continuous":   5,
-        }
-        self.set_target_species(_species_for_task.get(
-            getattr(profile, "task_type", ""), 5
-        ))
-        # Multi-eval: activate when noise makes single-episode fitness
-        # unreliable.  n=3 adds 3× cost but yields much cleaner selection
-        # signals; n=5 for very noisy environments (noise_level > 0.6).
-        _noise = getattr(profile, "noise_level", 0.0)
-        if _noise > 0.6:
-            self.set_multi_eval(n=5, aggregation="mean")
-        elif _noise > 0.3:
-            self.set_multi_eval(n=3, aggregation="mean")
-        # Workers: use profiler's eval-time measurement to pick the optimal
-        # parallelism level immediately — avoids the 50-iteration warm-up
-        # delay that TrainingWorker's auto-mode needs to gather timing data.
-        _raw_eval_ms = getattr(profile, "eval_ms_per_genome", 0.0)
-        if _raw_eval_ms > 0.0:
-            _n_workers = pick_n_workers(_raw_eval_ms, pop_size)
-            if _n_workers > 1:
-                self.set_n_workers(_n_workers)
 
         if target_fitness is not None:
             self.set_min_fitness(target_fitness)
@@ -7122,7 +5631,7 @@ class NeuroEvolution:
             _applied_params = apply_cold_start_defaults(self, profile)
 
         # ── Iteration budget (calculated after Lamarck defaults are known) ──
-        # Use profiler's measured eval_ms; scale up for Lamarck overhead.
+        # Profiling runs without Lamarck; scale up eval_ms to match training.
         if max_time_seconds is not None:
             _lamarck_steps = getattr(self._lamarck, 'n_steps', 0) if self._lamarck else 0
             try:
@@ -7131,9 +5640,7 @@ class NeuroEvolution:
             except Exception:
                 pass
             _eval_multiplier = max(1, 1 + _lamarck_steps)
-            _base_eval_ms = max(1.0, getattr(profile, "eval_ms_per_genome", 0.0) or
-                                _profiling_ms / max(1, n_warmup * 2))
-            eval_ms_per_genome = _base_eval_ms * _eval_multiplier
+            eval_ms_per_genome = max(1.0, getattr(profile, "eval_ms_per_genome", 0.0) or _profiling_ms / max(1, n_warmup * 2)) * _eval_multiplier
             budget_ms = max_time_seconds * 1000.0
             iters = int(budget_ms * 0.9 / eval_ms_per_genome)
             iters = max(pop_size * 10, min(iters, pop_size * 500))
@@ -7151,45 +5658,13 @@ class NeuroEvolution:
         )
 
         # ── 6. Feature Gating ───────────────────────────────────────────────
-        # Scale conservatism with expected training length and task type.
-        _expected_gens = max(10, iters // max(1, pop_size))
-        _task_type = getattr(profile, "task_type", "")
-        _is_temporal = _task_type in ("rl_discrete", "rl_continuous")
-        # RL tasks have slow episodes — use wider test windows so results
-        # aren't dominated by noise from a handful of episodes.
-        # Dataset tasks (classification/regression) evaluate cheaply — can
-        # test features more aggressively (shorter intervals, shorter windows).
-        if _is_temporal:
-            _test_interval = max(80, _expected_gens // 4)
-            _test_duration = max(30, _expected_gens // 10)
-        else:
-            _test_interval = max(30, _expected_gens // 8)
-            _test_duration = max(15, _expected_gens // 20)
-        _degradation_patience = max(60, _expected_gens // 4)
-        # Heavyweight features (STDP, attention, neuromodulation, LTC, augmentation)
-        # add per-sample computation that can multiply eval time by 10-100×.
-        # Only enable them automatically for temporal/RL tasks where they are
-        # likely beneficial; for regression/classification keep them disabled.
         self.set_auto_features(
             enabled=True,
-            max_concurrent=3,
-            test_interval=_test_interval,
-            test_duration=_test_duration,
-            degradation_patience=_degradation_patience,
-            include_heavyweight=_is_temporal,
+            max_concurrent=2,
+            test_interval=20,
+            test_duration=10,
+            degradation_patience=40,
         )
-
-        # ── 6b. Sparse-reward pre-activation ────────────────────────────────
-        # For high reward-sparsity tasks most fitness evaluations return ≈ 0,
-        # making vanilla selection nearly random.  Curiosity and diversity
-        # injection are known to help; pre-activating them avoids waiting
-        # 50+ generations for FeatureGating to discover this on its own.
-        # Degradation monitoring still applies — they will be disabled if
-        # they hurt later performance.
-        _sparsity = getattr(profile, "reward_sparsity", 0.0)
-        if self._feature_gate is not None and _sparsity > 0.3:
-            self._feature_gate.pre_activate("curiosity", self)
-            self._feature_gate.pre_activate("diversity_injection", self)
 
         # ── 7. Train ────────────────────────────────────────────────────────
         self.train(evaluator)
